@@ -4,8 +4,8 @@ import sys
 import time
 import glob
 
-TOOL = r"E:\Daodao\tools\micvol.exe"
-PLAY = r"E:\Daodao\play_audio.py"
+TOOL = r"F:\Daodao\tools\micvol.exe"
+PLAY = r"F:\Daodao\play_audio.py"
 TEMP_VOICE = os.path.join(os.environ["TEMP"], "daovoice")
 
 mp3s = sorted(glob.glob(os.path.join(TEMP_VOICE, "*.mp3")) + glob.glob(os.path.join(TEMP_VOICE, "*.wav")),

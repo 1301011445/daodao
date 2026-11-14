@@ -5,7 +5,7 @@ import time
 import glob
 
 TEMP_VOICE = os.path.join(os.environ["TEMP"], "daovoice")
-TOOL = r"E:\Daodao\tools\micvol.exe"
+TOOL = r"F:\Daodao\tools\micvol.exe"
 
 print("=== speaker volume ===")
 r = subprocess.run([TOOL, "spk"], capture_output=True, text=True, encoding="utf-8")

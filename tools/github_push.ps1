@@ -1,7 +1,7 @@
 ﻿# 每天把「道」的源码推到 GitHub。
 # 这台机器 github.com 的 HTTPS 走不通（连接被重置），所以统一走 SSH-over-443（ssh.github.com:443）。
 $ErrorActionPreference = 'Continue'
-$repo = 'E:\Daodao'
+$repo = 'F:\Daodao'
 $log  = Join-Path $repo 'github_sync.log'
 
 function L($m) {

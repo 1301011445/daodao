@@ -9,7 +9,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = 'E:\Daodao'
+$root = 'F:\Daodao'
 $git = 'E:\Git\cmd\git.exe'
 if (-not (Test-Path -LiteralPath $git)) { $git = (Get-Command git.exe).Source }
 $log = Join-Path $root 'github_sync.log'

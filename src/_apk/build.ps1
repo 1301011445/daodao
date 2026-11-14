@@ -5,7 +5,7 @@ $jdk = 'E:\AndroidTools\jdk_ext\jdk-17.0.20.1+1'
 $sdk = 'E:\AndroidTools\sdk'
 $bt  = "$sdk\build-tools\34.0.0"
 $aj  = "$sdk\platforms\android-33\android.jar"
-$a   = 'E:\Daodao\src\_apk'
+$a   = 'F:\Daodao\src\_apk'
 
 $env:JAVA_HOME = $jdk
 $env:PATH = "$jdk\bin;$bt;$env:PATH"

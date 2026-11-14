@@ -1,7 +1,7 @@
 ﻿<#
   游戏模式：一键清后台
   用法：双击桌面「游戏模式-清后台.lnk」，或手动执行
-        powershell -NoProfile -ExecutionPolicy Bypass -File E:\Daodao\tools\game_mode.ps1
+        powershell -NoProfile -ExecutionPolicy Bypass -File F:\Daodao\tools\game_mode.ps1
   参数：-DryRun        只报告不真杀
         -KeepDoubao    保留豆包客户端（默认会被关掉）
         -KeepSearch    保留 Windows 搜索索引服务（默认暂停）
@@ -13,7 +13,7 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
-$logDir = 'E:\Daodao\tools'
+$logDir = 'F:\Daodao\tools'
 $log = Join-Path $logDir 'game_mode.log'
 
 function Get-FreeGB { [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 2) }

@@ -2,7 +2,7 @@
 import sys, os, wave, json, threading, time, queue
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-MODEL_DIR = r"E:\Daodao\voskmodel"
+MODEL_DIR = r"F:\Daodao\voskmodel"
 DEV_CACHE = os.path.join(BASE, "mic_dev.json")
 
 GAIN = 3.5           # 笔记本内置麦本来就小声，先整体抬三倍半

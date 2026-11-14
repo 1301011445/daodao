@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from PIL import Image, ImageDraw
-BASE = r"E:\Daodao\src\桌面分身\faces_cut4"
+BASE = r"F:\Daodao\src\桌面分身\faces_cut4"
 OUT = r"C:\Users\Administrator\Doubao\chats\2026-11-06\face_anchor_check6.png"
 FX = [0.485, 0.492, 0.50, 0.492, 0.50, 0.50, 0.486, 0.498, 0.49, 0.50, 0.51, 0.50]
 FY = [0.250, 0.276, 0.215, 0.266, 0.203, 0.179, 0.219, 0.285, 0.371, 0.430, 0.254, 0.258]

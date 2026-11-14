@@ -2,7 +2,7 @@
 """按程序当前使用的归一化坐标，在 12 张形象上画准星，看表情画到哪儿去了。"""
 from PIL import Image, ImageDraw
 
-BASE = r"E:\Daodao\src\桌面分身\faces_cut4"
+BASE = r"F:\Daodao\src\桌面分身\faces_cut4"
 OUT = r"C:\Users\Administrator\Doubao\chats\2026-11-06\face_anchor_check5.png"
 
 FX = [0.485, 0.492, 0.50, 0.465, 0.50, 0.50, 0.486, 0.498, 0.49, 0.50, 0.51, 0.50]

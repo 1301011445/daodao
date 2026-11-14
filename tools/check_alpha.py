@@ -3,7 +3,7 @@ from PIL import Image
 import os
 
 for i in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]:
-    p = r"E:\Daodao\src\桌面分身\faces_cut4\face_%d.png" % i
+    p = r"F:\Daodao\src\桌面分身\faces_cut4\face_%d.png" % i
     if not os.path.exists(p):
         print(i, "MISSING")
         continue

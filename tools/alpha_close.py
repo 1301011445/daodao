@@ -23,7 +23,7 @@ def erode(m):
     return out
 
 
-root = r'E:\Daodao\_待接入形象\12'
+root = r'F:\Daodao\_待接入形象\12'
 for sub, pats in (('_walk8_12', ['walk%d.png' % i for i in range(1, 9)]),
                   ('_poses_dev12', ['stand.png', 'wave.png', 'cheer.png', 'sit.png'])):
     for f in pats:

@@ -11,7 +11,7 @@ param([switch]$Apply, [switch]$Revert)
 $ErrorActionPreference = 'Stop'
 $padKey  = 'HKCU:\Software\Elantech\SmartPad'
 $ptKey   = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\PrecisionTouchPad'
-$bakFile = 'E:\Daodao\tools\touchpad_backup.json'
+$bakFile = 'F:\Daodao\tools\touchpad_backup.json'
 
 # 要调整的开关：轻敲类全部关闭，关闭右下角右键区，插鼠标时自动禁用触摸板
 $padSwitches = @(

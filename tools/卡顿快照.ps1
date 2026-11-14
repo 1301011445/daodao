@@ -1,5 +1,5 @@
 ﻿# 卡顿现场快照：感觉卡的时候双击这个脚本，10 秒后把当时的状态追加到 卡顿记录.txt
-$log = 'E:\Daodao\卡顿记录.txt'
+$log = 'F:\Daodao\卡顿记录.txt'
 function L($m){ $line = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '  ' + $m; Add-Content -LiteralPath $log -Value $line -Encoding UTF8; Write-Output $line }
 L "=== 快照开始（请保持卡的状态不要关窗口）==="
 $os = Get-CimInstance Win32_OperatingSystem

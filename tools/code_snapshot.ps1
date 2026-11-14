@@ -1,6 +1,6 @@
 ﻿# 每天把代码打包成快照存本地（不依赖网盘和账号，断网也能跑）
 $ErrorActionPreference = 'Continue'
-$repo = 'E:\Daodao'
+$repo = 'F:\Daodao'
 $outDir = 'E:\备份\代码快照'
 $keep = 7
 $u8 = New-Object Text.UTF8Encoding($false)

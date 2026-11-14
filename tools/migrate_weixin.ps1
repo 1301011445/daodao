@@ -1,5 +1,5 @@
 ﻿$ErrorHandlingPreference = 'Stop'
-$log = 'E:\Daodao\微信迁移.log'
+$log = 'F:\Daodao\微信迁移.log'
 function W($m){ $s = '[' + (Get-Date).ToString('HH:mm:ss') + '] ' + $m; Add-Content -LiteralPath $log -Value $s -Encoding utf8 }
 
 $src = 'C:\Program Files\Tencent\Weixin'

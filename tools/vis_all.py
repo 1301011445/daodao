@@ -7,7 +7,7 @@ cw, ch = 180, 260
 rows = 2
 out = Image.new("RGB", (cols * cw, rows * ch), (0, 0, 0))
 for i in range(12):
-    p = r"E:\Daodao\src\桌面分身\faces_cut4\face_%d.png" % i
+    p = r"F:\Daodao\src\桌面分身\faces_cut4\face_%d.png" % i
     im = Image.open(p).convert("RGBA")
     im.thumbnail((cw - 8, ch - 8), Image.LANCZOS)
     tile = Image.new("RGB", (cw - 4, ch - 4), (0, 255, 0))
@@ -23,5 +23,5 @@ for i in range(12):
     col = i % cols
     row = i // cols
     out.paste(tile, (col * cw + 2, row * ch + 2))
-out.save(r"E:\Daodao\_vis_all.png", "PNG")
+out.save(r"F:\Daodao\_vis_all.png", "PNG")
 print("OK")

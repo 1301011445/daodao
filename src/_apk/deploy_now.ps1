@@ -2,24 +2,24 @@ $nl = [Environment]::NewLine
 $o = ''
 
 # 1. 部署新 APK
-Copy-Item -LiteralPath 'E:\Daodao\src\_apk\Dao.apk' -Destination 'E:\Daodao\道.apk' -Force
-$o += 'apk_MB=' + [math]::Round((Get-Item -LiteralPath 'E:\Daodao\道.apk').Length / 1MB, 2) + $nl
+Copy-Item -LiteralPath 'F:\Daodao\src\_apk\Dao.apk' -Destination 'F:\Daodao\道.apk' -Force
+$o += 'apk_MB=' + [math]::Round((Get-Item -LiteralPath 'F:\Daodao\道.apk').Length / 1MB, 2) + $nl
 
 # 2. 部署新 exe（先停旧的）
 Get-Process -Name '道' -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
-if (Test-Path -LiteralPath 'E:\Daodao\道.exe') {
-    Copy-Item -LiteralPath 'E:\Daodao\道.exe' -Destination 'E:\Daodao\道.exe.bak3' -Force
+if (Test-Path -LiteralPath 'F:\Daodao\道.exe') {
+    Copy-Item -LiteralPath 'F:\Daodao\道.exe' -Destination 'F:\Daodao\道.exe.bak3' -Force
 }
-Copy-Item -LiteralPath 'E:\Daodao\src\桌面分身\道_new.exe' -Destination 'E:\Daodao\道.exe' -Force
-$o += 'exe_size=' + (Get-Item -LiteralPath 'E:\Daodao\道.exe').Length + $nl
+Copy-Item -LiteralPath 'F:\Daodao\src\桌面分身\道_new.exe' -Destination 'F:\Daodao\道.exe' -Force
+$o += 'exe_size=' + (Get-Item -LiteralPath 'F:\Daodao\道.exe').Length + $nl
 
 # 3. 自更新投递目录
-New-Item -ItemType Directory -Force -Path 'E:\Daodao\updates' | Out-Null
-$o += 'updates_dir=' + (Test-Path -LiteralPath 'E:\Daodao\updates') + $nl
+New-Item -ItemType Directory -Force -Path 'F:\Daodao\updates' | Out-Null
+$o += 'updates_dir=' + (Test-Path -LiteralPath 'F:\Daodao\updates') + $nl
 
 # 4. 拉起来
-Start-Process -FilePath 'E:\Daodao\道.exe'
+Start-Process -FilePath 'F:\Daodao\道.exe'
 Start-Sleep -Seconds 4
 $ps = @(Get-Process -Name '道' -ErrorAction SilentlyContinue)
 $o += 'new_procs=' + $ps.Count + $nl

@@ -4,7 +4,7 @@ if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst | Out-Null 
 $stamp = Get-Date -Format 'yyyyMMdd_HHmm'
 $zip = Join-Path $dst ('道_' + $stamp + '.zip')
 $list = @()
-foreach ($n in @('道.exe','pet.cs','pet.manifest','记忆.txt','我说的话.txt','make_icons.ps1','daily_brief.ps1','daily_bing.ps1','hear.py','backup.ps1')) {
+foreach ($n in @('道.exe','pet.cs','pet.manifest','记忆.txt','我说的话.txt','daily_bing.ps1','tools\check_features.ps1','hear.py','backup.ps1')) {
   $p = Join-Path $dir $n
   if (Test-Path -LiteralPath $p) { $list += $p }
 }

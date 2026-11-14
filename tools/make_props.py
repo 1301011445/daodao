@@ -154,5 +154,5 @@ def make_sword(out_path):
 
 
 if __name__ == "__main__":
-    make_cape(r"E:\Daodao\props_cape.png")
-    make_sword(r"E:\Daodao\props_sword.png")
+    make_cape(r"F:\Daodao\props_cape.png")
+    make_sword(r"F:\Daodao\props_sword.png")

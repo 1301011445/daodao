@@ -4,8 +4,8 @@ from PIL import Image
 import numpy as np
 
 URL = 'https://aka.doubaocdn.com/s/LRiAhJE4c5'
-OUT_DIR = r'E:\Daodao\src\桌面分身\_walk8_12'
-POSES_DIR = r'E:\Daodao\src\桌面分身\_poses_dev12'
+OUT_DIR = r'F:\Daodao\src\桌面分身\_walk8_12'
+POSES_DIR = r'F:\Daodao\src\桌面分身\_poses_dev12'
 TARGET_W, TARGET_H = 96, 152
 KEY = np.array([255, 0, 255], dtype=np.float32)
 OUTLINE = np.array([26, 34, 74, 255], dtype=np.uint8)

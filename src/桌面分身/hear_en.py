@@ -1,7 +1,7 @@
 import sys, os, wave, json
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-MODEL_DIR = r"E:\Daodao\voskmodel_en"
+MODEL_DIR = r"F:\Daodao\voskmodel_en"
 
 
 def main():

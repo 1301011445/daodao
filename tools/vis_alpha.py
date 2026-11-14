@@ -3,7 +3,7 @@
 from PIL import Image
 
 for i in [0, 2, 11]:
-    p = r"E:\Daodao\src\桌面分身\faces_cut4\face_%d.png" % i
+    p = r"F:\Daodao\src\桌面分身\faces_cut4\face_%d.png" % i
     im = Image.open(p).convert("RGBA")
     w, h = im.size
     out = Image.new("RGB", (w, h), (0, 255, 0))
@@ -17,5 +17,5 @@ for i in [0, 2, 11]:
             elif a > 0:
                 op[x, y] = (255, 140, 0)   # 半透明涂橙
             # a==0 保留绿
-    out.save(r"E:\Daodao\_vis_%d.png" % i, "PNG")
+    out.save(r"F:\Daodao\_vis_%d.png" % i, "PNG")
     print("OK", i, im.size)

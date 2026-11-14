@@ -1,7 +1,7 @@
 ﻿# 每天给「道」生成一份宣传物料：三个平台的文案 + 当天配图
 # 全部用 PowerShell 实现，不依赖 python 路径，计划任务直接跑得起来
 $ErrorImportance = $null
-$APP = 'E:\Daodao'
+$APP = 'F:\Daodao'
 $OUT = Join-Path $APP '宣传'
 $SHOT = 'C:\Users\Administrator\Doubao\chats\2026-11-06'
 $LOG = Join-Path $OUT 'log.txt'

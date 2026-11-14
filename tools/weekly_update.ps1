@@ -1,5 +1,5 @@
 ﻿# 每周系统与软件更新巡检（由 Windows 计划任务调用）
-$log = 'E:\Daodao\更新巡检日志.txt'
+$log = 'F:\Daodao\更新巡检日志.txt'
 function L($m){ Add-Content -LiteralPath $log -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '  ' + $m) -Encoding UTF8 }
 L "=== 开始巡检 ==="
 try{

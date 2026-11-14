@@ -1,6 +1,6 @@
 ﻿# 每日图标轮换：按一年中的第几天挑当天的 ico，覆盖 current.ico，改桌面/开始菜单快捷方式图标
 $ErrorActionPreference = 'Continue'
-$root = 'E:\Daodao'
+$root = 'F:\Daodao'
 $icoDir = Join-Path $root 'icons\ico'
 $cur = Join-Path $root 'icons\current.ico'
 $log = Join-Path $root 'github_sync.log'
@@ -44,7 +44,7 @@ foreach ($d in $targets) {
     }
 }
 
-& ie4uinit.exe -show 2>&1 | Out-Null
+$ie4 = Join-Path $env:SystemRoot 'System32\ie4uinit.exe'; if (Test-Path -LiteralPath $ie4) { & $ie4 -show 2>&1 | Out-Null }
 
 $line = "[{0}] 图标轮换 -> {1}（{2}，每年第 {3} 天），快捷方式改了 {4} 处" -f (Get-Date -f 'yyyy-MM-dd HH:mm:ss'), $pick.BaseName, $pick.Name, (Get-Date).DayOfYear, $changed
 Add-Content -LiteralPath $log -Value $line -Encoding UTF8

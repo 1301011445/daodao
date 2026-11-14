@@ -1,5 +1,5 @@
 ﻿# Dao: empty recycle bin for current user (skip SYSTEM-owned folders)
-$log = 'E:\Daodao\recycle_clean.log'
+$log = 'F:\Daodao\recycle_clean.log'
 $o = @()
 foreach ($d in @('C','D','E','F','G')) {
     $t = $d + ':\$Recycle.Bin'

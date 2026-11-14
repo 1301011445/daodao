@@ -3,10 +3,10 @@ import os, re, base64, shutil
 import numpy as np
 from PIL import Image
 
-STAGE = r'E:\Daodao\_待接入形象\12'
+STAGE = r'F:\Daodao\_待接入形象\12'
 POSES_DIR = os.path.join(STAGE, '_poses_dev12')
 WALKS_DIR = os.path.join(STAGE, '_walk8_12')
-SRC = r'E:\Daodao\src\桌面分身'
+SRC = r'F:\Daodao\src\桌面分身'
 POSE_DST = os.path.join(SRC, '_poses_dev8')
 WALK_DST = os.path.join(SRC, '_walk8_8')
 
@@ -41,7 +41,7 @@ print('替换前 POSES_8=%d WALKS_8=%d' % (n_pos, n_walk))
 raw = re.sub(r'var POSES_8 = \[.*?\];', lambda m: poses_js, raw, count=1, flags=re.S)
 raw = re.sub(r'var WALKS_8 = \[.*?\];', lambda m: walks_js, raw, count=1, flags=re.S)
 open(P, 'w', encoding='utf-8', newline='\n').write(raw)
-shutil.copy(P, r'E:\Daodao\道-随身版.html')
+shutil.copy(P, r'F:\Daodao\道-随身版.html')
 
 chk = open(P, encoding='utf-8').read()
 print('替换后 POSES_8=%d WALKS_8=%d 大小 %.2fMB' % (

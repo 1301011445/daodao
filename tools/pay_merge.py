@@ -7,8 +7,8 @@ GAP = 24
 PAD = 24
 BG = (250, 250, 251)
 
-wx = Image.open(r"E:\Daodao\pay_wx.png").convert("RGB")
-zfb = Image.open(r"E:\Daodao\pay_zfb.png").convert("RGB")
+wx = Image.open(r"F:\Daodao\pay_wx.png").convert("RGB")
+zfb = Image.open(r"F:\Daodao\pay_zfb.png").convert("RGB")
 
 # 并排：各占一半宽度
 half = (W - PAD * 3) // 2
@@ -26,6 +26,6 @@ canvas.paste(b, (PAD * 2 + half, PAD))
 
 d = ImageDraw.Draw(canvas)
 d.rectangle([0, 0, W - 1, H - 1], outline=(226, 228, 233))
-out = r"E:\Daodao\宣传\收款码.png"
+out = r"F:\Daodao\宣传\收款码.png"
 canvas.save(out, "PNG")
 print("OK %s %dx%d" % (out, canvas.width, canvas.height))

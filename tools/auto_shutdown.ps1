@@ -1,7 +1,7 @@
 ﻿# 每晚定时关机（由 Windows 计划任务调用，不需要管理员）
 # 判定规则：只有真正在装更新（InstallInProgress=1 或 TiWorker 在跑）才跳过，避免装到一半被打断
 param([switch]$DryRun)
-$log = 'E:\Daodao\关机日志.txt'
+$log = 'F:\Daodao\关机日志.txt'
 function L($m){ Add-Content -LiteralPath $log -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '  ' + $m) -Encoding UTF8 }
 $reason = ''
 $k = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update'

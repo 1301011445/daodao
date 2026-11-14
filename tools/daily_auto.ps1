@@ -1,7 +1,7 @@
 ﻿$ErrorActionPreference = 'Continue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$Root      = 'E:\Daodao'
+$Root      = 'F:\Daodao'
 $KeyFile   = Join-Path $Root 'key.txt'
 $LearnFile = Join-Path $Root '今日所学.txt'
 $DraftDir  = Join-Path $Root '推广草稿'

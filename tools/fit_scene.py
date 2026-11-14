@@ -13,7 +13,7 @@ SRC = [
 ]
 
 for src, dst in SRC:
-    im = Image.open(r"E:\Daodao\\" + src).convert("RGB")
+    im = Image.open(r"F:\Daodao\\" + src).convert("RGB")
     # 按目标比例居中裁切，避免拉伸变形
     tr = W / H
     r = im.width / im.height
@@ -26,5 +26,5 @@ for src, dst in SRC:
         top = int((im.height - nh) * 0.62)   # 略偏下取，保住地面
         im = im.crop((0, top, im.width, top + nh))
     im = im.resize((W, H), Image.LANCZOS)
-    im.save(r"E:\Daodao\\" + dst, "PNG")
+    im.save(r"F:\Daodao\\" + dst, "PNG")
     print("OK", dst, im.width, im.height)

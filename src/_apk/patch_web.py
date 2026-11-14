@@ -2,7 +2,7 @@
 import re, sys
 from pathlib import Path
 
-SRC = Path(r"E:\Daodao\道-随身版.html")
+SRC = Path(r"F:\Daodao\道-随身版.html")
 DST = Path(r"C:\Users\Administrator\Doubao\chats\2026-11-06\_apk\assets\dao.html")
 REP = Path(r"C:\Users\Administrator\Doubao\chats\2026-11-06\_patch.txt")
 

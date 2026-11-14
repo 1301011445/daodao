@@ -93,7 +93,7 @@ def build(url, tag):
 
 
 def run():
-    src = r'E:\Daodao\_待接入形象\12'
+    src = r'F:\Daodao\_待接入形象\12'
     for sub in ('_walk8_12', '_poses_dev12'):
         os.makedirs(os.path.join(src, sub), exist_ok=True)
 

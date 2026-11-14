@@ -56,6 +56,6 @@ def cut(path, out_path, target_w=None, target_h=None):
 
 
 if __name__ == "__main__":
-    cut(r"E:\Daodao\raw_cape.png", r"E:\Daodao\props_cape.png", target_h=760)
-    cut(r"E:\Daodao\raw_sword.png", r"E:\Daodao\props_sword.png", target_w=1200)
-    cut(r"E:\Daodao\raw_capewind.png", r"E:\Daodao\props_capewind.png", target_w=1200)
+    cut(r"F:\Daodao\raw_cape.png", r"F:\Daodao\props_cape.png", target_h=760)
+    cut(r"F:\Daodao\raw_sword.png", r"F:\Daodao\props_sword.png", target_w=1200)
+    cut(r"F:\Daodao\raw_capewind.png", r"F:\Daodao\props_capewind.png", target_w=1200)

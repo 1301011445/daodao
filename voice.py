@@ -27,10 +27,10 @@ try:
 except Exception:
     pass
 
-BASE = r"E:\Daodao"
+BASE = r"F:\Daodao"
 STATE = os.path.join(BASE, "hp.json")
 WAV = os.path.join(BASE, "heard.wav")
-MODEL_DIR = r"E:\Daodao\voskmodel"
+MODEL_DIR = r"F:\Daodao\voskmodel"
 KEY_FILE = os.path.join(BASE, "key.txt")
 API = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 MODEL = "glm-4-air"

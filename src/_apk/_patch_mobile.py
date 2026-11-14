@@ -1,4 +1,4 @@
-p = r"E:\Daodao\src\_apk\assets\dao.html"
+p = r"F:\Daodao\src\_apk\assets\dao.html"
 raw = open(p, "rb").read()
 s = raw.decode("utf-8-sig")
 print("CRLF count", s.count("\r\n"), "LF count", s.count("\n"))

@@ -1,5 +1,5 @@
 import io, re, base64
-h = r"E:\Daodao\src\_apk\assets\dao.html"
+h = r"F:\Daodao\src\_apk\assets\dao.html"
 s = io.open(h, encoding="utf-8", newline="").read()
 
 m = re.search(r"var FACES = \[(.*?)\];", s, re.S)
@@ -14,8 +14,8 @@ if len(items) != 12:
 def b64(path):
     return base64.b64encode(io.open(path, "rb").read()).decode("ascii")
 
-new8 = b64(r"E:\Daodao\src\桌面分身\_fullbody\face_8_cut.png")
-new10 = b64(r"E:\Daodao\src\桌面分身\_fullbody\face_10_cut.png")
+new8 = b64(r"F:\Daodao\src\桌面分身\_fullbody\face_8_cut.png")
+new10 = b64(r"F:\Daodao\src\桌面分身\_fullbody\face_10_cut.png")
 
 old8, old10 = items[8], items[10]
 assert len(old8) > 1000 and len(old10) > 1000

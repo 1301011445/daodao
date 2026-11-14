@@ -3,10 +3,10 @@ import os, base64, shutil
 import numpy as np
 from PIL import Image
 
-STAGE = r'E:\Daodao\_待接入形象\12'
+STAGE = r'F:\Daodao\_待接入形象\12'
 POSE_SRC = os.path.join(STAGE, '_poses_dev12')
 WALK_SRC = os.path.join(STAGE, '_walk8_12')
-SRC = r'E:\Daodao\src\桌面分身'
+SRC = r'F:\Daodao\src\桌面分身'
 POSE_DST = os.path.join(SRC, '_poses_dev8')
 WALK_DST = os.path.join(SRC, '_walk8_8')
 OUTLINE = np.array([26, 34, 74, 255], dtype='uint8')
@@ -79,5 +79,5 @@ for i, b in enumerate(walks):
     walkfrag += ',\n' if i < 7 else '\n'
 walkfrag += '   ];\n'
 
-open(r'E:\Daodao\tools\_pos8_frag.js', 'w', encoding='utf-8').write(frag + '\n' + walkfrag)
+open(r'F:\Daodao\tools\_pos8_frag.js', 'w', encoding='utf-8').write(frag + '\n' + walkfrag)
 print('片段长度 %d / %d' % (len(frag), len(walkfrag)))

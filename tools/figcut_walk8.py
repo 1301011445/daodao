@@ -4,7 +4,7 @@ from PIL import Image, ImageDraw
 import numpy as np
 
 URL = 'https://aka.doubaocdn.com/s/07CVXkHBRf'
-STAGE = r'E:\Daodao\_待接入形象\12'
+STAGE = r'F:\Daodao\_待接入形象\12'
 OUT = os.path.join(STAGE, '_walk8_12')
 POSE = os.path.join(STAGE, '_poses_dev12')
 TW, TH = 96, 152

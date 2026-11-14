@@ -1,6 +1,6 @@
 ﻿$ErrorActionPreference = 'Stop'
 $nl = [Environment]::NewLine
-$d = 'E:\Daodao\src\桌面分身'
+$d = 'F:\Daodao\src\桌面分身'
 $log = @()
 
 Set-Location -LiteralPath $d

@@ -1,8 +1,8 @@
 ﻿# 每天把下载页的版本号、体积、日期对齐本机真实安装包，然后发布
 $ErrorActionPreference = 'Continue'
-$src = 'E:\Daodao\引导页_src'
+$src = 'F:\Daodao\引导页_src'
 $page = Join-Path $src 'index.html'
-$repo = 'E:\Daodao'
+$repo = 'F:\Daodao'
 $appId = 'app_17hnj8acgs2'
 $log = Join-Path $repo 'github_sync.log'
 

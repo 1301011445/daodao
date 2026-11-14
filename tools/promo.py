@@ -11,7 +11,7 @@ import time
 import urllib.request
 from datetime import datetime
 
-APP = r"E:\Daodao"
+APP = r"F:\Daodao"
 OUT = os.path.join(APP, "宣传")
 SHOT_DIR = r"C:\Users\Administrator\Doubao\chats\2026-11-06"
 LOG = os.path.join(OUT, "log.txt")

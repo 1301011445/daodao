@@ -5,8 +5,8 @@ from PIL import Image
 from collections import deque
 import os
 
-SRC = r"E:\Daodao\src\桌面分身\faces_cut4"
-DST = r"E:\Daodao\src\桌面分身\faces_cut5"
+SRC = r"F:\Daodao\src\桌面分身\faces_cut4"
+DST = r"F:\Daodao\src\桌面分身\faces_cut5"
 os.makedirs(DST, exist_ok=True)
 
 

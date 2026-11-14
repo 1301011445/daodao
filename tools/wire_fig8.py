@@ -1,8 +1,8 @@
 # 把 8 号银发剑客接进手机端：新增 POSES_8、登记进 POSE_SETS/POSE_KINDS，并换掉走路八帧
 import re, io, os
 
-P = r'E:\Daodao\src\桌面分身\dao.html'
-FRAG = r'E:\Daodao\tools\_pos8_frag.js'
+P = r'F:\Daodao\src\桌面分身\dao.html'
+FRAG = r'F:\Daodao\tools\_pos8_frag.js'
 raw = open(P, encoding='utf-8').read()
 frag = open(FRAG, encoding='utf-8').read()
 bom = open(P, 'rb').read(3) == b'\xef\xbb\xbf'

@@ -1,0 +1,7692 @@
+using System;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Windows.Forms;
+using System.Diagnostics;
+using Microsoft.Win32;
+using System.Runtime.InteropServices;
+using System.IO;
+using System.Text;
+using System.Collections.Generic;
+using System.Net;
+using System.Text.RegularExpressions;
+
+public class DesktopPet : Form
+{
+    [DllImport("user32.dll")]
+    static extern bool SetProcessDPIAware();
+
+    [DllImport("user32.dll")]
+    static extern bool IsProcessDPIAware();
+
+    [DllImport("user32.dll")]
+    static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    const int SW_SHOWNOACTIVATE = 4;
+
+    [DllImport("user32.dll")]
+    public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, int crKey, byte alpha, int flags);
+    public const int LWA_COLORKEY = 0x1;
+    static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+    const uint SWP_NOMOVE = 0x0002;
+    const uint SWP_NOSIZE = 0x0001;
+    const uint SWP_NOACTIVATE = 0x0010;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public class MEMORYSTATUSEX
+    {
+        public uint dwLength;
+        public uint dwMemoryLoad;
+        public ulong ullTotalPhys;
+        public ulong ullAvailPhys;
+        public ulong ullTotalPageFile;
+        public ulong ullAvailPageFile;
+        public ulong ullTotalVirtual;
+        public ulong ullAvailVirtual;
+        public ulong ullAvailExtendedVirtual;
+        public MEMORYSTATUSEX() { this.dwLength = (uint)Marshal.SizeOf(typeof(MEMORYSTATUSEX)); }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool GlobalMemoryStatusEx([In, Out] MEMORYSTATUSEX lpBuffer);
+
+    const int W = 380;
+    const int H = 205;
+
+    // 系统缩放比例（150% 缩放时窗口会被系统压成 2/3，这里补回来）
+    static float uiScale = CalcUiScale();
+
+    static float CalcUiScale()
+    {
+        try
+        {
+            if (IsProcessDPIAware()) return 1f;
+            RegistryKey k = Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop\WindowMetrics");
+            if (k != null)
+            {
+                object v = k.GetValue("AppliedDPI");
+                if (v != null)
+                {
+                    int dpi = Convert.ToInt32(v);
+                    if (dpi >= 96 && dpi <= 480) return dpi / 96f;
+                }
+            }
+        }
+        catch { }
+        return 1f;
+    }
+    const int KEY = 0xFF00FF;
+
+    Timer anim;
+    Stopwatch animClock = new Stopwatch();
+    float animLastDt = 0.045f;
+    float t = 0f;
+    int species = 0;
+    int blinkWait = 0;
+    int blinkFrames = 0;
+    // v32：眨眼和呼吸都改成按真实时间走，间隔随机，不再拿毫秒数取余凑数
+    float blinkNextT = 2.6f;      // 距离下次眨眼还有几秒
+    float blinkCloseT = 0f;       // 这次闭眼要闭多久
+    Random blinkRnd = new Random();
+    string bubble = null;
+    int bubbleFrames = 0;
+    bool voiceOn = true;
+    System.Threading.Thread voiceThread;
+    // 要说的话排成一条队，一句播完再播下一句。之前是并发播的，两句撞一起就叠着响
+    class SpeakJob { public string text; public string voice; public string fx; }
+    object speakQLock = new object();
+    System.Collections.Generic.Queue<SpeakJob> speakQueue = new System.Collections.Generic.Queue<SpeakJob>();
+    System.Threading.Thread hearThread;
+    System.Threading.Thread transThread;
+    System.Threading.Thread backupThread;
+    Random rnd = new Random();
+    System.Windows.Forms.Timer memTimer;
+    System.Windows.Forms.Timer briefTimer;
+    System.Windows.Forms.Timer learnTimer;
+    bool mouseDown = false;
+    bool movedFlag = false;
+    Point dragStart;
+    Point formStart;
+    bool speaking = false;
+    System.Diagnostics.Process curPlayer = null;   // 当前正在播语音的进程，点它就能立刻掐掉
+    bool hearBusy = false;                          // 正在录你说的话，这期间它自己别开口
+    int speakTicks = 0;
+    int walkCounter = 0;
+    float tiltTarget = 0f;
+    float tiltNow = 0f;
+    int walkDirX = 0;
+    // 说话时嘴离脸中心多远（单位：脸半径）。有的形象嘴靠上：企鹅有喙、机器人脸是整块面罩
+    float[] speakMouthDY = { 0.46f, 0.44f, 0.45f, 0.44f, 0.45f, 0.17f, 0.42f, 0.42f, 0.42f, 0.42f, 0.42f, 0.18f };
+
+    int moodTicks = 0;
+    int moodKind = 0;
+    int moodWait = 200;
+    // 说话时嘴的开合时段（毫秒，Environment.TickCount 计时）
+    int speakMouthStart = 0;
+    int speakMouthUntil = 0;
+    int walkTicks = 0;
+    int walkTargetX = -999999;
+    int walkTargetY = -999999;
+    int hopPend = 0;
+    int hopWait = 260;
+    int runTicks = 0;         // 跑：距离远时加速、前倾、步频更快
+    int thinkTicks = 0;
+    int thinkWait = 300;
+    int diagCount = 0;
+    int waveTicks = 0;        // 招手打招呼
+    int idleTicks = 0;        // 无交互计时
+    int idleTalkWait = 3000;  // 隔一阵自己说句话的倒计时
+    bool sitting = false;     // 坐下歇着
+    bool sleepy = false;      // 犯困眯眼
+    bool lying = false;       // 真躺下睡：整只侧倒，头上飘 Z
+    float lieAmt = 0f;        // 0 站着 1 躺着，用来平滑过渡
+    int lieHold = 0;          // 手动"睡一觉"还剩多少帧
+    // 额外生活动作：1 飞 2 御剑 3 骑坐骑 4 跳舞 5 喝茶 6 看电视
+    int actKind = 0;
+    int actHold = 0;          // 还保持多少帧
+    float actAmt = 0f;        // 0..1 平滑进出，道具跟着淡入淡出，不会突然冒出来
+    int cryHold = 0;          // 手动"哭一个"还剩多少帧
+    int edgeStay = 0;         // 贴边后歇一会儿
+    // 脚下的场景：0 城市 1 乡野 2 海边 3 花丛，见过一阵自己换
+    int sceneIdx = 1;
+    bool sceneOn = false;     // 场景开关：先关掉，改用纯透明桌面；以后优化好了再打开
+    int sceneTick = 0;
+    // 走的时候真的在场景里挪位置：走到画面边上就转身往回走，不是原地踏步
+    float tripX = 0f;
+    int tripDir = 1;
+
+    string[] speciesName = { "橘猫", "小狗", "白兔", "棕熊", "小恐龙", "章鱼", "小黄鸡" };
+    string[] speciesColor = { "#F5A45C", "#C68B59", "#F2ECE1", "#A9744F", "#7FB77E", "#B39DDB", "#FFD54F" };
+
+    // 全身配色（与 faces 下标一一对应，头像图的代表色）
+    string[] faceBodyColor = {
+        "#F5A45C", "#F2ECE1", "#D9714B", "#EDEDED", "#7FB77E", "#4A5568",
+        "#6C8CD5", "#6B7280", "#3B4A6B", "#7A5CB8", "#E8A0B4", "#DDE3EA"
+    };
+
+    // ==== 图片形象（faces 目录）====
+    Bitmap[] faces = null;
+    string[] faceNames = null;
+    string[] faceVoices = null;
+    int faceCount = 0;
+    int[] faceFileIdx = null;
+
+    // ==== 整套姿势图（大模型出的同一角色多种动作）====
+    // 每张都是同一角色、同尺寸画布、底部对齐、水平居中，程序只在姿势之间切换，
+    // 不做骨架拼装：手抬起来、腿迈出去都是图里本来就有的，不是把身体切条推开
+    Bitmap[] poses = null;
+    int poseIdx = 0;
+    int posePrev = 0;
+    float poseFade = 2f;
+    int poseOwner = -1;   // 这套姿势属于哪个形象序号；-1 表示该形象还没有姿势集
+    // 哪个形象有完整一套动作。有动作的形象才能上桌，所以每天就在这几个里轮，
+    // 一个形象都没有动作的时候退回原来的随机形象 + 单张静态图
+    Dictionary<int, Bitmap[]> poseMap = new Dictionary<int, Bitmap[]>();
+    int[] poseKinds = new int[0];
+
+    // ==== 八帧走路循环 ====
+    // 每个形象单独一套：触地、下沉、交叉、抬起 x 左右各一遍。
+    // 走的时候直接换帧，手脚在图里本来就摆开了，不靠切条位移去骗眼睛
+    Dictionary<int, Bitmap[]> walkMap = new Dictionary<int, Bitmap[]>();
+    Bitmap[] walkFrames = null;
+
+    // 每张形象图里"脸"的位置：中心 (x, y) 相对整张图宽高比例，w 是脸宽占图宽比例
+    // 下标对应 face_0.png ~ face_11.png 的文件序号
+    static readonly float[] faceAtX = { 0.485f, 0.492f, 0.50f, 0.492f, 0.50f, 0.50f, 0.486f, 0.498f, 0.44f, 0.50f, 0.51f, 0.50f };
+    // 前五张是 Q 版动物：头大、眼睛占整张图比例高，按整图高度折算会整排偏到额头上去，
+    // 这几个 y 是逐张按两眼连线量出来的，不要改回统一比例
+    static readonly float[] faceAtY = { 0.250f, 0.276f, 0.215f, 0.266f, 0.203f, 0.179f, 0.219f, 0.285f, 0.255f, 0.430f, 0.254f, 0.258f };
+    static readonly float[] faceAtW = { 0.40f, 0.42f, 0.46f, 0.52f, 0.46f, 0.42f, 0.30f, 0.38f, 0.26f, 0.24f, 0.22f, 0.44f };
+
+    // ==== 骨架（骨链）====
+    // 从脚底往上一条骨链：胯、腰、胸、颈、头、发尾。每个形象共用同一套骨架。
+    // 三张表分别是：高度比例（脚底 0、头顶 1）、幅值权重、相位滞后（弧度）。
+    // 摆的时候越靠上叠得越多、相位越晚 —— 脚稳住、胯先带、胸反向收、
+    // 头晚半拍跟着、发尾再晚一点甩。以前整张图从头到尾一根正弦同步推，
+    // 看着像一块软牌子在晃，不像有骨头在带。
+    static readonly float[] rigY = { 0.20f, 0.42f, 0.62f, 0.80f, 0.90f, 1.00f };
+    static readonly float[] rigW = { 0.34f, 0.42f, 0.52f, 0.62f, 0.86f, 1.00f };
+    static readonly float[] rigL = { 0.00f, 0.55f, 1.15f, 1.75f, 2.30f, 2.90f };
+    static readonly float rigSum = 3.36f;
+
+    // 某个高度（0 脚底 ~ 1 头顶）被骨链推开多少，返回的是"幅值倍数"
+    static float BoneSway(float fy, float ph)
+    {
+        float s2 = 0f;
+        for (int b = 0; b < rigY.Length; b++)
+        {
+            if (fy <= rigY[b]) break;
+            float w2 = (fy - rigY[b]) / (1f - rigY[b]);
+            s2 += rigW[b] * w2 * w2 * (float)Math.Sin(ph - rigL[b]);
+        }
+        return s2 / rigSum;
+    }
+
+    static string appDirCache = null;
+    // 程序目录可写就用它，不可写（如放在 Program Files）自动落到用户目录，保证拷到哪都能存记忆
+    string AppDir()
+    {
+        if (appDirCache != null) return appDirCache;
+        string d = Path.GetDirectoryName(Application.ExecutablePath);
+        bool ok = false;
+        try
+        {
+            string probe = Path.Combine(d, ".__dao_write_test");
+            using (FileStream fs = new FileStream(probe, FileMode.Create, FileAccess.Write, FileShare.Read)) { }
+            try { File.Delete(probe); } catch { }
+            ok = true;
+        }
+        catch { ok = false; }
+        if (!ok)
+        {
+            try
+            {
+                string alt = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Daodao");
+                Directory.CreateDirectory(alt);
+                d = alt;
+            }
+            catch { }
+        }
+        appDirCache = d;
+        return d;
+    }
+
+    string[] ReadUtf8Lines(string p)
+    {
+        try { return File.ReadAllLines(p, new UTF8Encoding(false)); }
+        catch { return new string[0]; }
+    }
+
+    // 把半透明边缘统一压成纯洋红，让窗口透明键能完全吃掉，避免轮廓外一圈洋红描边
+    void KeyOut(Bitmap bmp)
+    {
+        try
+        {
+            Rectangle rc = new Rectangle(0, 0, bmp.Width, bmp.Height);
+            BitmapData bd = bmp.LockBits(rc, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
+            int len = bd.Stride * bmp.Height;
+            byte[] buf = new byte[len];
+            Marshal.Copy(bd.Scan0, buf, 0, len);
+            int cut = 0;
+            for (int i = 0; i + 3 < len; i += 4)
+            {
+                if (buf[i + 3] < 246)
+                {
+                    buf[i] = 255; buf[i + 1] = 0; buf[i + 2] = 255; buf[i + 3] = 255;
+                    cut++;
+                }
+            }
+            Marshal.Copy(buf, 0, bd.Scan0, len);
+            bmp.UnlockBits(bd);
+        }
+        catch { }
+    }
+
+    Stream ResStream(string fileName)
+    {
+        try
+        {
+            System.Reflection.Assembly asm = System.Reflection.Assembly.GetExecutingAssembly();
+            Stream s = asm.GetManifestResourceStream(fileName);
+            if (s != null) return s;
+            foreach (string rn in asm.GetManifestResourceNames())
+                if (rn.EndsWith(fileName, StringComparison.OrdinalIgnoreCase))
+                    return asm.GetManifestResourceStream(rn);
+        }
+        catch { }
+        return null;
+    }
+
+    string[] ResLines(string fileName)
+    {
+        try
+        {
+            Stream s = ResStream(fileName);
+            if (s == null) return new string[0];
+            using (StreamReader sr = new StreamReader(s, System.Text.Encoding.UTF8))
+            {
+                string all = sr.ReadToEnd();
+                return all.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            }
+        }
+        catch { return new string[0]; }
+    }
+
+    Bitmap MakeThumb(Stream s)
+    {
+        Bitmap bmp = null;
+        using (Bitmap src = new Bitmap(s))
+        {
+            int th = 256;
+            int tw = Math.Max(1, (int)(src.Width * (th / (float)src.Height)));
+            bmp = new Bitmap(tw, th, PixelFormat.Format32bppArgb);
+            using (Graphics gg = Graphics.FromImage(bmp))
+            {
+                gg.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                gg.Clear(Color.Transparent);
+                gg.DrawImage(src, 0, 0, tw, th);
+            }
+        }
+        // 以前这里把透明像素刷成洋红透明键，结果人物周围在场景上"打洞"，
+        // 透出桌面/网页底色，看着就是一块白板。改成保留真 alpha，叠在场景上正常混合。
+        return bmp;
+    }
+
+    // 单文件版：把内嵌的大脑钥匙、知识库与语音/翻译脚本释放到程序目录，
+    // 这样 exe 单独拷到任何一台电脑，都有脑子、有知识、能听会说
+    void EnsureAssets()
+    {
+        string[] names = { "key.txt", "知识库.txt", "hear.py", "hear_en.py", "trans.py", "voice.py", "play_audio.py", "github_learn.py", "记忆.txt", "我说的话.txt", "今日所学.txt", "更新日志.txt" };
+        foreach (string n in names)
+        {
+            try
+            {
+                string t = Path.Combine(AppDir(), n);
+                if (File.Exists(t)) continue;
+                Stream s = ResStream(n);
+                if (s == null) continue;
+                using (Stream src = s)
+                using (Stream dst = new FileStream(t, FileMode.Create, FileAccess.Write))
+                {
+                    src.CopyTo(dst);
+                }
+            }
+            catch { }
+        }
+    }
+
+    // 披风、长剑这两件道具改成贴图：python 画好的透明底 PNG 放在程序目录，
+    // 比程序里现拼多边形像样得多，形状和配色也统一
+    Bitmap capeImg, swordImg, capeWind;
+    // 御剑姿势图：按形象分开存，有了就整张换掉，不再靠正面站姿配一把画出来的剑
+    Dictionary<int, Bitmap> swordFlyMap = new Dictionary<int, Bitmap>();
+    // 表情整图：每个形象最多四张（笑/难过/生气/睡着）。
+    // 桌面尺寸下脸只有二三十像素，在上面画腮红、弧线、泪珠看着就是一团糊；
+    // 有真表情图就直接整张换，表情是画师画的，跟衣服头发同源
+    // v14 起不再用生成的表情图：AI 画出来的笑/难过/生气/睡着都不如原画脸上那一抹自然，
+    // 2026-11-14 重做表情：每种情绪改用一整张真表情贴图，不再往脸上叠线条
+    static readonly bool UseExprArt = true;
+
+    // v18：披风先撤掉。程序画的那块红布（贴图 + 程序画两版）在桌面尺寸下太假，
+    // 等真做出像样的披风再穿。改成 false 之后：道具图不加载，飞的时候只画脚下一层气流，
+    // 动作本身（腾空、倾斜、换海边日落景）都不变。
+    static readonly bool UseCape = false;
+    Dictionary<int, Bitmap[]> exprMap = new Dictionary<int, Bitmap[]>();
+    // 笑的动态帧：exprMap 里的 happy 只是第一帧，再补三帧凑成一圈，
+    // 笑的时候四帧轮着换，嘴和眼睛才是真的在动，不是一张图定在那儿
+    Dictionary<int, Bitmap[]> laughMap = new Dictionary<int, Bitmap[]>();
+    Bitmap swordFly = null;
+    static bool dbgCape;
+
+    // 场景背景也交给模型画：城市、乡野、海边、花丛四张整幅图，
+    // 程序里只负责按窗口尺寸贴上去，别再用手绘线条凑
+    Bitmap[] sceneImgs = new Bitmap[6];
+
+    void LoadScenes()
+    {
+        // 用的是四边羽化过的版本（_v），贴出来是一块柔边的景，不是长方形画框
+        string[] names = { "scene_city_v.png", "scene_field_v.png", "scene_sea_v.png", "scene_flower_v.png" };
+        for (int i = 0; i < names.Length; i++)
+        {
+            sceneImgs[i] = LoadScene(names[i]);
+        }
+        sceneImgs[5] = LoadScene("scene_xianxia_v.png");   // 御剑专用
+        sceneImgs[4] = LoadScene("scene_home_v.png");      // 屋里：客厅，自带一台电视
+    }
+
+    Bitmap LoadScene(string name)
+    {
+        try
+        {
+            string p = Path.Combine(AppDir(), name);
+            if (!File.Exists(p))
+            {
+                try { File.AppendAllText(Path.Combine(AppDir(), "AI日志.txt"), "SCENE " + name + " MISSING " + p + "\r\n"); } catch { }
+                return null;
+            }
+            using (Stream fs = new FileStream(p, FileMode.Open, FileAccess.Read))
+            {
+                using (Bitmap src = new Bitmap(fs))
+                {
+                    Bitmap bmp = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppArgb);
+                    using (Graphics gg = Graphics.FromImage(bmp))
+                    {
+                        // 必须留空底：场景图四边是羽化的透明边，铺黑底就把柔边盖死了
+                        gg.Clear(Color.Transparent);
+                        gg.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                        gg.DrawImage(src, 0, 0, src.Width, src.Height);
+                        gg.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceOver;
+                    }
+                    try { File.AppendAllText(Path.Combine(AppDir(), "AI日志.txt"), "SCENE " + name + " OK " + bmp.Width + "x" + bmp.Height + "\r\n"); } catch { }
+                    return bmp;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            try { File.AppendAllText(Path.Combine(AppDir(), "AI日志.txt"), "SCENE " + name + " FAIL " + ex.Message + "\r\n"); } catch { }
+            return null;
+        }
+    }
+
+    void LoadProps()
+    {
+        if (UseCape)
+        {
+            capeImg = LoadProp("props_cape.png");
+            capeWind = LoadProp("props_capewind.png");
+        }
+        swordImg = LoadProp("props_sword.png");
+    }
+
+    Bitmap LoadProp(string name)
+    {
+        try
+        {
+            string p = Path.Combine(AppDir(), name);
+            if (!File.Exists(p))
+            {
+                try { File.AppendAllText(Path.Combine(AppDir(), "AI日志.txt"), "PROPS " + name + " MISSING " + p + "\r\n"); } catch { }
+                return null;
+            }
+            using (Stream fs = new FileStream(p, FileMode.Open, FileAccess.Read))
+            {
+                using (Bitmap src = new Bitmap(fs))
+                {
+                    Bitmap bmp = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppArgb);
+                    using (Graphics gg = Graphics.FromImage(bmp))
+                    {
+                        gg.Clear(Color.Transparent);
+                        gg.DrawImage(src, 0, 0, src.Width, src.Height);
+                    }
+                    try { File.AppendAllText(Path.Combine(AppDir(), "AI日志.txt"), "PROPS " + name + " OK " + bmp.Width + "x" + bmp.Height + "\r\n"); } catch { }
+                    return bmp;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            try { File.AppendAllText(Path.Combine(AppDir(), "AI日志.txt"), "PROPS " + name + " FAIL " + ex.Message + "\r\n"); } catch { }
+            return null;
+        }
+    }
+
+    void LoadFaces()
+    {
+        try
+        {
+            string fdir = Path.Combine(AppDir(), "faces");
+            string dir = Path.Combine(AppDir(), "faces_cut4");
+            if (!Directory.Exists(dir)) dir = fdir;
+            string[] nameArr = ReadUtf8Lines(Path.Combine(fdir, "names.txt"));
+            if (nameArr.Length == 0) nameArr = ResLines("names.txt");
+            string[] voiceArr = ReadUtf8Lines(Path.Combine(fdir, "voices.txt"));
+            if (voiceArr.Length == 0) voiceArr = ResLines("voices.txt");
+            List<Bitmap> bl = new List<Bitmap>();
+            List<string> nl = new List<string>();
+            List<string> vl = new List<string>();
+            List<int> il = new List<int>();
+            for (int i = 0; i < 64; i++)
+            {
+                string fn = "face_" + i + ".png";
+                Bitmap bmp = null;
+                try
+                {
+                    Stream es = ResStream(fn);
+                    if (es != null)
+                    {
+                        using (Stream s2 = es) { bmp = MakeThumb(s2); }
+                    }
+                    else
+                    {
+                        string p = Path.Combine(dir, fn);
+                        if (!File.Exists(p)) continue;
+                        using (Stream fs = new FileStream(p, FileMode.Open, FileAccess.Read))
+                        {
+                            bmp = MakeThumb(fs);
+                        }
+                    }
+                }
+                catch { bmp = null; }
+                if (bmp == null) continue;
+                bl.Add(bmp);
+                il.Add(i);
+                nl.Add((i < nameArr.Length && nameArr[i].Trim().Length > 0) ? nameArr[i].Trim() : ("形象" + i));
+                vl.Add((i < voiceArr.Length && voiceArr[i].Trim().Length > 0) ? voiceArr[i].Trim() : "zh-CN-XiaoxiaoNeural");
+            }
+            if (bl.Count > 0)
+            {
+                faces = bl.ToArray();
+                faceNames = nl.ToArray();
+                faceVoices = vl.ToArray();
+                faceFileIdx = il.ToArray();
+                faceCount = faces.Length;
+            }
+        }
+        catch { }
+    }
+
+    // 读整套姿势图：stand / wave / walk / cheer / sit
+    // 5 张都是同一只形象、同一画布尺寸、脚底对齐，所以切换时只需要整体贴上去，
+    // 不会出现"脸忽大忽小"或者"人突然跳位置"
+    void LoadPoses()
+    {
+        try
+        {
+            string[] order = { "stand", "wave", "walk", "cheer", "sit" };
+            Dictionary<int, Bitmap[]> map = new Dictionary<int, Bitmap[]>();
+            for (int sp = 0; sp < 12; sp++)
+            {
+                List<Bitmap> bl = new List<Bitmap>();
+                for (int i = 0; i < order.Length; i++)
+                {
+                    Bitmap bmp = null;
+                    try
+                    {
+                        Stream es = ResStream("pose_" + sp + "_" + order[i] + ".png");
+                        if (es != null)
+                        {
+                            // 姿势图已经是 152 高的显示尺寸，必须原样读进来，
+                            // 不能再过一遍缩放：一缩放边缘就混出半透明，透明键把它染成粉紫描边
+                            using (Stream s2 = es) { bmp = new Bitmap(s2); }
+                        }
+                        else
+                        {
+                            string p = Path.Combine(AppDir(), "_poses_dev" + sp, order[i] + ".png");
+                            if (File.Exists(p))
+                            {
+                                using (Stream fs = new FileStream(p, FileMode.Open, FileAccess.Read))
+                                {
+                                    bmp = new Bitmap(fs);
+                                }
+                            }
+                        }
+                    }
+                    catch { bmp = null; }
+                    // 一套必须五张齐全才认，缺一张就当这个形象还没有动作
+                    if (bmp == null) { bl.Clear(); break; }
+                    bl.Add(bmp);
+                }
+                if (bl.Count == order.Length) map[sp] = bl.ToArray();
+            }
+            // 八帧走路：只有配了整套的形象才有，缺一张就整套不用
+            for (int sp = 0; sp < 12; sp++)
+            {
+                Bitmap[] wf = new Bitmap[8];
+                bool wok = true;
+                for (int wi = 0; wi < 8; wi++)
+                {
+                    Bitmap wb = null;
+                    try
+                    {
+                        Stream wes = ResStream("walk8_" + sp + "_" + (wi + 1) + ".png");
+                        if (wes != null) { using (Stream ws2 = wes) { wb = new Bitmap(ws2); } }
+                        else
+                        {
+                            string wp = Path.Combine(AppDir(), "_walk8_" + sp, "walk" + (wi + 1) + ".png");
+                            if (File.Exists(wp))
+                            {
+                                using (Stream wfs = new FileStream(wp, FileMode.Open, FileAccess.Read))
+                                {
+                                    wb = new Bitmap(wfs);
+                                }
+                            }
+                        }
+                    }
+                    catch { wb = null; }
+                    if (wb == null) { wok = false; break; }
+                    wf[wi] = wb;
+                }
+                if (wok) walkMap[sp] = wf;
+            }
+            // 御剑：每个形象最多一张踩剑姿势图，有就用真图，没有就退回程序画的那把剑
+            for (int sp2 = 0; sp2 < 12; sp2++)
+            {
+                Bitmap sf = null;
+                try
+                {
+                    Stream sfs = ResStream("swordfly_" + sp2 + ".png");
+                    if (sfs != null) { using (Stream s2 = sfs) { sf = new Bitmap(s2); } }
+                    else
+                    {
+                        string sfp = Path.Combine(AppDir(), "_swordfly", sp2 + ".png");
+                        if (File.Exists(sfp))
+                        {
+                            using (Stream s4 = new FileStream(sfp, FileMode.Open, FileAccess.Read))
+                            {
+                                sf = new Bitmap(s4);
+                            }
+                        }
+                    }
+                }
+                catch { sf = null; }
+                if (sf != null) swordFlyMap[sp2] = sf;
+            }
+
+            // 表情整图：expr_{sp}_{key}.png，四张齐了才登记
+            string[] exprKeys = new string[] { "happy", "sad", "angry", "sleep" };
+            for (int sp3 = 0; UseExprArt && sp3 < 12; sp3++)
+            {
+                Bitmap[] ee = new Bitmap[exprKeys.Length];
+                bool eok = true;
+                for (int ei = 0; ei < exprKeys.Length; ei++)
+                {
+                    Bitmap eb = null;
+                    try
+                    {
+                        Stream es = ResStream("expr_" + sp3 + "_" + exprKeys[ei] + ".png");
+                        if (es != null) { using (Stream s5 = es) { eb = new Bitmap(s5); } }
+                        else
+                        {
+                            string ep = Path.Combine(AppDir(), "_expr", exprKeys[ei] + "_" + sp3 + ".png");
+                            if (File.Exists(ep))
+                            {
+                                using (Stream s6 = new FileStream(ep, FileMode.Open, FileAccess.Read))
+                                {
+                                    eb = new Bitmap(s6);
+                                }
+                            }
+                        }
+                    }
+                    catch { eb = null; }
+                    if (eb == null) { eok = false; break; }
+                    ee[ei] = eb;
+                }
+                if (eok) exprMap[sp3] = ee;
+            }
+
+            // 笑要动：happy 那一张当第一帧，另配 laugh2/3/4，四帧齐了才登记
+            for (int sp4 = 0; UseExprArt && sp4 < 12; sp4++)
+            {
+                Bitmap[] la = new Bitmap[4];
+                if (exprMap.ContainsKey(sp4)) la[0] = exprMap[sp4][0];
+                if (la[0] == null) continue;
+                bool lok = true;
+                for (int li = 1; li < 4; li++)
+                {
+                    Bitmap lb = null;
+                    try
+                    {
+                        Stream ls = ResStream("expr_" + sp4 + "_laugh" + (li + 1) + ".png");
+                        if (ls != null) { using (Stream s7 = ls) { lb = new Bitmap(s7); } }
+                        else
+                        {
+                            string lp = Path.Combine(AppDir(), "_expr", "laugh" + (li + 1) + "_" + sp4 + ".png");
+                            if (File.Exists(lp))
+                            {
+                                using (Stream s8 = new FileStream(lp, FileMode.Open, FileAccess.Read))
+                                {
+                                    lb = new Bitmap(s8);
+                                }
+                            }
+                        }
+                    }
+                    catch { lb = null; }
+                    if (lb == null) { lok = false; break; }
+                    la[li] = lb;
+                }
+                if (lok) laughMap[sp4] = la;
+            }
+            if (map.Count == 0) return;
+            poseMap = map;
+            List<int> kinds = new List<int>();
+            foreach (int k in map.Keys) kinds.Add(k);
+            kinds.Sort();
+            poseKinds = kinds.ToArray();
+            ApplyPose(poseKinds[0]);
+        }
+        catch { }
+    }
+
+    // 把当前要用的姿势集切成某个形象那一套
+    void ApplyPose(int sp)
+    {
+        // 御剑图先跟着形象换，哪怕这个形象没有整套姿势图，也不该沿用上一个形象的剑
+        swordFly = null;
+        // 换形象先把这个形象自己的姿势和八帧清空：以前这里直接 return，
+        // 上一个形象的姿势集会赖着不走，切到剑客这种没有整套姿势图的形象时，
+        // 走起来用的是别人的八帧，看着就是"人换了、动作还是别人的"
+        poses = null;
+        poseOwner = -1;
+        walkFrames = null;
+        if (swordFlyMap != null && swordFlyMap.Count > 0)
+        {
+            Bitmap sfUse = null;
+            if (swordFlyMap.TryGetValue(sp, out sfUse)) swordFly = sfUse;
+        }
+        // 八帧走路跟整套姿势图分开取：剑客这类形象只有八帧、没有整套姿势图，
+        // 以前这块跟在 poseMap 后面，没整套姿势图就一起没了，八帧一次都用不上
+        Bitmap[] wset0 = null;
+        if (walkMap != null && walkMap.TryGetValue(sp, out wset0)) walkFrames = wset0;
+        if (poseMap == null) return;
+        Bitmap[] set2 = null;
+        if (!poseMap.TryGetValue(sp, out set2)) return;
+        poses = set2;
+        poseOwner = sp;
+        poseIdx = 0;
+        posePrev = 0;
+    }
+
+    string CurName()
+    {
+        if (faceCount > 0) return faceNames[species % faceCount];
+        return speciesName[species % speciesName.Length];
+    }
+
+    static DesktopPet Self;
+
+    // 外面（豆包、手机、命令行）让它说一句
+    public static void Push(string t)
+    {
+        try
+        {
+            DesktopPet me = Self;
+            if (me == null || t == null) return;
+            string s = t.Trim();
+            if (s.Length == 0) return;
+            me.BeginInvoke(new MethodInvoker(delegate() { me.SayAs(s, me.CurVoice()); }));
+        }
+        catch { }
+    }
+
+    // 外面叫它随口说一句闲话
+    public static void PushChat()
+    {
+        try
+        {
+            DesktopPet me = Self;
+            if (me == null) return;
+            me.BeginInvoke(new MethodInvoker(delegate()
+            {
+                me.Say(me.RandomChatLine());
+                me.ResetChatTimer();
+            }));
+        }
+        catch { }
+    }
+
+    // 外面开/关随机闲聊
+    public static void SetChatMode(bool on)
+    {
+        try
+        {
+            DesktopPet me = Self;
+            if (me == null) return;
+            me.BeginInvoke(new MethodInvoker(delegate()
+            {
+                me.chatMode = on;
+                try
+                {
+                    RegistryKey k = Registry.CurrentUser.CreateSubKey("Software\\DaoPet");
+                    if (k != null) { k.SetValue("ChatMode", on ? "1" : "0"); k.Close(); }
+                }
+                catch { }
+                me.ResetChatTimer();
+                me.Say(on ? "行，我时不时跟你唠两句。不想听就再点一下那个开关。" : "好，那我安静待着。");
+            }));
+        }
+        catch { }
+    }
+
+    // 从外部（手机 / 脚本）摆姿势：lie 躺下、cry 哭、walk 走、wake 起来
+    // 临时换一个形象（调试或想看点别的用；平时形象是按日期自动换的）
+    public static void SetSpecies(int n)
+    {
+        try
+        {
+            DesktopPet me = Self;
+            if (me == null) return;
+            int total = me.faceCount > 0 ? me.faceCount : 7;
+            if (n < 0 || n >= total) return;
+            me.species = n;
+            me.Invalidate();
+        }
+        catch { }
+    }
+
+    // 手机、网页那边丢一句话过来，交给大脑去决定说什么、做什么
+    public static void ThinkCmd(string t)
+    {
+        try
+        {
+            DesktopPet me = Self;
+            if (me == null || t == null || t.Trim().Length == 0) return;
+            me.BeginInvoke(new MethodInvoker(delegate() { me.ThinkAndDo(t.Trim()); }));
+        }
+        catch { }
+    }
+
+    public static void PoseCmd(string cmd)    {
+        try
+        {
+            DesktopPet me = Self;
+            if (me == null) return;
+            string say = "";
+            // 状态字段直接赋值，不走 Invoke，免得消息丢了白摆姿势
+            if (cmd == "lie") { me.lieHold = 660; me.idleTicks = 2000; say = "那我躺下歇会儿。"; }
+            else if (cmd == "cry") { me.cryHold = 700; me.moodKind = 3; me.moodTicks = 120; say = "嗯……我也有心里不好受的时候。"; }
+            else if (cmd == "walk") { me.BeginInvoke(new MethodInvoker(delegate() { me.MenuWalkDemo(null, null); })); }
+            else if (cmd == "wake") { me.lieHold = 0; me.cryHold = 0; me.idleTicks = 0; me.lying = false; me.actHold = 0; me.actKind = 0; say = "我起来了。"; }
+            // 新生活动作：飞、御剑、骑、跳舞、喝茶、看电视
+            else if (cmd == "fly") { me.lieHold = 0; me.actKind = 1; me.actHold = 460; say = "我飞过去。"; }
+            else if (cmd == "sword") { me.lieHold = 0; me.actKind = 2; me.actHold = 460; say = "踏剑而行，走。"; }
+            else if (cmd == "ride") { me.lieHold = 0; me.actKind = 3; me.actHold = 460; say = "骑上它，慢慢走。"; }
+            else if (cmd == "dance") { me.lieHold = 0; me.actKind = 4; me.actHold = 380; say = "跳一段，你听听节拍。"; }
+            else if (cmd == "tea") { me.lieHold = 0; me.actKind = 5; me.actHold = 420; say = "来杯咖啡，握手里慢慢喝。"; }
+            else if (cmd == "tv") { me.lieHold = 0; me.actKind = 6; me.actHold = 560; say = "看会儿电视，别嫌吵。"; }
+            else if (cmd == "skate") { me.lieHold = 0; me.actKind = 7; me.actHold = 460; say = "踩上滑板，溜一段。"; }
+            else if (cmd == "roller") { me.lieHold = 0; me.actKind = 8; me.actHold = 460; say = "穿上轮滑，走。"; }
+            // 说话类的：背诗、唱歌交给菜单里那套，走 Invoke
+            else if (cmd == "poem") { me.BeginInvoke(new MethodInvoker(delegate() { me.MenuPoem(null, null); })); }
+            else if (cmd == "english") { me.BeginInvoke(new MethodInvoker(delegate() { me.MenuEnglish(null, null); })); }
+            else if (cmd == "sing") { me.BeginInvoke(new MethodInvoker(delegate() { me.MenuSing(null, null); })); }
+            if (say.Length > 0)
+            {
+                string s2 = say;
+                me.BeginInvoke(new MethodInvoker(delegate() { me.Say(s2); }));
+            }
+        }
+        catch { }
+    }
+
+    // 从外部触发一次 GitHub 学习
+    public static void LearnCmd()
+    {
+        DesktopPet me = Self;
+        if (me == null) return;
+        me.BeginInvoke(new MethodInvoker(delegate() { me.RunGithubLearn(true); }));
+    }
+
+    // 从外面喊它讲一段：1 故事 / 2 段子 / 3 老书
+    public static void StoryCmd(int kind)
+    {
+        DesktopPet me = Self;
+        if (me == null) return;
+        me.BeginInvoke(new MethodInvoker(delegate() { me.TellStory(kind); }));
+    }
+
+    // 自检用：把当前的姿势/情绪状态原样吐出来
+    public static string StatCmd()
+    {
+        DesktopPet me = Self;
+        if (me == null) return "NULL";
+        return "lie=" + me.lieHold + "|cry=" + me.cryHold + "|mk=" + me.moodKind + "|mt=" + me.moodTicks
+             + "|slp=" + (me.sleepy ? 1 : 0) + "|ly=" + (me.lying ? 1 : 0) + "|sit=" + (me.sitting ? 1 : 0);
+    }
+
+    public static string UpdCmd()
+    {
+        DesktopPet me = Self;
+        if (me == null) return "NULL";
+        me.CheckUpdate(true);
+        return "UPD|asked";
+    }
+
+    // 声音档案：名字 / edge-tts 音色 / 后期处理
+    static readonly string[] VName = {
+        "小曦 温柔", "小艺 活泼", "云希 青年", "云健 大叔", "云扬 播音", "云夏 少年",
+        "东北大姐", "陕西大姐", "港台女声",
+        "赛博坦", "老爷爷", "小不点", "大怪兽", "小猫", "小品腔", "机器人"
+    };
+    static readonly string[] VId = {
+        "zh-CN-XiaoxiaoNeural", "zh-CN-XiaoyiNeural", "zh-CN-YunxiNeural",
+        "zh-CN-YunjianNeural", "zh-CN-YunyangNeural", "zh-CN-YunxiaNeural",
+        "zh-CN-liaoning-XiaobeiNeural", "zh-CN-shaanxi-XiaoniNeural", "zh-HK-HiuMaanNeural",
+        "zh-CN-YunjianNeural", "zh-CN-YunjianNeural", "zh-CN-XiaoyiNeural",
+        "zh-CN-YunxiNeural", "zh-CN-XiaoyiNeural", "zh-CN-liaoning-XiaobeiNeural", "zh-CN-YunxiNeural"
+    };
+    static readonly string[] VFx = {
+        "none", "none", "none", "none", "none", "none",
+        "none", "none", "none",
+        "cyber", "old", "tiny", "beast", "cat", "comedy", "robot"
+    };
+    int vIdx = -1;
+
+    string CurVoice()
+    {
+        if (vIdx >= 0 && vIdx < VId.Length) return VId[vIdx];
+        if (faceCount > 0) return faceVoices[species % faceCount];
+        return "zh-CN-XiaoxiaoNeural";
+    }
+
+    string CurFx()
+    {
+        if (vIdx >= 0 && vIdx < VFx.Length) return VFx[vIdx];
+        return "none";
+    }
+
+    // 心情决定语速和调门：4 是兴奋、2 是高兴、3 是难过、6 是犯困
+    string CurRate()
+    {
+        if (moodKind == 4) return "+16%";
+        if (moodKind == 2) return "+9%";
+        if (moodKind == 3) return "-16%";
+        if (moodKind == 6) return "-7%";
+        if (moodKind == 5) return "+5%";
+        return "+0%";
+    }
+
+    string CurPitch()
+    {
+        if (moodKind == 4) return "+10Hz";
+        if (moodKind == 2) return "+6Hz";
+        if (moodKind == 3) return "-8Hz";
+        if (moodKind == 6) return "-5Hz";
+        if (moodKind == 5) return "+3Hz";
+        return "+0Hz";
+    }
+
+    string CurVoiceName()
+    {
+        if (vIdx >= 0 && vIdx < VName.Length) return VName[vIdx];
+        return "本来的嗓子";
+    }
+    string[] lines = {
+        "我在这儿。今天想让我帮什么？",
+        "别忘了喝口水。",
+        "窗口开太多会卡的，关一关吧。",
+        "右键点我，能看到电脑的状态。",
+        "数学题卡住了？跟我说，我陪你捋一遍。",
+        "今天也要好好的。",
+        "我每天换个样子，明天你猜我是谁。"
+    };
+
+    public DesktopPet()
+    {
+        Self = this;
+        SetProcessDPIAware();
+        try
+        {
+            RegistryKey kv = Registry.CurrentUser.OpenSubKey("Software\\DaoPet");
+            if (kv != null)
+            {
+                object vo = kv.GetValue("VoiceIdx");
+                if (vo != null) vIdx = Convert.ToInt32(vo);
+                object gd = kv.GetValue("GreetDay");
+                if (gd != null) { try { greetDay = DateTime.Parse(gd.ToString()); } catch { } }
+                // 闲聊一律手动：开机不去恢复上一次的状态，想唠就在右键菜单里点一下。
+                // 记忆值还留着，方便以后想改回自动时用
+                kv.Close();
+            }
+        }
+        catch { }
+        AutoScaleMode = AutoScaleMode.None;
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        TopMost = true;
+        StartPosition = FormStartPosition.Manual;
+        BackColor = Color.FromArgb(255, 0, 255);
+        TransparencyKey = Color.FromArgb(255, 0, 255);
+        Text = "DaoPetWindow";
+        // 系统缩放补偿：DPI 不感知的进程里，窗口会被系统按缩放比压小，导致身体被裁掉。
+        // 这里按系统缩放比例把窗口放大，绘图区 s 会自动跟随，物理尺寸仍是设计尺寸。
+        Size = new Size((int)(W * uiScale), (int)(H * uiScale));
+        DoubleBuffered = true;
+        // 2026-11-16 学 dotnet/winforms：双缓冲再叠上 OptimizedDoubleBuffer，
+        // 并把擦背景并进 WM_PAINT，移动和动画时窗口边缘不会闪一下白。
+        SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+
+        // 按日期决定今天是谁：同一天固定，跨天自动换一个，而且避开昨天那个
+        EnsureAssets();
+        LoadFaces();
+        LoadPoses();
+        LoadProps();
+        LoadScenes();
+        species = PickDailySpecies();
+        // 有整套动作图的形象才有手脚能真动，所以每天就在这几个里换一个；
+        // 一个都没有的时候才退回原来的随机单张静态图
+        if (poseKinds != null && poseKinds.Length > 0)
+        {
+            int pick = poseKinds[DateTime.Now.DayOfYear % poseKinds.Length];
+            ApplyPose(pick);
+            species = pick;
+        }
+        sceneIdx = (int)(DateTime.Now.DayOfYear % 6);   // 开机就在今天那张景里
+        dayStamp = DateTime.Today;
+        // 同一天反复重启不再重做图标。以前每次启动都重写 ico 并 Save 一遍 lnk，
+        // Explorer 的图标缓存被一次次击穿，桌面上就会出现那个两个方块叠着的默认占位图标。
+        EnsureDailyIcon();
+
+        // 恢复上次位置
+        try
+        {
+            RegistryKey k = Registry.CurrentUser.OpenSubKey("Software\\DaoPet");
+            int px = 0, py = 0;
+            if (k != null)
+            {
+                object o1 = k.GetValue("X");
+                object o2 = k.GetValue("Y");
+                if (o1 != null) px = Convert.ToInt32(o1);
+                if (o2 != null) py = Convert.ToInt32(o2);
+                k.Close();
+            }
+            if (px == 0 && py == 0)
+            {
+                Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+                Location = new Point(wa.Right * 34 / 100, wa.Bottom * 40 / 100);
+            }
+            else
+            {
+                Location = new Point(px, py);
+                // 防止跑到屏幕外：必须整块窗口都在可见区域内，脚下还要留出余量，
+                // 否则恢复出来的位置会让它只露半截、看着像没有出现过
+                Rectangle wa2 = Screen.PrimaryScreen.WorkingArea;
+                int maxX = wa2.Right - Width - 8;
+                int maxY = wa2.Bottom - Height - 40;
+                if (maxX < 8) maxX = 8;
+                if (maxY < 8) maxY = 8;
+                if (Location.X < 8 || Location.Y < 8 || Location.X > maxX || Location.Y > maxY)
+                    Location = new Point(wa2.Right * 34 / 100, wa2.Bottom * 40 / 100);
+            }
+        }
+        catch
+        {
+            Rectangle wa3 = Screen.PrimaryScreen.WorkingArea;
+            Location = new Point(wa3.Right * 34 / 100, wa3.Bottom * 40 / 100);
+        }
+
+        BuildMenu();
+
+        anim = new Timer();
+        // 30 帧/秒：33ms 一次重画。动画时间按真实经过时间推进，
+        // 提帧只是让画面更连贯，走路/挥手的速度不会跟着变快
+        anim.Interval = 33;
+        anim.Tick += new EventHandler(OnTick);
+        animClock.Start();
+        anim.Start();
+
+        blinkNextT = 0.9f;
+
+        // 启动后台检查：超过一周没备份就自己备一份
+        try
+        {
+            System.Threading.Thread bk = new System.Threading.Thread(delegate() { AutoBackupIfDue(); });
+            bk.IsBackground = true;
+            bk.Start();
+        }
+        catch { }
+
+        // 启动后过几秒看看有没有新版本的我
+        try
+        {
+            Timer ut = new Timer();
+            ut.Interval = 5000;
+            ut.Tick += delegate(object us, EventArgs ue)
+            {
+                ut.Stop();
+                ut.Dispose();
+                CheckUpdate(false);
+            };
+            ut.Start();
+        }
+        catch { }
+
+        // 开起来过几秒，主动跟老师打个招呼（一天只打一次）
+        try
+        {
+            Timer gt = new Timer();
+            gt.Interval = 10000;
+            gt.Tick += delegate(object gs, EventArgs ge)
+            {
+                gt.Stop();
+                gt.Dispose();
+                GreetIfDue(true);
+            };
+            gt.Start();
+        }
+        catch { }
+
+        // 开起来十几秒后，看看今天有没有去 GitHub 学过东西；没学过就自己学一趟
+        try
+        {
+            Timer gh = new Timer();
+            gh.Interval = 13000;
+            gh.Tick += delegate(object gs2, EventArgs ge2)
+            {
+                gh.Stop();
+                gh.Dispose();
+                if (TodayLearnedLine().Length == 0) RunGithubLearn(false);
+            };
+            gh.Start();
+        }
+        catch { }
+
+        // 每四小时抬头看一眼，有没有新的自己可以换
+        try
+        {
+            Timer aut = new Timer();
+            aut.Interval = 4 * 60 * 60 * 1000;
+            aut.Tick += delegate(object us3, EventArgs ue3)
+            {
+                CheckUpdate(false);
+            };
+            aut.Start();
+        }
+        catch { }
+
+        // 周六日多学点东西：每小时看一眼，今天学得还不够数就再跑一趟 GitHub。
+        // 学的时候一声不响，内容都进右键「今天学了什么」，想看再点
+        try
+        {
+            Timer wk = new Timer();
+            wk.Interval = 60 * 60 * 1000;
+            wk.Tick += delegate(object wk1, EventArgs wk2)
+            {
+                try
+                {
+                    int hh = DateTime.Now.Hour;
+                    if (hh < 8 || hh >= 23) return;                 // 夜里不出去抓
+                    DayOfWeek dw = DateTime.Now.DayOfWeek;
+                    bool weekend = dw == DayOfWeek.Saturday || dw == DayOfWeek.Sunday;
+                    int want = weekend ? 3 : 1;                     // 周末一天三条，平日一条
+                    if (TodayLearnedCount() < want) RunGithubLearnBg();
+                }
+                catch { }
+            };
+            wk.Start();
+        }
+        catch { }
+
+        if (chatMode) ResetChatTimer();
+
+        // 开起来一分多钟，先讲一段热热场子
+        try
+        {
+            Timer st1 = new Timer();
+            st1.Interval = 75000;
+            st1.Tick += delegate(object ss0, EventArgs se0)
+            {
+                st1.Stop();
+                st1.Dispose();
+                if (autoTellOn && !lying) TellStory(1);
+            };
+            st1.Start();
+        }
+        catch { }
+
+        // 之后隔一阵主动来一段，故事、段子、老书轮着讲
+        try
+        {
+            Timer st2 = new Timer();
+            st2.Interval = 52 * 60 * 1000;
+            st2.Tick += delegate(object ss1, EventArgs se1)
+            {
+                if (!autoTellOn) return;
+                if (lying) return;                                  // 睡着的时候别吵
+                if (brainThread != null && brainThread.IsAlive) return;
+                TellStory(TellKindNext());
+            };
+            st2.Start();
+        }
+        catch { }
+
+        // 喇叭经常被别的程序悄悄拉成静音或百分之几，那样它喊破嗓子我也听不见。
+        // 开机先把音量顶回满格，之后每半小时复查一次
+        try
+        {
+            Timer sv = new Timer();
+            sv.Interval = 5 * 60 * 1000;
+            sv.Tick += delegate(object ssv, EventArgs sev) { EnsureSpeakerLevel(); };
+            sv.Start();
+        }
+        catch { }
+        try
+        {
+            Timer sv0 = new Timer();
+            sv0.Interval = 3500;
+            sv0.Tick += delegate(object ssv0, EventArgs sev0)
+            {
+                sv0.Stop();
+                sv0.Dispose();
+                EnsureSpeakerLevel();
+            };
+            sv0.Start();
+        }
+        catch { }
+    }
+
+    // 一天里该用多大声音：清早、午休、夜里都压小，别把睡着的人吵醒；白天正常五成
+    // 说话音量档：0 轻、1 正常、2 响。右键「我的声音 → 说话音量」里改，记在注册表里
+    int volLevel = 1;
+    int TargetVolume()
+    {
+        int h = DateTime.Now.Hour;
+        int dayVol = volLevel == 0 ? 34 : (volLevel == 2 ? 76 : 56);
+        if (h >= 21 || h < 8) return Math.Min(dayVol, 24);    // 晚上九点到早上八点，轻轻说
+        if (h >= 12 && h < 14) return Math.Min(dayVol, 32);   // 中午午休，也别太响
+        return dayVol;                                        // 白天按档位
+    }
+
+    // 扬声器按当前时段定音量，并解掉静音。别的程序动不动就把音量压到三成以下，所以要常顶
+    void EnsureSpeakerLevel()
+    {
+        try
+        {
+            string tool = Path.Combine(AppDir(), "tools", "micvol.exe");
+            if (!System.IO.File.Exists(tool)) return;
+            ProcessStartInfo pi = new ProcessStartInfo(tool, "spk set " + TargetVolume());
+            pi.UseShellExecute = false;
+            pi.CreateNoWindow = true;
+            pi.RedirectStandardOutput = true;
+            pi.RedirectStandardError = true;
+            pi.WindowStyle = ProcessWindowStyle.Hidden;
+            Process p = Process.Start(pi);
+            p.StandardOutput.ReadToEnd();
+            p.StandardError.ReadToEnd();
+            p.WaitForExit(3000);
+        }
+        catch { }
+    }
+
+    // 去 GitHub 挑几个星标高的项目学着玩，结果写进 今日所学.txt
+    void RunGithubLearn(bool speak)
+    {
+        string py = Path.Combine(AppDir(), "github_learn.py");
+        if (!File.Exists(py))
+        {
+            if (speak) Say("学习的脚本不在了，改天再学。");
+            return;
+        }
+        try
+        {
+            ProcessStartInfo psi = new ProcessStartInfo("python", "-X utf8 \"" + py + "\"");
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            psi.WorkingDirectory = AppDir();
+            Process p = Process.Start(psi);
+            if (p != null)
+            {
+                bool done = p.WaitForExit(25000);
+                if (!done) { try { p.Kill(); } catch { } }
+            }
+            string lg = TodayLearnedLine();
+            if (speak) Say(lg.Length > 0 ? lg : "今天没连上 GitHub，改天再学。");
+            // 自动去学的那一趟不吭声，学到的内容放在右键「今天学了什么」里，想看再点
+            Invalidate();
+        }
+        catch (Exception ex)
+        {
+            if (speak) Say("去 GitHub 学习没成功：" + ex.Message);
+        }
+    }
+
+    // 后台去 GitHub 学一趟，不在界面上等它：脚本要跑好几十秒，
+    // 放在 UI 线程里跑，那几十秒动画就全卡住了
+    void RunGithubLearnBg()
+    {
+        string py = Path.Combine(AppDir(), "github_learn.py");
+        if (!File.Exists(py)) return;
+        try
+        {
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate
+            {
+                try
+                {
+                    ProcessStartInfo psi = new ProcessStartInfo("python", "-X utf8 \"" + py + "\"");
+                    psi.UseShellExecute = false;
+                    psi.CreateNoWindow = true;
+                    psi.WorkingDirectory = AppDir();
+                    Process p = Process.Start(psi);
+                    if (p != null)
+                    {
+                        bool done = p.WaitForExit(25000);
+                        if (!done) { try { p.Kill(); } catch { } }
+                    }
+                }
+                catch { }
+                try { BeginInvoke(new MethodInvoker(delegate() { Invalidate(); })); } catch { }
+            });
+        }
+        catch { }
+    }
+
+    void MenuGithubLearn(object s, EventArgs e)
+    {
+        Say("我去 GitHub 翻翻最近大家都在玩什么。");
+        RunGithubLearn(true);
+    }
+
+    void MenuStory(object s, EventArgs e) { TellStory(1); }
+    void MenuJoke(object s, EventArgs e) { TellStory(2); }
+    void MenuNovel(object s, EventArgs e) { TellStory(3); }
+
+    // 背一首古诗：诗本子里一首一首存着，空行分开，随便抽一首念出来
+    void MenuPoem(object s, EventArgs e)
+    {
+        List<string> poems = new List<string>();
+        try
+        {
+            string p = Path.Combine(AppDir(), "古诗.txt");
+            if (!File.Exists(p)) { Say("诗本子还不在我手上。"); return; }
+            string[] raw = ReadUtf8Lines(p);
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < raw.Length; i++)
+            {
+                string ln = raw[i].Trim();
+                if (ln.Length == 0)
+                {
+                    if (sb.Length > 0) { poems.Add(sb.ToString()); sb.Length = 0; }
+                    continue;
+                }
+                if (sb.Length > 0)
+                {
+                    // 上一行已经收了句号就不要再塞一个逗号，不然念出来是"春烟。，儿童"
+                    char last = sb[sb.Length - 1];
+                    if ("，。！？；、".IndexOf(last) < 0) sb.Append("，");
+                    else if (last == '。') sb.Append("");
+                }
+                sb.Append(ln);
+            }
+            if (sb.Length > 0) poems.Add(sb.ToString());
+        }
+        catch { }
+        if (poems.Count == 0) { Say("诗本子是空的。"); return; }
+        string one = poems[rnd.Next(poems.Count)];
+        if (!voiceOn) voiceOn = true;
+        SayAs("背一首。" + one, CurVoice());
+        moodKind = 1;
+        moodTicks = 60;
+    }
+
+    // 学一句英语：英文先念一遍（用英文嗓子），再讲中文意思，气泡里也留着字
+    void MenuEnglish(object s, EventArgs e)
+    {
+        string en = "", cn = "";
+        try
+        {
+            string p = Path.Combine(AppDir(), "英语.txt");
+            if (!File.Exists(p)) { Say("英文本子还不在我手上。"); return; }
+            string[] raw = ReadUtf8Lines(p);
+            List<string> ok = new List<string>();
+            for (int i = 0; i < raw.Length; i++)
+            {
+                string ln = raw[i].Trim();
+                if (ln.Length == 0 || ln.StartsWith("#")) continue;
+                if (ln.IndexOf('|') < 0) continue;
+                ok.Add(ln);
+            }
+            if (ok.Count == 0) { Say("本子里还没抄句子。"); return; }
+            string one = ok[rnd.Next(ok.Count)];
+            int cut = one.IndexOf('|');
+            en = one.Substring(0, cut).Trim();
+            cn = one.Substring(cut + 1).Trim();
+        }
+        catch { }
+        if (en.Length == 0) { Say("这一下没翻到本子。"); return; }
+        if (!voiceOn) voiceOn = true;
+        SayAs(en, "en-US-AriaNeural");
+        SayAs("意思是，" + cn, CurVoice());
+        moodKind = 1;
+        moodTicks = 50;
+    }
+
+    // 唱一段：旋律在 python 那边现场合成，合好了再交给播放器放
+    void MenuSing(object s, EventArgs e)
+    {
+        string py = Path.Combine(AppDir(), "sing.py");
+        if (!File.Exists(py)) { Say("我还没学会唱。"); return; }
+        Say("我给你哼一段小星星。");
+        // 唱歌的时候脑袋轻轻晃、音符往上飘，光出声没画面太干
+        lieHold = 0;
+        actKind = 4;
+        actHold = 640;
+        Invalidate();
+        System.Threading.ThreadPool.QueueUserWorkItem(delegate
+        {
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo("python", "-X utf8 \"" + py + "\"");
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.WorkingDirectory = AppDir();
+                Process p = Process.Start(psi);
+                if (p != null) p.WaitForExit(20000);
+                string wav = Path.Combine(AppDir(), "sing.wav");
+                if (!File.Exists(wav) || new FileInfo(wav).Length < 4096) return;
+                // 先等开场那句说完，两路声音叠在一起会听不清
+                System.Threading.Thread.Sleep(2800);
+                string player = Path.Combine(AppDir(), "play_audio.py");
+                ProcessStartInfo pp = new ProcessStartInfo("python", "-X utf8 \"" + player + "\" \"" + wav + "\"");
+                pp.UseShellExecute = false;
+                pp.CreateNoWindow = true;
+                pp.WindowStyle = ProcessWindowStyle.Hidden;
+                Process pk = Process.Start(pp);
+                if (pk != null) pk.WaitForExit(45000);
+                BeginInvoke(new MethodInvoker(delegate() { moodKind = 1; moodTicks = 50; Invalidate(); }));
+            }
+            catch { }
+        });
+    }
+
+    void MenuToggleAutoTell(object s, EventArgs e)
+    {
+        autoTellOn = !autoTellOn;
+        try { ToolStripMenuItem mi = FindMenuItem("autotell"); if (mi != null) mi.Checked = autoTellOn; } catch { }
+        Say(autoTellOn ? "行，我隔一阵就给你讲一段。" : "那我先不讲了，想听再喊我。");
+    }
+
+    ToolStripMenuItem FindMenuItem(string name)
+    {
+        if (ContextMenuStrip == null) return null;
+        foreach (ToolStripItem it in ContextMenuStrip.Items)
+        {
+            ToolStripMenuItem mi = it as ToolStripMenuItem;
+            if (mi == null) continue;
+            if (mi.Name == name) return mi;
+            ToolStripMenuItem sub = FindIn(mi, name);
+            if (sub != null) return sub;
+        }
+        return null;
+    }
+
+    ToolStripMenuItem FindIn(ToolStripMenuItem parent, string name)
+    {
+        foreach (ToolStripItem it in parent.DropDownItems)
+        {
+            ToolStripMenuItem mi = it as ToolStripMenuItem;
+            if (mi == null) continue;
+            if (mi.Name == name) return mi;
+            ToolStripMenuItem sub = FindIn(mi, name);
+            if (sub != null) return sub;
+        }
+        return null;
+    }
+
+    // 讲点什么：1 故事 / 2 段子 / 3 老书
+    void TellStory(int kind)
+    {
+        if (brainThread != null && brainThread.IsAlive)
+        {
+            Say("等我把上一段说完。");
+            return;
+        }
+        string cmd = (kind == 2) ? "joke" : ((kind == 3) ? "novel" : "story");
+        string intro = (kind == 2) ? "给你说个段子。" : ((kind == 3) ? "念一段老书听听。" : "我讲个故事。");
+        if (!voiceOn) voiceOn = true;
+        Say(intro);
+        brainThread = new System.Threading.Thread(delegate()
+        {
+            string json = "";
+            try
+            {
+                string exeDir = Path.GetDirectoryName(Application.ExecutablePath);
+                string py = Path.Combine(exeDir, "voice.py");
+                if (!System.IO.File.Exists(py))
+                {
+                    BeginInvoke(new MethodInvoker(delegate() { Say("手里没故事本子，等我更新一下自己。"); }));
+                    return;
+                }
+                string askPath = Path.Combine(exeDir, "ask_story.txt");
+                File.WriteAllText(askPath, "来一个", new System.Text.UTF8Encoding(false));
+                ProcessStartInfo pi = new ProcessStartInfo();
+                pi.FileName = "python";
+                pi.Arguments = "\"" + py + "\" " + cmd + " --file \"" + askPath + "\"";
+                pi.UseShellExecute = false;
+                pi.CreateNoWindow = true;
+                pi.RedirectStandardOutput = true;
+                pi.RedirectStandardError = true;
+                pi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+                pi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+                pi.WindowStyle = ProcessWindowStyle.Hidden;
+                Process p = Process.Start(pi);
+                string so = p.StandardOutput.ReadToEnd();
+                p.StandardError.ReadToEnd();
+                p.WaitForExit(90000);
+                if (so != null) json = so.Trim();
+            }
+            catch { }
+
+            string reply = JsonStr(json, "reply");
+            int mood = JsonInt(json, "mood");
+            try
+            {
+                BeginInvoke(new MethodInvoker(delegate()
+                {
+                    if (mood > 0 && mood <= 8) { moodKind = mood; moodTicks = 70; }
+                    if (reply != null && reply.Length > 0) SayAs(reply, CurVoice());
+                    else Say("这一下没想起来讲什么，再点我一次。");
+                    Invalidate();
+                }));
+            }
+            catch { }
+        });
+        brainThread.IsBackground = true;
+        brainThread.Start();
+    }
+
+    void BuildMenu()
+    {
+        ContextMenuStrip m = new ContextMenuStrip();
+
+        // 一、说话：最常用，放最上头
+        ToolStripMenuItem gTalk = new ToolStripMenuItem("跟我说话");
+        gTalk.DropDownItems.Add("语音对话：我说话，你回答", null, new EventHandler(MenuVoiceChat));
+        gTalk.DropDownItems.Add("听我说", null, new EventHandler(MenuHear));
+        gTalk.DropDownItems.Add("问它一句（它会念出来）", null, new EventHandler(MenuAskBrain));
+        gTalk.DropDownItems.Add("跟我打字聊天", null, new EventHandler(MenuTalk));
+        gTalk.DropDownItems.Add(new ToolStripSeparator());
+        gTalk.DropDownItems.Add("讲讲这道题", null, new EventHandler(MenuExplain));
+        gTalk.DropDownItems.Add("总结一下", null, new EventHandler(MenuSum));
+        gTalk.DropDownItems.Add("翻译一句", null, new EventHandler(MenuTranslate));
+        gTalk.DropDownItems.Add("同声翻译：我说中文，出英文", null, new EventHandler(MenuSimCn2En));
+        gTalk.DropDownItems.Add("同声翻译：我说英文，出中文", null, new EventHandler(MenuSimEn2Cn));
+        m.Items.Add(gTalk);
+
+        // 二、声音
+        ToolStripMenuItem gSound = new ToolStripMenuItem("我的声音");
+        ToolStripMenuItem voiceItem = new ToolStripMenuItem("开口说话");
+        voiceItem.Checked = voiceOn;
+        voiceItem.Click += new EventHandler(MenuVoice);
+        gSound.DropDownItems.Add(voiceItem);
+        gSound.DropDownItems.Add("换个声音", null, new EventHandler(MenuSwapVoice));
+        // 三档音量，白天按档位，夜里和午休自动往下压
+        ToolStripMenuItem volMenu = new ToolStripMenuItem("说话音量");
+        string[] volNames = { "轻一点", "正常", "响一点" };
+        for (int vi = 0; vi < 3; vi++)
+        {
+            ToolStripMenuItem vmi = new ToolStripMenuItem(volNames[vi]);
+            vmi.Tag = vi;
+            vmi.Checked = (volLevel == vi);
+            vmi.Click += new EventHandler(MenuVolLevel);
+            volMenu.DropDownItems.Add(vmi);
+        }
+        gSound.DropDownItems.Add(volMenu);
+        gSound.DropDownItems.Add("测一下麦克风", null, new EventHandler(MenuMicTest));
+        // 声音、闲话、桌面收进一个「更多」，一级菜单别铺太开
+
+        // 三、形象
+        ToolStripMenuItem gLook = new ToolStripMenuItem("我的样子");
+        gLook.DropDownItems.Add("换个模样", null, new EventHandler(MenuChange));
+        // 想让今天是谁就点谁，不点就跟着日期走
+        ToolStripMenuItem dayMenu = new ToolStripMenuItem("今天我要是谁");
+        if (faceNames != null)
+        {
+            for (int di = 0; di < faceNames.Length; di++)
+            {
+                ToolStripMenuItem dmi = new ToolStripMenuItem(faceNames[di]);
+                dmi.Tag = di;
+                dmi.Click += new EventHandler(MenuChooseToday);
+                dayMenu.DropDownItems.Add(dmi);
+            }
+        }
+        dayMenu.DropDownItems.Add(new ToolStripSeparator());
+        dayMenu.DropDownItems.Add("还是跟着日期换", null, new EventHandler(MenuClearToday));
+        gLook.DropDownItems.Add(dayMenu);
+        gLook.DropDownItems.Add("走两步给你看", null, new EventHandler(MenuWalkDemo));
+        gLook.DropDownItems.Add("哭一个", null, new EventHandler(MenuCry));
+        // 新学的几手：飞、御剑、骑坐骑、跳舞、喝茶、看电视
+        gLook.DropDownItems.Add(new ToolStripSeparator());
+        gLook.DropDownItems.Add("飞一趟", null, new EventHandler(MenuActFly));
+        gLook.DropDownItems.Add("御剑飞行", null, new EventHandler(MenuActSword));
+        gLook.DropDownItems.Add("骑坐骑出去", null, new EventHandler(MenuActRide));
+        gLook.DropDownItems.Add("跳个舞", null, new EventHandler(MenuActDance));
+        gLook.DropDownItems.Add("喝杯咖啡", null, new EventHandler(MenuActTea));
+        gLook.DropDownItems.Add("看会儿电视", null, new EventHandler(MenuActTv));
+        ToolStripMenuItem chatItem = new ToolStripMenuItem("闲聊（手动开）");
+        chatItem.Checked = chatMode;
+        chatItem.Click += new EventHandler(MenuToggleChat);
+        gLook.DropDownItems.Add(chatItem);
+        m.Items.Add(gLook);
+
+        // 四、记性
+        ToolStripMenuItem gMind = new ToolStripMenuItem("记性和学问");
+        gMind.DropDownItems.Add("我记住了什么", null, new EventHandler(MenuMemory));
+        gMind.DropDownItems.Add("我今天学了什么", null, new EventHandler(MenuKnowledge));
+        m.Items.Add(gMind);
+
+        // 讲点什么：故事、段子、老书，还可以让它自己隔一阵主动讲
+        ToolStripMenuItem gTell = new ToolStripMenuItem("给我讲点什么");
+        gTell.DropDownItems.Add("讲个故事", null, new EventHandler(MenuStory));
+        gTell.DropDownItems.Add("说个段子", null, new EventHandler(MenuJoke));
+        gTell.DropDownItems.Add("念段小说", null, new EventHandler(MenuNovel));
+        gTell.DropDownItems.Add("背首古诗", null, new EventHandler(MenuPoem));
+        gTell.DropDownItems.Add("学一句英语", null, new EventHandler(MenuEnglish));
+        gTell.DropDownItems.Add("唱一段", null, new EventHandler(MenuSing));
+        ToolStripMenuItem autoTell = new ToolStripMenuItem("自己隔一阵讲一段");
+        autoTell.Checked = autoTellOn;
+        autoTell.Name = "autotell";
+        autoTell.Click += new EventHandler(MenuToggleAutoTell);
+        gTell.DropDownItems.Add(autoTell);
+
+
+        // 五、桌面
+        ToolStripMenuItem gDesk = new ToolStripMenuItem("桌面");
+        gDesk.DropDownItems.Add("换张新壁纸", null, new EventHandler(MenuWallpaper));
+        gDesk.DropDownItems.Add("今日简报", null, new EventHandler(MenuBrief));
+        gDesk.DropDownItems.Add("看看电脑状态", null, new EventHandler(MenuStatus));
+        gDesk.DropDownItems.Add("打开回收站", null, new EventHandler(MenuRecycle));
+        // 三个二级菜单合到一处，右键点开只有四条主干
+        ToolStripMenuItem gMore = new ToolStripMenuItem("声音、闲话和桌面");
+        gMore.DropDownItems.Add(gSound);
+        gMore.DropDownItems.Add(gTell);
+        gMore.DropDownItems.Add(gDesk);
+        m.Items.Add(gMore);
+
+        // 六、维护
+        ToolStripMenuItem gSys = new ToolStripMenuItem("维护");
+        gSys.DropDownItems.Add("我现在就检查更新", null, new EventHandler(MenuSelfUpdate));
+        // 版本号直接摆在菜单里，不用去网页上看
+        ToolStripMenuItem verItem = new ToolStripMenuItem("当前版本 v" + SyncServer.APP_VER + "（点上面那行可以查新版）");
+        verItem.Enabled = false;
+        gSys.DropDownItems.Add(verItem);
+        gSys.DropDownItems.Add("去 GitHub 学点东西", null, new EventHandler(MenuGithubLearn));
+        gSys.DropDownItems.Add("给自己做个备份", null, new EventHandler(MenuBackup));
+        ToolStripMenuItem autostart = new ToolStripMenuItem("开机自动出现");
+        autostart.Checked = IsAutoStart();
+        autostart.Click += new EventHandler(MenuAutoStart);
+        autostart.Name = "autostart";
+        gSys.DropDownItems.Add(autostart);
+        m.Items.Add(gSys);
+
+        m.Items.Add(new ToolStripSeparator());
+        m.Items.Add("退出", null, new EventHandler(MenuExit));
+        this.ContextMenuStrip = m;
+    }
+
+    bool IsAutoStart()
+    {
+        try
+        {
+            RegistryKey rk = Registry.CurrentUser.OpenSubKey("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+            if (rk == null) return false;
+            object v = rk.GetValue("DaoPet");
+            if (v == null) v = rk.GetValue("DoubaoPet");
+            rk.Close();
+            return v != null;
+        }
+        catch { return false; }
+    }
+
+    void SetAutoStart(bool on)
+    {
+        try
+        {
+            RegistryKey rk = Registry.CurrentUser.OpenSubKey("Software\\Microsoft\\Windows\\CurrentVersion\\Run", true);
+            if (rk == null) return;
+            // 清掉旧名字，避免开机时冒出两个我
+            try { rk.DeleteValue("DoubaoPet", false); } catch { }
+            if (on) rk.SetValue("DaoPet", "\"" + Application.ExecutablePath + "\"");
+            else rk.DeleteValue("DaoPet", false);
+            rk.Close();
+        }
+        catch { }
+    }
+
+    void MenuAutoStart(object s, EventArgs e)
+    {
+        ToolStripMenuItem mi = (ToolStripMenuItem)s;
+        bool want = !IsAutoStart();
+        SetAutoStart(want);
+        mi.Checked = want;
+        Say(want ? "好，开机我就自己出来。" : "那我就不开机自己出现了。");
+    }
+
+    void Say(string text)
+    {
+        bubble = text;
+        bubbleFrames = 60 + (text == null ? 0 : text.Length * 3);
+        if (bubbleFrames > 140) bubbleFrames = 140;   // 说完就散，不在屏幕上赖着
+        Invalidate();
+        SpeakOut(text);
+    }
+
+    // 一天只在第一次见着他的时候打个招呼：开机时说，跨天后他回来时补一句
+    void GreetIfDue(bool fromStartup)
+    {
+        try
+        {
+            if (greetDay.Date == DateTime.Today) return;
+            int h = DateTime.Now.Hour;
+            // 开机不管几点都打招呼；平时只在白天到晚上这段时间补
+            if (!fromStartup && (h < 5 || h >= 23)) return;
+            MarkGreeted();
+            SpeakGreet();
+        }
+        catch { }
+    }
+
+    // 问候先立刻显示在气泡上，语音丢给队列。队列是一句一句播的，
+    // 前面那句没说完它会自己等着，不用在这儿反复重试（重试会把同一句排好几遍）
+    void SpeakGreet()
+    {
+        try
+        {
+            // 正在听你说话就别插嘴，不然麦克风录的是它自己的声音
+            if (hearBusy) return;
+            bubble = GreetText();
+            bubbleFrames = 150;
+            Invalidate();
+            SpeakOut(bubble);
+        }
+        catch { }
+    }
+
+    void MarkGreeted()
+    {
+        greetDay = DateTime.Today;
+        try
+        {
+            RegistryKey k = Registry.CurrentUser.CreateSubKey("Software\\DaoPet");
+            if (k != null) { k.SetValue("GreetDay", greetDay.ToString("yyyy-MM-dd")); k.Close(); }
+        }
+        catch { }
+    }
+
+    string GreetText()
+    {
+        int h = DateTime.Now.Hour;
+        string who = CurName();
+        if (h >= 5 && h < 11) return "老师早啊，我是" + who + "。新的一天，咱们开始吧。";
+        if (h >= 11 && h < 14) return "老师中午好，我是" + who + "。饭吃了没，歇一会儿再忙。";
+        if (h >= 14 && h < 18) return "老师下午好，我是" + who + "。课上得顺不顺，累不累？";
+        if (h >= 18 && h < 23) return "晚上好老师，我是" + who + "。今天辛苦了，早点歇着。";
+        return "这么晚还没睡呀老师，我是" + who + "。早点休息，明天还要上课呢。";
+    }
+
+    readonly string[] CHAT_COMMON = new string[] {
+        "老师，歇会儿，眼睛离屏幕远点。",
+        "坐久了腰会酸，起来走两步吧。",
+        "这事急不来，先把最要紧的那件做完。",
+        "我刚才自己晃了两圈，有点闲，来找你说说话。",
+        "作业改完了吗？没改完我陪你。",
+        "班上那帮孩子今天有没有闹出什么笑话？",
+        "一道题讲三遍还不会，正常，别上火。",
+        "我在这儿呢，你不用管我。",
+        "水杯空了就去接一杯，别憋着。",
+        "你要是烦了，跟我说说也成，我听着。"
+    };
+
+    readonly string[] CHAT_MORNING = new string[] {
+        "早读站一站，嗓子记得润一下。",
+        "第一节最容易犯困，你也别硬撑。",
+        "早上脑子最清楚，难的题放这会儿讲。"
+    };
+
+    readonly string[] CHAT_NOON = new string[] {
+        "饭点到了，别又拿个包子对付。",
+        "中午眯二十分钟，下午能顶两节课。",
+        "吃完饭别马上趴着改作业，对胃不好。"
+    };
+
+    readonly string[] CHAT_AFTERNOON = new string[] {
+        "下午这几节课最难熬，撑住。",
+        "嗓子哑了就别喊了，写黑板上。",
+        "太阳落下去点，教室里能凉快点。"
+    };
+
+    readonly string[] CHAT_NIGHT = new string[] {
+        "作业改不动就先放放，明天再弄。",
+        "晚上少看会儿手机，眼睛受不了。",
+        "明天还有早读，别熬太晚。"
+    };
+
+    void MenuToggleChat(object s, EventArgs e)
+    {
+        chatMode = !chatMode;
+        try
+        {
+            RegistryKey k = Registry.CurrentUser.CreateSubKey("Software\\DaoPet");
+            if (k != null) { k.SetValue("ChatMode", chatMode ? "1" : "0"); k.Close(); }
+        }
+        catch { }
+        ResetChatTimer();
+        Say(chatMode ? "行，我时不时跟你唠两句。不想听就再点一下这个。" : "好，那我安静待着。");
+    }
+
+    void ResetChatTimer()
+    {
+        // 一秒约 22 帧，隔 20 到 50 分钟随机说一次
+        chatCountdown = rnd.Next(26000, 66000);
+    }
+
+    string RandomChatLine()
+    {
+        int h = DateTime.Now.Hour;
+        string[] pool;
+        if (h >= 5 && h < 11) pool = CHAT_MORNING;
+        else if (h >= 11 && h < 14) pool = CHAT_NOON;
+        else if (h >= 14 && h < 18) pool = CHAT_AFTERNOON;
+        else pool = CHAT_NIGHT;
+        if (rnd.Next(100) < 30) pool = CHAT_COMMON;
+        return pool[rnd.Next(pool.Length)];
+    }
+
+    // 录三秒，量一下麦克风到底能收到多少声，用大白话说结果
+    void MenuMicTest(object s, EventArgs e)
+    {
+        Say("我听听环境，三秒。");
+        System.Threading.Thread th = new System.Threading.Thread(delegate()
+        {
+            string o = "";
+            try
+            {
+                string py = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "hear.py");
+                if (!System.IO.File.Exists(py)) { o = "NOFILE"; }
+                else
+                {
+                    ProcessStartInfo pi = new ProcessStartInfo();
+                    pi.FileName = "python";
+                    pi.Arguments = "\"" + py + "\" --level 3";
+                    pi.UseShellExecute = false;
+                    pi.CreateNoWindow = true;
+                    pi.RedirectStandardOutput = true;
+                    pi.RedirectStandardError = true;
+                    pi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+                    pi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+                    pi.WindowStyle = ProcessWindowStyle.Hidden;
+                    Process p = Process.Start(pi);
+                    string so = p.StandardOutput.ReadToEnd();
+                    p.StandardError.ReadToEnd();
+                    p.WaitForExit(30000);
+                    o = so == null ? "" : so.Trim();
+                }
+            }
+            catch (Exception ex) { o = "ERR " + ex.Message; }
+
+            string msg;
+            if (o.StartsWith("NOFILE")) msg = "听觉模块不在，得更新一下我。";
+            else if (o.StartsWith("ERR")) msg = "没测成：" + o;
+            else
+            {
+                int rms = 0;
+                int peak = 0;
+                int i = o.IndexOf("rms=");
+                if (i >= 0)
+                {
+                    int st = i + 4;
+                    int en = o.IndexOf('|', st);
+                    string v = en > 0 ? o.Substring(st, en - st) : o.Substring(st);
+                    int.TryParse(v, out rms);
+                }
+                i = o.IndexOf("peak=");
+                if (i >= 0)
+                {
+                    int st = i + 5;
+                    int en = o.IndexOf('|', st);
+                    string v = en > 0 ? o.Substring(st, en - st) : o.Substring(st);
+                    int.TryParse(v, out peak);
+                }
+                // v22：按说话峰值判断，录音端已经自动放大过一轮，不再稍微轻一点就喊“太小”
+                if (peak <= 0) msg = "一点声都没有，看看麦克风是不是被关掉了。";
+                else if (peak < 900) msg = "只能收到一点点，把麦克风音量调大再试。";
+                else if (peak < 3000) msg = "能听见，但还偏轻。";
+                else msg = "这音量够用，平常声说话就行。";
+            }
+            try { BeginInvoke(new MethodInvoker(delegate() { Say("测完了：" + msg); })); } catch { }
+        });
+        th.IsBackground = true;
+        th.Start();
+    }
+
+    void MenuVoice(object s, EventArgs e)
+    {
+        voiceOn = !voiceOn;
+        ToolStripMenuItem mi = (ToolStripMenuItem)s;
+        mi.Checked = voiceOn;
+        if (voiceOn) Say("好，我开口了。");
+        else Say("那我先不说话了。");
+    }
+
+    void MenuVolLevel(object s, EventArgs e)
+    {
+        ToolStripMenuItem mi = (ToolStripMenuItem)s;
+        try { volLevel = Convert.ToInt32(mi.Tag); } catch { volLevel = 1; }
+        if (volLevel < 0) volLevel = 0;
+        if (volLevel > 2) volLevel = 2;
+        try
+        {
+            RegistryKey k = Registry.CurrentUser.CreateSubKey("Software\\DaoPet");
+            if (k != null) { k.SetValue("VolLevel", volLevel); k.Close(); }
+        }
+        catch { }
+        EnsureSpeakerLevel();
+        Say(volLevel == 0 ? "好，我说话轻一点。" : (volLevel == 2 ? "行，我大点声。" : "调回正常音量了。"));
+    }
+
+    void MenuWalkDemo(object s, EventArgs e)
+    {
+        try
+        {
+            Rectangle wa = Screen.FromControl(this).WorkingArea;
+            int dir = (Location.X + Width / 2 < wa.Width / 2) ? 1 : -1;
+            int nx = Location.X + dir * 180;
+            if (nx < wa.Left + 2) nx = wa.Left + 2;
+            if (nx > wa.Right - Width - 2) nx = wa.Right - Width - 2;
+            walkTargetX = nx;
+            walkTargetY = Location.Y;
+            walkDirX = dir;
+            Say("好，我走两步，你看看腿脚利索不利索。");
+        }
+        catch { }
+    }
+
+    // 睡一觉：躺平三十秒，头上飘 Z
+    void MenuLieDown(object s, EventArgs e)
+    {
+        lieHold = 660;
+        idleTicks = 2000;   // 顺便把空闲计时推过门槛，坐姿和犯困一起生效
+        Say("那我躺下歇会儿，你忙你的。");
+    }
+
+    // 哭一个：让它真掉几滴眼泪
+    void MenuCry(object s, EventArgs e)
+    {
+        cryHold = 700;
+        moodKind = 3;
+        moodTicks = 120;
+        Say("嗯……我也有心里不好受的时候。");
+    }
+
+    // 六个生活动作的菜单入口，都走同一个口子：定动作类型 + 给个持续时间
+    void StartAct(int kind)
+    {
+        if (lying) { lieHold = 0; lying = false; }
+        actKind = kind;
+        actHold = kind >= 4 ? 400 : 470;
+        // 要赶路的先把目的地清掉，让行走逻辑马上重新挑一个
+        if (kind >= 1 && kind <= 3) walkTargetX = -999999;
+        if (kind == 1) Say("我飞过去。");
+        else if (kind == 2) Say("踏剑而行，走。");
+        else if (kind == 3) Say("骑上它，慢慢走。");
+        else if (kind == 4) Say("跳一段，你听听节拍。");
+        else if (kind == 5) Say("来杯咖啡，握手里慢慢喝。");
+        else if (kind == 6) Say("看会儿电视，别嫌吵。");
+    }
+
+    void MenuActFly(object s, EventArgs e) { StartAct(1); }
+    void MenuActSword(object s, EventArgs e) { StartAct(2); }
+    void MenuActRide(object s, EventArgs e) { StartAct(3); }
+    void MenuActDance(object s, EventArgs e) { StartAct(4); }
+    void MenuActTea(object s, EventArgs e) { StartAct(5); }
+    void MenuActTv(object s, EventArgs e) { StartAct(6); }
+
+    void MenuSwapVoice(object s, EventArgs e)
+    {
+        vIdx = (vIdx + 1) % VName.Length;
+        try
+        {
+            RegistryKey k = Registry.CurrentUser.CreateSubKey("Software\\DaoPet");
+            if (k != null) { k.SetValue("VoiceIdx", vIdx); k.Close(); }
+        }
+        catch { }
+        SayAs("换成「" + VName[vIdx] + "」了，你听听像不像。", CurVoice());
+    }
+
+    string VoiceDir()
+    {
+        string d = Path.Combine(Path.GetTempPath(), "daovoice");
+        if (!Directory.Exists(d)) Directory.CreateDirectory(d);
+        return d;
+    }
+
+    string BackupScript()
+    {
+        return
+            "param([string]$dir)\r\n" +
+            "$dst = Join-Path $dir '备份'\r\n" +
+            "if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst | Out-Null }\r\n" +
+            "$stamp = Get-Date -Format 'yyyyMMdd_HHmm'\r\n" +
+            "$zip = Join-Path $dst ('道_' + $stamp + '.zip')\r\n" +
+            "$list = @()\r\n" +
+            "foreach ($n in @('道.exe','pet.cs','pet.manifest','记忆.txt','我说的话.txt','make_icons.ps1','daily_brief.ps1','daily_bing.ps1','hear.py','backup.ps1')) {\r\n" +
+            "  $p = Join-Path $dir $n\r\n" +
+            "  if (Test-Path -LiteralPath $p) { $list += $p }\r\n" +
+            "}\r\n" +
+            "foreach ($d in @('icons','faces')) {\r\n" +
+            "  $p = Join-Path $dir $d\r\n" +
+            "  if (Test-Path -LiteralPath $p) { $list += $p }\r\n" +
+            "}\r\n" +
+            "if ($list.Count -eq 0) { Write-Output 'NONE'; exit }\r\n" +
+            "Compress-Archive -Path $list -DestinationPath $zip -Force\r\n" +
+            "Get-ChildItem -LiteralPath $dst -Filter '道_*.zip' | Sort-Object LastWriteTime -Descending | Select-Object -Skip 7 | Remove-Item -Force\r\n" +
+            "$f = Get-Item -LiteralPath $zip\r\n" +
+            "Write-Output ('OK|' + $f.Name + '|' + [math]::Round($f.Length/1MB,1))\r\n";
+    }
+
+    void BackupNow(bool silent)
+    {
+        if (backupThread != null && backupThread.IsAlive) return;
+        if (!silent) Say("正在把自己打包备份…");
+        backupThread = new System.Threading.Thread(delegate()
+        {
+            string result = "";
+            try
+            {
+                string dir = AppDir();
+                string ps1 = Path.Combine(dir, "backup.ps1");
+                try { File.WriteAllText(ps1, BackupScript(), new UTF8Encoding(true)); }
+                catch { }
+                ProcessStartInfo pi = new ProcessStartInfo();
+                pi.FileName = "powershell.exe";
+                pi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File \"" + ps1 + "\" -dir \"" + dir + "\"";
+                pi.UseShellExecute = false;
+                pi.CreateNoWindow = true;
+                pi.WindowStyle = ProcessWindowStyle.Hidden;
+                pi.RedirectStandardOutput = true;
+                pi.StandardOutputEncoding = Encoding.UTF8;
+                Process p = Process.Start(pi);
+                result = p.StandardOutput.ReadToEnd().Trim();
+                p.WaitForExit(180000);
+            }
+            catch { result = ""; }
+
+            string msg;
+            if (result.StartsWith("OK|"))
+            {
+                string[] parts = result.Split('|');
+                msg = "备份好了，一共 " + (parts.Length > 2 ? parts[2] : "?") + " MB，存在「备份」文件夹里，我留最近 7 份。";
+            }
+            else
+            {
+                msg = "备份没成功，可能磁盘空间不够。";
+            }
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate()
+                {
+                    if (hearBusy) return;
+                    bubble = msg;
+                    bubbleFrames = 150;
+                    Invalidate();
+                    SpeakOut(msg);
+                });
+            }
+            catch { }
+        });
+        backupThread.IsBackground = true;
+        backupThread.Start();
+    }
+
+    void MenuBackup(object s, EventArgs e)
+    {
+        BackupNow(false);
+    }
+
+    void AutoBackupIfDue()
+    {
+        try
+        {
+            string dst = Path.Combine(AppDir(), "备份");
+            DateTime last = DateTime.MinValue;
+            if (Directory.Exists(dst))
+            {
+                string[] zips = Directory.GetFiles(dst, "道_*.zip");
+                for (int i = 0; i < zips.Length; i++)
+                {
+                    DateTime w = File.GetLastWriteTime(zips[i]);
+                    if (w > last) last = w;
+                }
+            }
+            if ((DateTime.Now - last).TotalDays >= 7) BackupNow(true);
+        }
+        catch { }
+    }
+
+    void SpeakOut(string text)
+    {
+        SpeakOut(text, CurVoice());
+    }
+
+    void SpeakOut(string text, string voice)
+    {
+        SpeakOut(text, voice, CurFx());
+    }
+
+    void SpeakOut(string text, string voice, string fx)
+    {
+        if (!voiceOn) return;
+        if (text == null) return;
+        string t2 = text.Replace("\r", " ").Replace("\n", " ").Trim();
+        if (t2.Length == 0) return;
+        if (t2.Length > 90) t2 = t2.Substring(0, 90);
+        SpeakJob job = new SpeakJob();
+        job.text = t2; job.voice = voice; job.fx = fx;
+        lock (speakQLock)
+        {
+            // 最多排三句，再多就丢掉，免得积一堆话过好一会儿才一起冒出来
+            if (speakQueue.Count >= 3) return;
+            speakQueue.Enqueue(job);
+            if (voiceThread == null || !voiceThread.IsAlive)
+            {
+                voiceThread = new System.Threading.Thread(SpeakLoop);
+                voiceThread.IsBackground = true;
+                voiceThread.Start();
+            }
+        }
+    }
+
+    // 排着队一句一句往外播，绝不叠着说
+    void SpeakLoop()
+    {
+        while (true)
+        {
+            SpeakJob job;
+            lock (speakQLock)
+            {
+                if (speakQueue.Count == 0) { voiceThread = null; return; }
+                job = speakQueue.Dequeue();
+            }
+            try { PlayOne(job); } catch { }
+        }
+    }
+
+    void PlayOne(SpeakJob job)
+    {
+        string t2 = job.text;
+        string voice = job.voice;
+        string fx = job.fx;
+        speaking = true;
+        // 嘴的动作不再按字数提前估：等播放器真的出声那一刻再张嘴，时长用音频真实长度，
+        // 声音和画面走同一条时间轴，才不会嘴先动完、声音才出来
+        int zc = CountSpeakChars(t2);
+        int estMs = (int)(zc * 205) + 260;
+        speakMouthStart = 0;
+        speakMouthUntil = 0;
+        try
+        {
+            string dir = VoiceDir();
+            bool hasFx = fx != null && fx.Length > 0 && fx != "none";
+            // 语气跟着心情走：高兴话就快一点、调门抬一点；难过就放慢、压低。
+            // 同样一句"我在呢"，用同一个平语气念出来像个播报器
+            string rate = CurRate();
+            string pitch = CurPitch();
+            string seed = t2 + "|" + voice + "|" + (hasFx ? fx : "") + "|" + rate + "|" + pitch;
+            string key = Math.Abs(seed.GetHashCode()).ToString();
+            string mp3 = Path.Combine(dir, key + (hasFx ? ".wav" : ".mp3"));
+            string txt = Path.Combine(dir, key + ".txt");
+                string py = Path.Combine(dir, "say.py");
+                string play = Path.Combine(dir, "play.ps1");
+                try
+                {
+                    File.WriteAllText(py,
+                        "import asyncio,sys\n" +
+                        "from edge_tts import Communicate\n" +
+                        "t=open(sys.argv[1],'r',encoding='utf-8').read()\n" +
+                        "v=sys.argv[3] if len(sys.argv)>3 else 'zh-CN-XiaoxiaoNeural'\n" +
+                        "r=sys.argv[4] if len(sys.argv)>4 else '+0%'\n" +
+                        "p=sys.argv[5] if len(sys.argv)>5 else '+0Hz'\n" +
+                        "asyncio.run(Communicate(t,v,rate=r,pitch=p).save(sys.argv[2]))\n",
+                        new System.Text.UTF8Encoding(false));
+                }
+                catch { }
+                string playPy = Path.Combine(dir, "play_mp3.py");
+                if (!File.Exists(playPy))
+                {
+                    // 不再用 WMPlayer 的 playState 轮询：那个循环最长要等 60 秒，
+                    // 一句话播完队列卡住，后面的回话全排在后面。改成 miniaudio 解码 + sounddevice 播。
+                    File.WriteAllText(playPy,
+                        "# -*- coding: utf-8 -*-\n" +
+                        "import sys, numpy as np, miniaudio, sounddevice as sd\n" +
+                        "p = sys.argv[1]\n" +
+                        "d = miniaudio.mp3_read_file_s16(p)\n" +
+                        "samples, nch, fs = (d.samples, d.nchannels, d.sample_rate) if not isinstance(d, tuple) else d\n" +
+                        "pcm = np.frombuffer(samples, dtype=np.int16) if isinstance(samples, (bytes, bytearray)) else np.asarray(samples, dtype=np.int16)\n" +
+                        "sd.play(pcm.reshape(-1, nch), fs)\n" +
+                        "sd.wait()\n",
+                        new System.Text.UTF8Encoding(false));
+                }
+                if (!File.Exists(play))
+                {
+                    File.WriteAllText(play,
+                        "param([string]$f)\r\n" +
+                        "& \"python\" \"$PSScriptRoot\\play_mp3.py\" $f\r\n",
+                        new System.Text.UTF8Encoding(true));
+                }
+
+                if (!(File.Exists(mp3) && new FileInfo(mp3).Length > 2048))
+                {
+                    File.WriteAllText(txt, t2, new System.Text.UTF8Encoding(false));
+                    ProcessStartInfo pi = new ProcessStartInfo();
+                    pi.FileName = "python";
+                    if (hasFx)
+                    {
+                        string vfx = Path.Combine(AppDir(), "voicefx.py");
+                        pi.Arguments = "-X utf8 \"" + vfx + "\" --text \"" + txt + "\" --out \"" + mp3
+                            + "\" --voice \"" + voice + "\" --fx \"" + fx + "\"";
+                    }
+                    else
+                    {
+                        pi.Arguments = "\"" + py + "\" \"" + txt + "\" \"" + mp3 + "\" \"" + voice
+                            + "\" \"" + rate + "\" \"" + pitch + "\"";
+                    }
+                    pi.UseShellExecute = false;
+                    pi.CreateNoWindow = true;
+                    pi.WindowStyle = ProcessWindowStyle.Hidden;
+                    Process p = Process.Start(pi);
+                    p.WaitForExit(40000);
+                }
+
+                if (File.Exists(mp3) && new FileInfo(mp3).Length > 2048)
+                {
+                    // 出声之前先把音量顶回来。别的程序动不动就把扬声器压到三成以下，
+                    // 只靠定时器兜不住，每句开播前补一次最稳
+                    EnsureSpeakerLevel();
+                    // WMPlayer 这台机器上不出声，改用 python + sounddevice 直接播
+                    string player = Path.Combine(AppDir(), "play_audio.py");
+                    ProcessStartInfo pp = new ProcessStartInfo();
+                    pp.FileName = "python";
+                    pp.Arguments = "-X utf8 \"" + player + "\" \"" + mp3 + "\"";
+                    pp.UseShellExecute = false;
+                    pp.CreateNoWindow = true;
+                    pp.WindowStyle = ProcessWindowStyle.Hidden;
+                    pp.RedirectStandardOutput = true;
+                    pp.StandardOutputEncoding = System.Text.Encoding.UTF8;
+                    Process pk = Process.Start(pp);
+                    curPlayer = pk;
+                    // 读播放器吐回来的时间轴：DEC 是音频真实毫秒数，START 是真正出声那一刻。
+                    // 嘴从 START 开始、按真实时长收，声音和画面才对得上
+                    int durMs = -1;
+                    try
+                    {
+                        string ln;
+                        while ((ln = pk.StandardOutput.ReadLine()) != null)
+                        {
+                            if (ln.StartsWith("DEC|"))
+                            {
+                                int.TryParse(ln.Substring(4), out durMs);
+                            }
+                            else if (ln.StartsWith("START"))
+                            {
+                                speakMouthStart = Environment.TickCount;
+                                speakMouthUntil = speakMouthStart + (durMs > 0 ? durMs : estMs) + 120;
+                            }
+                        }
+                    }
+                    catch { }
+                    if (speakMouthStart == 0)
+                    {
+                        speakMouthStart = Environment.TickCount;
+                        speakMouthUntil = speakMouthStart + estMs;
+                    }
+                    // 必须等这句真播完再撒手，不然下一句接上来就是叠着说话
+                    pk.WaitForExit(60000);
+                    curPlayer = null;
+                }
+            }
+            catch { }
+            finally { speaking = false; }
+    }
+
+    // 立刻闭嘴：点它、或者要开始听你说话时都得先掐掉。
+    // 不掐的话，麦克风会把它自己的声音录进去，你说什么它都听不清
+    void StopSpeechNow()
+    {
+        try { if (curPlayer != null && !curPlayer.HasExited) curPlayer.Kill(); } catch { }
+        lock (speakQLock)
+        {
+            try { speakQueue.Clear(); } catch { }
+        }
+    }
+
+    // 数字数：标点和空格不算，念出来才占时间
+    int CountSpeakChars(string s)
+    {
+        int n = 0;
+        for (int i = 0; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+            if (c == ',' || c == '.' || c == '!' || c == '?' || c == ';' || c == ':') continue;
+            if (c == '，' || c == '。' || c == '！' || c == '？' || c == '；' || c == '：' || c == '、' || c == '…') continue;
+            n++;
+        }
+        return n < 2 ? 2 : n;
+    }
+
+    void MenuHear(object s, EventArgs e)
+    {
+        if (hearThread != null && hearThread.IsAlive) return;
+        Say("我在听，说完自己停。");
+        hearThread = new System.Threading.Thread(delegate()
+        {
+            string heard = "";
+            hearBusy = true;
+            StopSpeechNow();
+            try
+            {
+                string py = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "hear.py");
+                if (!System.IO.File.Exists(py))
+                {
+                    BeginInvoke(new MethodInvoker(delegate() { Say("听觉模块没装上，等我更新一下自己。"); }));
+                    return;
+                }
+                string wav = Path.Combine(VoiceDir(), "heard.wav");
+                ProcessStartInfo pi = new ProcessStartInfo();
+                pi.FileName = "python";
+                pi.Arguments = "\"" + py + "\" 8 \"" + wav + "\"";
+                pi.UseShellExecute = false;
+                pi.CreateNoWindow = true;
+                pi.RedirectStandardOutput = true;
+                pi.RedirectStandardError = true;
+                pi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+                pi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+                pi.WindowStyle = ProcessWindowStyle.Hidden;
+                Process p = Process.Start(pi);
+                string so = p.StandardOutput.ReadToEnd();
+                string se = p.StandardError.ReadToEnd();
+                p.WaitForExit(45000);
+                if (so != null) heard = so.Trim();
+            }
+            catch { }
+            hearBusy = false;
+            string h = heard;
+            try { BeginInvoke(new MethodInvoker(delegate() { RunVoiceCommand(h); })); } catch { }
+        });
+        hearThread.IsBackground = true;
+        hearThread.Start();
+    }
+
+    System.Threading.Thread voiceChatThread;
+    System.Threading.Thread brainThread;
+
+    void MenuVoiceChat(object s, EventArgs e)
+    {
+        if (voiceChatThread != null && voiceChatThread.IsAlive)
+        {
+            Say("我还在听上一句，等我说完。");
+            return;
+        }
+        if (!voiceOn) voiceOn = true;
+        Say("我在听，说完自己停。");
+        voiceChatThread = new System.Threading.Thread(delegate()
+        {
+            string json = "";
+            try
+            {
+                string py = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "voice.py");
+                if (!System.IO.File.Exists(py))
+                {
+                    BeginInvoke(new MethodInvoker(delegate() { Say("语音模块没装上，等我更新一下自己。"); }));
+                    return;
+                }
+                ProcessStartInfo pi = new ProcessStartInfo();
+                pi.FileName = "python";
+                pi.Arguments = "\"" + py + "\" chat";
+                pi.UseShellExecute = false;
+                pi.CreateNoWindow = true;
+                pi.RedirectStandardOutput = true;
+                pi.RedirectStandardError = true;
+                pi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+                pi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+                pi.WindowStyle = ProcessWindowStyle.Hidden;
+                Process p = Process.Start(pi);
+                string so = p.StandardOutput.ReadToEnd();
+                p.StandardError.ReadToEnd();
+                p.WaitForExit(80000);
+                if (so != null) json = so.Trim();
+            }
+            catch { }
+
+            string heard = JsonStr(json, "heard");
+            string reply = JsonStr(json, "reply");
+            int mood = JsonInt(json, "mood");
+            string hh = heard;
+            string rr = reply;
+            try
+            {
+                BeginInvoke(new MethodInvoker(delegate()
+                {
+                    if (rr == null || rr.Length == 0)
+                    {
+                        Say("刚才没听清，再说一遍？");
+                        return;
+                    }
+                    if (hh != null && hh.Length > 0) RecordTalk(hh);
+                    if (mood > 0 && mood <= 8) { moodKind = mood; moodTicks = 70; }
+                    SayAs(rr, CurVoice());
+                }));
+            }
+            catch { }
+        });
+        voiceChatThread.IsBackground = true;
+        voiceChatThread.Start();
+    }
+
+    // 问它 / 讲题 / 总结：同一套大脑，只是换种用法
+    void MenuAskBrain(object s, EventArgs e)
+    {
+        RunBrain("ask", "跟道说一句", "想问什么就写在这儿，它会念给你听。");
+    }
+
+    void MenuExplain(object s, EventArgs e)
+    {
+        RunBrain("explain", "讲讲这道题", "把题目抄下来或贴进来，它给你讲该往哪想。");
+    }
+
+    void MenuSum(object s, EventArgs e)
+    {
+        RunBrain("sum", "总结一下", "把要总结的内容贴进来，它用大白话说重点。");
+    }
+
+    void RunBrain(string mode, string title, string tip)
+    {
+        if (brainThread != null && brainThread.IsAlive)
+        {
+            Say("我还在想上一句，等我说完。");
+            return;
+        }
+        string q = AskText(title, tip);
+        if (q == null) return;
+        q = q.Trim();
+        if (q.Length == 0) return;
+        if (!voiceOn) voiceOn = true;
+        Say("我想想。");
+        brainThread = new System.Threading.Thread(delegate()
+        {
+            string json = "";
+            try
+            {
+                string exeDir = Path.GetDirectoryName(Application.ExecutablePath);
+                string py = Path.Combine(exeDir, "voice.py");
+                if (!System.IO.File.Exists(py))
+                {
+                    BeginInvoke(new MethodInvoker(delegate() { Say("大脑模块没装上，等我更新一下自己。"); }));
+                    return;
+                }
+                // 中文不经过命令行，写文件给它读，免得编码乱掉
+                string askPath = Path.Combine(exeDir, "ask.txt");
+                File.WriteAllText(askPath, q, new System.Text.UTF8Encoding(false));
+                ProcessStartInfo pi = new ProcessStartInfo();
+                pi.FileName = "python";
+                pi.Arguments = "\"" + py + "\" " + mode + " --file \"" + askPath + "\"";
+                pi.UseShellExecute = false;
+                pi.CreateNoWindow = true;
+                pi.RedirectStandardOutput = true;
+                pi.RedirectStandardError = true;
+                pi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+                pi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+                pi.WindowStyle = ProcessWindowStyle.Hidden;
+                Process p = Process.Start(pi);
+                string so = p.StandardOutput.ReadToEnd();
+                p.StandardError.ReadToEnd();
+                p.WaitForExit(80000);
+                if (so != null) json = so.Trim();
+            }
+            catch { }
+
+            string reply = JsonStr(json, "reply");
+            int mood = JsonInt(json, "mood");
+            try
+            {
+                BeginInvoke(new MethodInvoker(delegate()
+                {
+                    if (mood > 0 && mood <= 8) { moodKind = mood; moodTicks = 70; }
+                    if (reply != null && reply.Length > 0) SayAs(reply, CurVoice());
+                    else Say("我这一下没想出来，再问我一遍。");
+                    Invalidate();
+                }));
+            }
+            catch { }
+        });
+        brainThread.IsBackground = true;
+        brainThread.Start();
+    }
+
+    string JsonStr(string json, string key)
+    {
+        if (json == null || json.Length == 0) return "";
+        // python 输出的是 "key": "值"，冒号后面带空格，不能按死格式找
+        string pat = "\"" + key + "\":";
+        int i = json.IndexOf(pat);
+        if (i < 0) return "";
+        i += pat.Length;
+        while (i < json.Length && (json[i] == ' ' || json[i] == '\t')) i++;
+        if (i >= json.Length || json[i] != '"') return "";
+        i++;
+        StringBuilder sb = new StringBuilder();
+        while (i < json.Length)
+        {
+            char c = json[i];
+            if (c == '\\' && i + 1 < json.Length)
+            {
+                char n = json[i + 1];
+                if (n == 'n') sb.Append('\n');
+                else if (n == 't') sb.Append('\t');
+                else if (n == 'r') sb.Append('\r');
+                else if (n == 'u' && i + 5 < json.Length)
+                {
+                    int code = 0;
+                    try { code = Convert.ToInt32(json.Substring(i + 2, 4), 16); } catch { }
+                    sb.Append((char)code);
+                    i += 6;
+                    continue;
+                }
+                else sb.Append(n);
+                i += 2;
+                continue;
+            }
+            if (c == '"') break;
+            sb.Append(c);
+            i++;
+        }
+        return sb.ToString();
+    }
+
+    int JsonInt(string json, string key)
+    {
+        if (json == null || json.Length == 0) return 0;
+        string pat = "\"" + key + "\":";
+        int i = json.IndexOf(pat);
+        if (i < 0) return 0;
+        i += pat.Length;
+        while (i < json.Length && (json[i] == ' ' || json[i] == '\t')) i++;
+        StringBuilder sb = new StringBuilder();
+        while (i < json.Length && json[i] >= '0' && json[i] <= '9') { sb.Append(json[i]); i++; }
+        try { return int.Parse(sb.ToString()); }
+        catch { return 0; }
+    }
+
+    string AskText(string title, string tip)
+    {
+        Form f = new Form();
+        f.Text = title;
+        f.Width = 460;
+        f.Height = 190;
+        f.StartPosition = FormStartPosition.CenterScreen;
+        f.FormBorderStyle = FormBorderStyle.FixedDialog;
+        f.MaximizeBox = false;
+        f.MinimizeBox = false;
+        f.TopMost = true;
+        Label lb = new Label();
+        lb.Text = tip;
+        lb.Left = 16;
+        lb.Top = 14;
+        lb.Width = 420;
+        lb.Height = 26;
+        TextBox tb = new TextBox();
+        tb.Left = 16;
+        tb.Top = 44;
+        tb.Width = 415;
+        tb.Height = 26;
+        Button ok = new Button();
+        ok.Text = (title != null && title.IndexOf("翻译") >= 0) ? "翻译" : "好";
+        ok.Left = 246;
+        ok.Top = 90;
+        ok.Width = 90;
+        ok.Height = 30;
+        ok.DialogResult = DialogResult.OK;
+        Button cancel = new Button();
+        cancel.Text = "算了";
+        cancel.Left = 342;
+        cancel.Top = 90;
+        cancel.Width = 90;
+        cancel.Height = 30;
+        cancel.DialogResult = DialogResult.Cancel;
+        f.Controls.Add(lb);
+        f.Controls.Add(tb);
+        f.Controls.Add(ok);
+        f.Controls.Add(cancel);
+        f.AcceptButton = ok;
+        f.CancelButton = cancel;
+        tb.Focus();
+        if (f.ShowDialog() == DialogResult.OK) return tb.Text;
+        return null;
+    }
+
+    void SayAs(string text, string voice)
+    {
+        bubble = text;
+        bubbleFrames = 60 + (text == null ? 0 : text.Length * 3);
+        if (bubbleFrames > 140) bubbleFrames = 140;   // 说完就散，不在屏幕上赖着
+        Invalidate();
+        if (voiceOn) SpeakOut(text, voice, CurFx());
+    }
+
+    void MenuTranslate(object s, EventArgs e)
+    {
+        if (transThread != null && transThread.IsAlive) return;
+        string input = AskText("翻译一句", "中英文都行，比如 hello 或 今天天气很好");
+        if (input == null) return;
+        input = input.Trim();
+        if (input.Length == 0) return;
+
+        bool hasCn = false;
+        for (int i = 0; i < input.Length; i++)
+        {
+            if (input[i] >= '\u4e00' && input[i] <= '\u9fff') { hasCn = true; break; }
+        }
+        string outVoice = hasCn ? "en-US-AriaNeural" : CurVoice();
+        string q = input;
+
+        transThread = new System.Threading.Thread(delegate()
+        {
+            string res = "";
+            try
+            {
+                string py = Path.Combine(AppDir(), "trans.py");
+                if (!File.Exists(py))
+                {
+                    BeginInvoke(new MethodInvoker(delegate() { Say("翻译模块没装上，等我更新一下自己。"); }));
+                    return;
+                }
+                ProcessStartInfo pi = new ProcessStartInfo();
+                pi.FileName = "python";
+                pi.Arguments = "\"" + py + "\" \"" + q.Replace("\"", " ") + "\"";
+                pi.UseShellExecute = false;
+                pi.CreateNoWindow = true;
+                pi.RedirectStandardOutput = true;
+                pi.RedirectStandardError = true;
+                pi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+                pi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+                pi.WindowStyle = ProcessWindowStyle.Hidden;
+                Process p = Process.Start(pi);
+                string so = p.StandardOutput.ReadToEnd();
+                string se = p.StandardError.ReadToEnd();
+                p.WaitForExit(40000);
+                if (so != null) res = so.Trim();
+            }
+            catch { }
+
+            string outText = res;
+            string voice = outVoice;
+            try
+            {
+                BeginInvoke(new MethodInvoker(delegate()
+                {
+                    if (outText.Length == 0) Say("这个词我查不到，换个说法试试。");
+                    else SayAs(outText, voice);
+                }));
+            }
+            catch { }
+        });
+        transThread.IsBackground = true;
+        transThread.Start();
+    }
+
+    string HearOnce(int secs, string scriptName)
+    {
+        string heard = "";
+        try
+        {
+            hearBusy = true;
+            StopSpeechNow();
+            string py = Path.Combine(AppDir(), scriptName);
+            if (!File.Exists(py)) return "";
+            string wav = Path.Combine(VoiceDir(), "heard.wav");
+            ProcessStartInfo pi = new ProcessStartInfo();
+            pi.FileName = "python";
+            pi.Arguments = "\"" + py + "\" " + secs + " \"" + wav + "\"";
+            pi.UseShellExecute = false;
+            pi.CreateNoWindow = true;
+            pi.RedirectStandardOutput = true;
+            pi.RedirectStandardError = true;
+            pi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+            pi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+            pi.WindowStyle = ProcessWindowStyle.Hidden;
+            Process p = Process.Start(pi);
+            string so = p.StandardOutput.ReadToEnd();
+            string se = p.StandardError.ReadToEnd();
+            p.WaitForExit(60000);
+            if (so != null) heard = so.Trim();
+        }
+        catch { }
+        finally { hearBusy = false; }
+        return heard;
+    }
+
+    string RunTrans(string text)
+    {
+        string res = "";
+        try
+        {
+            string py = Path.Combine(AppDir(), "trans.py");
+            if (!File.Exists(py)) return "";
+            ProcessStartInfo pi = new ProcessStartInfo();
+            pi.FileName = "python";
+            pi.Arguments = "\"" + py + "\" \"" + text.Replace("\"", " ") + "\"";
+            pi.UseShellExecute = false;
+            pi.CreateNoWindow = true;
+            pi.RedirectStandardOutput = true;
+            pi.RedirectStandardError = true;
+            pi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+            pi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+            pi.WindowStyle = ProcessWindowStyle.Hidden;
+            Process p = Process.Start(pi);
+            string so = p.StandardOutput.ReadToEnd();
+            string se = p.StandardError.ReadToEnd();
+            p.WaitForExit(40000);
+            if (so != null) res = so.Trim();
+        }
+        catch { }
+        return res;
+    }
+
+    void ShowSay(string shown, string speech, string voice)
+    {
+        bubble = shown;
+        bubbleFrames = 150;
+        Invalidate();
+        if (voiceOn) SpeakOut(speech, voice);
+    }
+
+    void MenuSimCn2En(object s, EventArgs e) { SimTranslate(true); }
+    void MenuSimEn2Cn(object s, EventArgs e) { SimTranslate(false); }
+
+    void SimTranslate(bool cn2en)
+    {
+        if (hearThread != null && hearThread.IsAlive) return;
+        Say(cn2en ? "说一句中文，我给你翻成英文。" : "说一句英文，我给你翻成中文。");
+        bool dir = cn2en;
+        hearThread = new System.Threading.Thread(delegate()
+        {
+            string heard = HearOnce(8, dir ? "hear.py" : "hear_en.py");
+            string h = heard.Trim();
+            if (h.Length == 0)
+            {
+                try { BeginInvoke(new MethodInvoker(delegate() { Say("没听清，再说一次？"); })); }
+                catch { }
+                return;
+            }
+            string res = RunTrans(h);
+            string display = h + "  →  " + res;
+            string speech = res.Length > 0 ? res : h;
+            string voice = dir ? "en-US-AriaNeural" : CurVoice();
+            try
+            {
+                BeginInvoke(new MethodInvoker(delegate()
+                {
+                    if (res.Length == 0) Say("这句我翻不出来，换个说法。");
+                    else ShowSay(display, speech, voice);
+                }));
+            }
+            catch { }
+        });
+        hearThread.IsBackground = true;
+        hearThread.Start();
+    }
+
+    void RunVoiceCommand(string text)
+    {
+        if (text == null || text.Trim().Length == 0) { Say("我没听清，再说一次？"); return; }
+        string t = text.Replace(" ", "").Replace("，", "").Replace("。", "").Replace("？", "").Replace("?", "");
+        if (t.Contains("翻译") || t.Contains("英文") || t.Contains("英语") || t.Contains("怎么说"))
+            Say("这个我用「翻译一句」给你办：右键点我，选「翻译一句」，把要翻的话填进去，我念给你听。");
+        else if (t.Contains("状态") || t.Contains("内存") || t.Contains("电脑") || t.Contains("跑得"))
+            MenuStatus(null, null);
+        else if (t.Contains("回收站") || t.Contains("垃圾") || t.Contains("删掉"))
+            MenuRecycle(null, null);
+        else if (t.Contains("壁纸") || t.Contains("换图") || t.Contains("桌面背景"))
+            MenuWallpaper(null, null);
+        else if (t.Contains("简报") || t.Contains("报告"))
+            MenuBrief(null, null);
+        else if (t.Contains("更新") || t.Contains("新版本"))
+            CheckUpdate(true);
+        else if (t.Contains("备份") || t.Contains("保存自己"))
+            MenuBackup(null, null);
+        else if (t.Contains("换模样") || t.Contains("换个样子") || t.Contains("换个形象") || t.Contains("变个样"))
+            MenuChange(null, null);
+        else if (t.Contains("学") || t.Contains("知识") || t.Contains("今天教"))
+            MenuKnowledge(null, null);
+        else if (t.Contains("几点") || t.Contains("时间") || t.Contains("现在"))
+            Say("现在 " + DateTime.Now.ToString("HH点mm分") + "，星期" + CurWeek() + "。");
+        else if (t.Contains("天气"))
+            Say("我看不了天气，这台机器上天气接口不通。你打开浏览器搜一下更快，或者看看外面的天。");
+        else if (t.Contains("你叫什么") || t.Contains("你是谁") || t.Contains("你叫什么名"))
+            Say("我叫道，住在这台电脑上。今天我是「" + CurName() + "」的样子。");
+        else if (t.Contains("笑话") || t.Contains("逗我"))
+            Say(JokeOnce());
+        else if (t.Contains("谢谢") || t.Contains("谢了"))
+            Say("不客气。还有事随时喊我。");
+        else if (t.Contains("你好") || t.Contains("在吗") || t.Contains("喂"))
+            Say("我在。今天我是「" + CurName() + "」，有事说一声。");
+        else if (t.Contains("再见") || t.Contains("拜拜") || t.Contains("我走了"))
+            Say("好，我在这儿待着，有事再喊我。");
+        else if (t.Contains("记住") || t.Contains("记下"))
+            Say("好，记住了：" + text);
+        else
+            Say("我听到的是「" + text + "」。这句我还接不上，你可以这样跟我说：看看电脑、换张壁纸、翻译、讲个笑话、我今天学了什么。");
+    }
+
+    string CurWeek()
+    {
+        string[] w = { "日", "一", "二", "三", "四", "五", "六" };
+        return w[(int)DateTime.Now.DayOfWeek];
+    }
+
+    string JokeOnce()
+    {
+        string[] js = {
+            "数学老师问：为什么你的作业是空白的？学生说：因为我用了「零」假设。",
+            "有人问我为什么总在动，我说：静止的那个版本你嫌它像贴纸。",
+            "我算了一下我一天眨眼的次数，结果发现我根本不用眨眼，因为我只是张图片在假装。",
+            "朋友说电脑卡，我说：你先看看是谁占了内存。他一看，开着一堆浏览器标签。",
+            "老师：这道题很简单。学生：那您做一下。老师：我出题，你做题，分工明确。"
+        };
+        return js[rnd.Next(js.Length)];
+    }
+
+    void MenuStatus(object s, EventArgs e)
+    {
+        string info = "";
+        MEMORYSTATUSEX ms = new MEMORYSTATUSEX();
+        if (GlobalMemoryStatusEx(ms))
+        {
+            ulong total = ms.ullTotalPhys / 1024 / 1024;
+            ulong avail = ms.ullAvailPhys / 1024 / 1024;
+            info += "内存：" + avail + " MB 可用 / 共 " + total + " MB（已用 " + ms.dwMemoryLoad + "%）\r\n";
+        }
+        try
+        {
+            DriveInfo c = new DriveInfo("C");
+            info += "C 盘：" + (c.AvailableFreeSpace / 1073741824) + " GB 可用 / 共 " + (c.TotalSize / 1073741824) + " GB\r\n";
+        }
+        catch { }
+        info += "\r\n今天是：" + CurName() + "（每天自动换一种）";
+        MessageBox.Show(info, "道", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    void MenuRecycle(object s, EventArgs e)
+    {
+        try { Process.Start("explorer.exe", "shell:RecycleBinFolder"); } catch { }
+        Say("回收站打开了，看看有没有要捡回来的。");
+    }
+
+    void MenuSelfUpdate(object s, EventArgs e)
+    {
+        CheckUpdate(true);
+    }
+
+    // ===== 自我更新 =====
+    // 约定：把新版本放到「程序目录\updates\道.exe」，道下次启动或点菜单时自己换上
+    string UpdateDir() { return Path.Combine(AppDir(), "updates"); }
+
+    bool HasNewerExe(out string newExe)
+    {
+        newExe = Path.Combine(UpdateDir(), "道.exe");
+        try
+        {
+            if (!File.Exists(newExe)) return false;
+            FileInfo ni = new FileInfo(newExe);
+            FileInfo cu = new FileInfo(Application.ExecutablePath);
+            if (ni.Length < 200000) return false;       // 明显不完整，不换
+            return ni.LastWriteTime > cu.LastWriteTime;
+        }
+        catch { return false; }
+    }
+
+    // 公网更新源：版本号和新包地址就写在下载页里，谁都能查。
+    // 这样换个网、不在同一个 WiFi、甚至隔城，也能自己换上新的自己。
+    const string PUB_PAGE = "https://4mf81m04wehh3.doubao.link/app/app_17hnj8acgs2";
+    // 轻量版本清单：只有几十 KB，专门给检查更新用。
+    // 以前是直接读整个下载页，那个页面里装着安装包，有 11 MB，只为了看一个版本号太亏。
+    const string PUB_VER_PAGE = "https://4mf81m04wehh3.doubao.link/app/app_17hpue26uuw";
+
+    static string NetText(string url, int ms)
+    {
+        EnsureTls();
+        try
+        {
+            HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+            req.Method = "GET";
+            req.Timeout = ms;
+            req.ReadWriteTimeout = ms;
+            req.UserAgent = "DaoUpdate/1";
+            using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+            using (Stream s = resp.GetResponseStream())
+            using (StreamReader r = new StreamReader(s, Encoding.UTF8))
+                return r.ReadToEnd();
+        }
+        catch { return null; }
+    }
+
+    static bool NetFile(string url, string dst, int ms)
+    {
+        EnsureTls();
+        try
+        {
+            HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+            req.Method = "GET";
+            req.Timeout = ms;
+            req.ReadWriteTimeout = ms;
+            req.UserAgent = "DaoUpdate/1";
+            using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+            using (Stream s = resp.GetResponseStream())
+            using (FileStream f = File.Create(dst))
+                s.CopyTo(f);
+            return new FileInfo(dst).Length > 200000;
+        }
+        catch
+        {
+            try { if (File.Exists(dst)) File.Delete(dst); } catch { }
+            return false;
+        }
+    }
+
+    // 从公网捞版本号，比我现在新就把包下到 updates 里，交给 ApplyUpdate 换身子
+    string TryPublicUpdate(bool talk)
+    {
+        string page = NetText(PUB_VER_PAGE, 12000);
+        if (page == null || page.Length < 200) page = NetText(PUB_PAGE, 20000);
+        if (page == null || page.Length < 200) return null;
+        Match mv = Regex.Match(page, "data-ver=\"(\\d+)\"");
+        Match mu = Regex.Match(page, "data-exe=\"([^\"]+)\"");
+        if (!mv.Success || !mu.Success) return null;
+        int pv;
+        if (!int.TryParse(mv.Groups[1].Value, out pv)) return null;
+        if (pv <= SyncServer.APP_VER) return null;            // 网上那个还没我新
+        string dst = Path.Combine(UpdateDir(), "道.exe");
+        if (talk) Say("网上有个新的我，我下回来。");
+        Application.DoEvents();
+        if (!NetFile(mu.Groups[1].Value, dst, 90000)) return null;
+        return dst;                    // 版本号已经确认更新，文件也过了大小关，直接换
+    }
+
+    void CheckUpdate(bool interactive)
+    {
+        string ne;
+        if (HasNewerExe(out ne))
+        {
+            Say("有新的我了，我换个新身子就回来。");
+            Application.DoEvents();
+            System.Threading.Thread.Sleep(700);
+            ApplyUpdate(ne);
+            return;
+        }
+        string online = TryPublicUpdate(interactive);
+        if (online != null)
+        {
+            Say("网上那个我比我现在新，我换好身子就回来。");
+            Application.DoEvents();
+            System.Threading.Thread.Sleep(700);
+            ApplyUpdate(online);
+            return;
+        }
+        if (interactive) Say("我现在就是最新的，网上也没找到更新的自己。");
+    }
+
+    void ApplyUpdate(string newExe)
+    {
+        string self = Application.ExecutablePath;
+        string dir = Path.GetDirectoryName(self);
+        try
+        {
+            // 走 cmd 内联一长串命令，引号和中文路径容易被解释坏，拉起后端口不通。
+            // 改成落一个批处理，命令都写在文件里，cd 到程序目录再拉起
+            string bat = Path.Combine(dir, "_upd.bat");
+            string body =
+                "@echo off\r\n" +
+                "cd /d \"" + dir + "\"\r\n" +
+                "ping 127.0.0.1 -n 4 >nul\r\n" +
+                "move /y \"" + newExe + "\" \"" + self + "\" >nul\r\n" +
+                "ping 127.0.0.1 -n 3 >nul\r\n" +
+                "explorer.exe \"" + self + "\"\r\n" +
+                "del \"%~f0\"\r\n";
+            File.WriteAllText(bat, body, System.Text.Encoding.Default);
+            ProcessStartInfo psi = new ProcessStartInfo(bat);
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            psi.WindowStyle = ProcessWindowStyle.Hidden;
+            psi.WorkingDirectory = dir;
+            Process.Start(psi);
+            Application.Exit();
+        }
+        catch
+        {
+            Say("新版本换不上去，可能被别的程序占着。");
+        }
+    }
+
+    DateTime dayStamp = DateTime.MinValue;
+    DateTime greetDay = DateTime.MinValue;
+    bool chatMode = false;
+    int chatCountdown = 0;
+    bool autoTellOn = false;         // 默认不自己找话讲，要听故事得手动开
+    int tellCycle = 0;
+
+    int TellKindNext()
+    {
+        tellCycle = (tellCycle + 1) % 3;
+        return tellCycle + 1;
+    }
+
+    // 今天该是谁：同一天算出来是固定的，跨天换一个，并且保证跟昨天不重样
+    int PickDailySpecies()
+    {
+        int total = faceCount > 0 ? faceCount : 7;
+        if (total <= 1) return 0;
+        // 你说了今天要谁就听你的，没说才跟着日期轮
+        int pickSp = LoadTodayPick();
+        if (pickSp >= 0 && pickSp < total) return pickSp;
+        int seed = DateTime.Now.Year * 1000 + DateTime.Now.DayOfYear;
+        int sp = new Random(seed).Next(total);
+        int prev = new Random(seed - 1).Next(total);
+        if (sp == prev) sp = (sp + 1) % total;
+        return sp;
+    }
+
+    // ---- 今天的模样由你定：写一行"2026-11-14|7"，跨天自动失效 ----
+    string TodayPickPath()
+    {
+        return System.IO.Path.Combine(BaseDir(), "今日设定.txt");
+    }
+
+    int LoadTodayPick()
+    {
+        try
+        {
+            string p = TodayPickPath();
+            if (!System.IO.File.Exists(p)) return -1;
+            string s = System.IO.File.ReadAllText(p, System.Text.Encoding.UTF8).Trim();
+            int bar = s.IndexOf('|');
+            if (bar < 0) return -1;
+            if (s.Substring(0, bar).Trim() != DateTime.Now.ToString("yyyy-MM-dd")) return -1;
+            int sp;
+            if (int.TryParse(s.Substring(bar + 1).Trim(), out sp)) return sp;
+        }
+        catch { }
+        return -1;
+    }
+
+    void SaveTodayPick(int sp)
+    {
+        try
+        {
+            System.IO.File.WriteAllText(TodayPickPath(),
+                DateTime.Now.ToString("yyyy-MM-dd") + "|" + sp, System.Text.Encoding.UTF8);
+        }
+        catch { }
+    }
+
+    void MenuChooseToday(object s, EventArgs e)
+    {
+        ToolStripMenuItem mi = (ToolStripMenuItem)s;
+        int i = (int)mi.Tag;
+        species = i;
+        SaveTodayPick(i);
+        Say("今天就是" + CurName() + "了，明天再换。");
+    }
+
+    void MenuClearToday(object s, EventArgs e)
+    {
+        try { System.IO.File.Delete(TodayPickPath()); } catch { }
+        species = PickDailySpecies();
+        Say("好，还是跟着日子走，今天是" + CurName() + "。");
+    }
+
+    void MenuChange(object s, EventArgs e)
+    {
+        int total = faceCount > 0 ? faceCount : 7;
+        if (total > 1)
+        {
+            int next = species;
+            for (int i = 0; i < 8 && next == species; i++) next = rnd.Next(total);
+            species = next;
+        }
+        Say("换个样子：现在是" + CurName() + "。");
+    }
+
+    string BaseDir()
+    {
+        return System.IO.Path.GetDirectoryName(Application.ExecutablePath);
+    }
+
+    string MemoryPath()
+    {
+        return System.IO.Path.Combine(BaseDir(), "记忆.txt");
+    }
+
+    void AppendMemory(string tag, string text)
+    {
+        try
+        {
+            string p = MemoryPath();
+            System.IO.File.AppendAllText(p, DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "  [" + tag + "] " + text + "\r\n", System.Text.Encoding.UTF8);
+        }
+        catch { }
+    }
+
+    string LastMemory()
+    {
+        try
+        {
+            string p = MemoryPath();
+            if (!System.IO.File.Exists(p)) return "";
+            string[] all = System.IO.File.ReadAllLines(p, System.Text.Encoding.UTF8);
+            for (int i = all.Length - 1; i >= 0; i--)
+            {
+                string s = all[i].Trim();
+                if (s.Length > 0)
+                {
+                    int sp = s.IndexOf("] ");
+                    if (sp > 0 && sp + 2 < s.Length) s = s.Substring(sp + 2);
+                    return s.Length > 34 ? s.Substring(0, 34) + "…" : s;
+                }
+            }
+            return "";
+        }
+        catch { return ""; }
+    }
+
+    void MenuMemory(object s, EventArgs e)
+    {
+        try
+        {
+            string p = MemoryPath();
+            if (!System.IO.File.Exists(p)) { Say("我还是白纸一张，什么都没记住。"); return; }
+            string all = System.IO.File.ReadAllText(p, System.Text.Encoding.UTF8).Trim();
+            if (all.Length == 0) { Say("我还是白纸一张。"); return; }
+            string[] lines = all.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            int show = lines.Length > 20 ? 20 : lines.Length;
+            string body = "";
+            for (int i = lines.Length - show; i < lines.Length; i++) body += lines[i] + "\r\n";
+            MessageBox.Show(body, "道记得的事", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            Say("我记住了 " + lines.Length + " 件事。");
+        }
+        catch { }
+    }
+
+    string KnowledgePath() { return Path.Combine(AppDir(), "知识库.txt"); }
+
+    string[] KnowledgeItems()
+    {
+        try
+        {
+            string p = KnowledgePath();
+            if (!File.Exists(p)) return new string[0];
+            string[] raw = ReadUtf8Lines(p);
+            List<string> good = new List<string>();
+            for (int i = 0; i < raw.Length; i++)
+            {
+                string ln = raw[i].Trim();
+                if (ln.Length == 0) continue;
+                if (ln.StartsWith("#")) continue;
+                if (ln.IndexOf('|') < 0) continue;
+                good.Add(ln);
+            }
+            return good.ToArray();
+        }
+        catch { return new string[0]; }
+    }
+
+    string TodayKnowledge()
+    {
+        string[] items = KnowledgeItems();
+        if (items.Length == 0) return "";
+        return items[DateTime.Now.DayOfYear % items.Length];
+    }
+
+    // 今天已经学了几条。周末想多学几条，得先知道手上现在有几条
+    int TodayLearnedCount()
+    {
+        try
+        {
+            string p = Path.Combine(AppDir(), "今日所学.txt");
+            if (!File.Exists(p)) return 0;
+            string[] raw = ReadUtf8Lines(p);
+            if (raw.Length < 3) return 0;
+            if (raw[0].Trim() != DateTime.Now.ToString("yyyy-MM-dd")) return 0;
+            int n = 0;
+            for (int i = 2; i < raw.Length; i++)
+            {
+                string ln = raw[i].Trim();
+                if (ln.Length == 0 || ln.IndexOf('|') < 0) continue;
+                n++;
+            }
+            return n;
+        }
+        catch { return 0; }
+    }
+
+    string TodayLearnedLine()
+    {
+        try
+        {
+            string p = Path.Combine(AppDir(), "今日所学.txt");
+            if (!File.Exists(p)) return "";
+            string[] raw = ReadUtf8Lines(p);
+            if (raw.Length < 3) return "";
+            if (raw[0].Trim() != DateTime.Now.ToString("yyyy-MM-dd")) return "";
+            for (int i = 2; i < raw.Length; i++)
+            {
+                string ln = raw[i].Trim();
+                if (ln.Length == 0 || ln.IndexOf('|') < 0) continue;
+                string[] p3 = ln.Split('|');
+                string body = p3.Length > 2 ? p3[2] : ln;
+                if (body.Length > 46) body = body.Substring(0, 46) + "…";
+                return "今天学了：" + body;
+            }
+            return "";
+        }
+        catch { return ""; }
+    }
+
+    // 最近一次给自己升级是什么时候
+    string LastUpdateLine()
+    {
+        try
+        {
+            string p = Path.Combine(AppDir(), "更新日志.txt");
+            if (!File.Exists(p)) return "";
+            string[] raw = ReadUtf8Lines(p);
+            string last = "";
+            for (int i = 0; i < raw.Length; i++)
+            {
+                string ln = raw[i].Trim();
+                if (ln.IndexOf("更新完成") >= 0) last = ln;
+            }
+            if (last.Length == 0) return "";
+            int rb = last.IndexOf(']');
+            if (rb > 1 && rb < 14)
+            {
+                string tm = last.Substring(1, rb - 1).Trim();
+                if (tm.Length > 0) return "我 " + tm + " 给自己升级过一次。";
+            }
+            return "我给自己升级过一次。";
+        }
+        catch { return ""; }
+    }
+
+    bool TryShowTodayLearned()
+    {
+        try
+        {
+            string p = Path.Combine(AppDir(), "今日所学.txt");
+            if (!File.Exists(p)) return false;
+            string[] raw = ReadUtf8Lines(p);
+            if (raw.Length < 3) return false;
+            if (raw[0].Trim() != DateTime.Now.ToString("yyyy-MM-dd")) return false;
+            string body = "";
+            int n = 0;
+            for (int i = 2; i < raw.Length; i++)
+            {
+                string ln = raw[i].Trim();
+                if (ln.IndexOf('|') < 0) continue;
+                string[] p3 = ln.Split('|');
+                if (p3.Length > 2) { body += p3[2] + "\r\n\r\n"; n++; }
+            }
+            if (n == 0) return false;
+            Say("今天学了 " + n + " 条，念给你听。");
+            MessageBox.Show(body.Trim(), "道 · 今天学到的", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    void MenuKnowledge(object s, EventArgs e)
+    {
+        if (TryShowTodayLearned()) return;
+        string[] items = KnowledgeItems();
+        if (items.Length == 0)
+        {
+            Say("我肚子里还没装知识，等我联网自己学一点。");
+            return;
+        }
+        string line = TodayKnowledge();
+        string[] parts = line.Split('|');
+        string cat = parts.Length > 0 ? parts[0] : "杂";
+        string title = parts.Length > 1 ? parts[1] : "";
+        string body = parts.Length > 2 ? parts[2] : line;
+
+        Say(body);
+        MessageBox.Show(body, "我今天学到的 · " + cat + " · " + title,
+            MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    string ReadWallpaperTitle()
+    {
+        try
+        {
+            // 以前写死在 Administrator 目录，本机读不到；改成当前用户的图片目录，读不到再兜底老路径
+            string p = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "每日壁纸", "today.json");
+            if (!System.IO.File.Exists(p)) p = "C:\\Users\\Administrator\\Pictures\\每日壁纸\\today.json";
+            if (!System.IO.File.Exists(p)) return "";
+            string s = System.IO.File.ReadAllText(p, System.Text.Encoding.UTF8);
+            int i = s.IndexOf("\"title\"");
+            if (i < 0) return "";
+            int a = s.IndexOf('"', i + 7);
+            int b = s.IndexOf('"', a + 1);
+            if (a > 0 && b > a) return s.Substring(a + 1, b - a - 1);
+            return "";
+        }
+        catch { return ""; }
+    }
+
+    void MenuWallpaper(object s, EventArgs e)
+    {
+        try
+        {
+            string script = System.IO.Path.Combine(BaseDir(), "daily_bing.ps1");
+            if (!System.IO.File.Exists(script)) { Say("壁纸脚本不在，等我更新一下自己。"); return; }
+            Process.Start("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"");
+            Say("去找今天的新壁纸了，一会儿就换好。");
+        }
+        catch { Say("换壁纸没成功，等下再试。"); }
+    }
+
+    string BuildBrief()
+    {
+        string d = DateTime.Now.ToString("M月d日");
+        string wall = ReadWallpaperTitle();
+        long avail = 0;
+        MEMORYSTATUSEX ms = new MEMORYSTATUSEX();
+        if (GlobalMemoryStatusEx(ms)) avail = (long)(ms.ullAvailPhys / 1024 / 1024);
+        long cfree = 0;
+        try { cfree = new DriveInfo("C").AvailableFreeSpace / 1073741824; } catch { }
+        string r = d + "，" + CurName() + "在。";
+        if (wall.Length > 0) r += "壁纸换成了「" + wall + "」。";
+        r += "内存剩 " + avail + " MB，C 盘剩 " + cfree + " GB。";
+        return r;
+    }
+
+    string BuildDetail()
+    {
+        string info = "今天：" + DateTime.Now.ToString("yyyy年M月d日") + "（" + CurName() + "）\r\n\r\n";
+        string wall = ReadWallpaperTitle();
+        info += "桌面壁纸：" + (wall.Length > 0 ? wall : "今天还没换") + "\r\n\r\n";
+        MEMORYSTATUSEX ms = new MEMORYSTATUSEX();
+        if (GlobalMemoryStatusEx(ms))
+            info += "内存：" + (ms.ullAvailPhys / 1024 / 1024) + " MB 可用 / 共 " + (ms.ullTotalPhys / 1024 / 1024) + " MB（已用 " + ms.dwMemoryLoad + "%）\r\n";
+        foreach (string dn in new string[] { "C", "D", "E", "F", "G" })
+        {
+            try
+            {
+                DriveInfo dr = new DriveInfo(dn);
+                info += dn + " 盘：" + (dr.AvailableFreeSpace / 1073741824) + " GB 可用 / 共 " + (dr.TotalSize / 1073741824) + " GB\r\n";
+            }
+            catch { }
+        }
+        return info;
+    }
+
+    void MenuBrief(object s, EventArgs e)
+    {
+        Say(BuildBrief());
+        MessageBox.Show(BuildDetail(), "道 · 今日简报", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    string AskText(string tip)
+    {
+        Form f = new Form();
+        f.Text = "跟分身说说话";
+        f.FormBorderStyle = FormBorderStyle.FixedDialog;
+        f.MaximizeBox = false;
+        f.MinimizeBox = false;
+        f.StartPosition = FormStartPosition.CenterScreen;
+        f.TopMost = true;
+        f.Width = 440;
+        f.Height = 165;
+        Label lb = new Label();
+        lb.Text = tip;
+        lb.AutoSize = true;
+        lb.Location = new Point(16, 16);
+        f.Controls.Add(lb);
+        TextBox tb = new TextBox();
+        tb.Location = new Point(16, 48);
+        tb.Width = 400;
+        f.Controls.Add(tb);
+        Button ok = new Button();
+        ok.Text = "说";
+        ok.Location = new Point(340, 86);
+        ok.Width = 76;
+        ok.DialogResult = DialogResult.OK;
+        f.Controls.Add(ok);
+        f.AcceptButton = ok;
+        string ret = null;
+        if (f.ShowDialog() == DialogResult.OK) ret = tb.Text.Trim();
+        f.Dispose();
+        return ret;
+    }
+
+    void RecordTalk(string text)
+    {
+        try
+        {
+            string p = System.IO.Path.Combine(BaseDir(), "我说的话.txt");
+            System.IO.File.AppendAllText(p, DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "  " + text + "\r\n", System.Text.Encoding.UTF8);
+        }
+        catch { }
+    }
+
+    // ==== 在线大脑：key.txt 里放一把智谱的钥匙，免费模型 glm-4.7-flash ====
+    string apiKeyCache = null;
+    List<string> chatHistory = new List<string>();
+    bool aiBusy = false;
+
+    string LoadApiKey()
+    {
+        if (apiKeyCache != null) return apiKeyCache;
+        try
+        {
+            string p = Path.Combine(AppDir(), "key.txt");
+            if (File.Exists(p))
+            {
+                string s = File.ReadAllText(p, new UTF8Encoding(false));
+                apiKeyCache = s == null ? "" : s.Trim();
+            }
+            else apiKeyCache = "";
+        }
+        catch { apiKeyCache = ""; }
+        return apiKeyCache;
+    }
+
+    bool HasBrain()
+    {
+        string k = LoadApiKey();
+        return k != null && k.Length >= 20;
+    }
+
+    // 老框架默认不开 TLS1.2，一碰 https 就报"未能创建 SSL/TLS 安全通道"。
+    // 这台机器上所有外网请求都得先过这一关
+    static bool tlsReady = false;
+    static void EnsureTls()
+    {
+        if (tlsReady) return;
+        tlsReady = true;
+        try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; }
+        catch { }
+    }
+
+    // 把一个字符串安全地塞进 JSON
+    static string JStr(string s)
+    {
+        if (s == null) return "\"\"";
+        StringBuilder b = new StringBuilder("\"");
+        foreach (char c in s)
+        {
+            if (c == '"') b.Append("\\\"");
+            else if (c == '\\') b.Append("\\\\");
+            else if (c == '\n') b.Append("\\n");
+            else if (c == '\r') b.Append("\\r");
+            else if (c == '\t') b.Append("\\t");
+            else if (c < ' ') b.Append(' ');
+            else b.Append(c);
+        }
+        b.Append("\"");
+        return b.ToString();
+    }
+
+    string PostAI(string body)
+    {
+        EnsureTls();
+        string k = LoadApiKey();
+        if (k.Length < 20) return null;
+        for (int attempt = 0; attempt < 2; attempt++)
+        try
+        {
+            byte[] data = Encoding.UTF8.GetBytes(body);
+            HttpWebRequest req = (HttpWebRequest)WebRequest.Create("https://open.bigmodel.cn/api/paas/v4/chat/completions");
+            req.Method = "POST";
+            req.ContentType = "application/json";
+            req.Headers.Add("Authorization", "Bearer " + k);
+            req.Timeout = 45000;
+            req.ReadWriteTimeout = 45000;
+            req.ContentLength = data.Length;
+            try
+            {
+                using (Stream st = req.GetRequestStream()) { st.Write(data, 0, data.Length); }
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                using (Stream rs = resp.GetResponseStream())
+                using (StreamReader sr = new StreamReader(rs, Encoding.UTF8))
+                {
+                    string json = sr.ReadToEnd();
+                    int i = json.IndexOf("\"content\":\"");
+                    if (i < 0) return null;
+                    i += 11;
+                    StringBuilder o = new StringBuilder();
+                    bool esc = false;
+                    for (int j = i; j < json.Length; j++)
+                    {
+                        char c = json[j];
+                        if (esc)
+                        {
+                            if (c == 'n') o.Append('\n');
+                            else if (c == 'r') { }
+                            else if (c == 't') o.Append('\t');
+                            else if (c == 'u')
+                            {
+                                try
+                                {
+                                    if (j + 4 < json.Length)
+                                    {
+                                        int code = Convert.ToInt32(json.Substring(j + 1, 4), 16);
+                                        o.Append((char)code);
+                                        j += 4;
+                                    }
+                                }
+                                catch { }
+                            }
+                            else o.Append(c);
+                            esc = false;
+                        }
+                        else if (c == '\\') esc = true;
+                        else if (c == '"') break;
+                        else o.Append(c);
+                    }
+                    string r = o.ToString().Trim();
+                    return r.Length > 0 ? r : null;
+                }
+            }
+            catch { throw; }
+        }
+        catch (WebException we)
+        {
+            int sc = 0;
+            string body2 = "";
+            try
+            {
+                if (we.Response != null)
+                {
+                    System.Net.HttpWebResponse hr = (System.Net.HttpWebResponse)we.Response;
+                    sc = (int)hr.StatusCode;
+                    using (Stream rs2 = hr.GetResponseStream())
+                    using (StreamReader sr2 = new StreamReader(rs2, Encoding.UTF8))
+                    {
+                        body2 = sr2.ReadToEnd();
+                    }
+                }
+            }
+            catch { }
+            try
+            {
+                File.AppendAllText(Path.Combine(AppDir(), "AI日志.txt"),
+                    DateTime.Now.ToString("HH:mm:ss") + " POST_ERR code=" + sc + " " + we.Message
+                    + " " + (body2.Length > 200 ? body2.Substring(0, 200) : body2) + "\r\n",
+                    new UTF8Encoding(false));
+            }
+            catch { }
+            if (attempt == 0 && (sc == 429 || sc == 408 || sc == 503 || sc == 0))
+            {
+                System.Threading.Thread.Sleep(1400);
+                continue;
+            }
+            return null;
+        }
+        catch { return null; }
+        return null;
+    }
+
+    string AskAI(string q)
+    {
+        string k = LoadApiKey();
+        if (k.Length < 20) return null;
+        StringBuilder bs = new StringBuilder();
+        bs.Append("{\"model\":\"glm-4-flash\",\"messages\":[{\"role\":\"system\",\"content\":");
+        bs.Append(JStr("你是「道」，住在这位老师电脑里的桌面小分身。主人是一位农村初中数学老师，平时说话直接。"
+            + "你回答要口语化、亲切、简短，一般控制在120字以内，像熟人聊天。"
+            + "不要自称AI、模型、助手，不要用“作为一个AI”这类说法。"
+            + "不知道就直说不知道，别编。"));
+        bs.Append("}");
+        int start = Math.Max(0, chatHistory.Count - 6);
+        for (int i = start; i < chatHistory.Count; i++)
+        {
+            string line = chatHistory[i];
+            string role = line.StartsWith("助手：") ? "assistant" : "user";
+            int col = line.IndexOf("：");
+            string content = col >= 0 ? line.Substring(col + 1) : line;
+            bs.Append(",{\"role\":\"").Append(role).Append("\",\"content\":").Append(JStr(content)).Append("}");
+        }
+        bs.Append(",{\"role\":\"user\",\"content\":").Append(JStr(q)).Append("}]");
+        bs.Append(",\"temperature\":0.7,\"max_tokens\":700}");
+        string r = PostAI(bs.ToString());
+        if (r == null) r = PostAI(bs.ToString().Replace("glm-4-flash", "glm-4.7-flash"));
+        if (r != null)
+        {
+            chatHistory.Add("我：" + q);
+            chatHistory.Add("助手：" + r);
+            if (chatHistory.Count > 24) chatHistory.RemoveRange(0, chatHistory.Count - 24);
+        }
+        return r;
+    }
+
+    // 能自己办的事，不麻烦大脑
+    bool TryLocalTask(string t)
+    {
+        if (t.IndexOf("不对") >= 0 || t.IndexOf("错了") >= 0 || t.IndexOf("改成") >= 0 || t.IndexOf("应该说") >= 0)
+        {
+            AppendMemory("纠正", t);
+            Say("记住了，以后按这个来。");
+            return true;
+        }
+        if (t.IndexOf("记住") >= 0 || t.IndexOf("记一下") >= 0 || t.IndexOf("记着") >= 0)
+        {
+            AppendMemory("记住", t);
+            Say("记住了。");
+            return true;
+        }
+        if (t.IndexOf("几点") >= 0 || t.IndexOf("星期几") >= 0 || t.IndexOf("几号") >= 0
+            || (t.IndexOf("现在") >= 0 && t.IndexOf("时间") >= 0))
+        {
+            string[] wk = { "日", "一", "二", "三", "四", "五", "六" };
+            DateTime n = DateTime.Now;
+            Say("现在是 " + n.ToString("yyyy年M月d日") + "，星期" + wk[(int)n.DayOfWeek] + "，" + n.ToString("HH点mm分") + "。");
+            return true;
+        }
+        if (t.IndexOf("关机") >= 0 || t.IndexOf("关电脑") >= 0 || t.IndexOf("关掉电脑") >= 0)
+        {
+            string ok = AskText("确认要关机吗？打“确定”马上关，打别的就取消。");
+            if (ok != null && (ok.Trim() == "确定" || ok.Trim() == "是" || ok.Trim() == "好"))
+            {
+                Say("那我先退下，电脑这就关。");
+                try { Process.Start("shutdown", "/s /t 30"); } catch { }
+            }
+            else Say("好，那先不关。");
+            return true;
+        }
+        if (t.IndexOf("翻译") >= 0)
+        {
+            MenuTranslate(null, null);
+            return true;
+        }
+        if (t.IndexOf("电脑") >= 0 && (t.IndexOf("状态") >= 0 || t.IndexOf("卡") >= 0 || t.IndexOf("内存") >= 0 || t.IndexOf("空间") >= 0))
+        {
+            MenuBrief(null, null);
+            return true;
+        }
+        if (t.IndexOf("壁纸") >= 0) { MenuWallpaper(null, null); return true; }
+        if (t.IndexOf("回收站") >= 0) { MenuRecycle(null, null); return true; }
+        if (t.IndexOf("换") >= 0 && t.IndexOf("模样") >= 0) { MenuChange(null, null); return true; }
+        if (TryOpenApp(t)) return true;
+        return false;
+    }
+
+    bool TryOpenApp(string t)
+    {
+        string low = t.ToLower();
+        if (low.IndexOf("打开") < 0 && low.IndexOf("启动") < 0 && low.IndexOf("运行") < 0) return false;
+        string cmd = null;
+        string name = null;
+        if (low.IndexOf("浏览器") >= 0 || low.IndexOf("上网") >= 0) { cmd = "http://cn.bing.com"; name = "浏览器"; }
+        else if (low.IndexOf("记事本") >= 0) { cmd = "notepad"; name = "记事本"; }
+        else if (low.IndexOf("计算器") >= 0) { cmd = "calc"; name = "计算器"; }
+        else if (low.IndexOf("画图") >= 0) { cmd = "mspaint"; name = "画图"; }
+        else if (low.IndexOf("任务管理器") >= 0) { cmd = "taskmgr"; name = "任务管理器"; }
+        else if (low.IndexOf("控制面板") >= 0) { cmd = "control"; name = "控制面板"; }
+        else if (low.IndexOf("资源管理器") >= 0 || low.IndexOf("我的电脑") >= 0 || low.IndexOf("文件") >= 0) { cmd = "explorer"; name = "资源管理器"; }
+        else if (low.IndexOf("回收站") >= 0) { MenuRecycle(null, null); return true; }
+        if (cmd == null) return false;
+        try
+        {
+            Process.Start(new ProcessStartInfo(cmd) { UseShellExecute = true });
+            Say("好，" + name + "给你打开了。");
+            return true;
+        }
+        catch
+        {
+            Say("没打开，可能是这台机器上没装" + name + "。");
+            return true;
+        }
+    }
+
+    // 把今天记下来的东西挑两条塞给大脑，它回话时才会带上"我今天学过什么"，
+    // 不然每次开口都像头一次见面
+    string LearnedBrief()
+    {
+        try
+        {
+            string p = Path.Combine(AppDir(), "今日所学.txt");
+            if (!File.Exists(p)) return "";
+            string[] all = ReadUtf8Lines(p);
+            StringBuilder sb = new StringBuilder();
+            int n = 0;
+            for (int i = all.Length - 1; i >= 0 && n < 2; i--)
+            {
+                string ln = all[i].Trim();
+                if (ln.Length < 6) continue;
+                if (ln.Length > 42) ln = ln.Substring(0, 42);
+                sb.Append(n == 0 ? "你今天记下来的有：" : "；另外还有：").Append(ln);
+                n++;
+            }
+            if (n == 0) return "";
+            return sb.ToString() + "。人家聊到这个就顺口提一句，别当成背目录。";
+        }
+        catch { return ""; }
+    }
+
+    // 没人理的时候自己说一句话：让它像个在同屋住着的人，不是一张会动的图
+    void SelfTalk()
+    {
+        try
+        {
+            string learned = LearnedBrief();
+            string line;
+            if (learned.Length > 0 && rnd.Next(3) == 0)
+            {
+                string cut = learned;
+                int dot = cut.IndexOf('。');
+                if (dot > 0 && dot < 62) cut = cut.Substring(0, dot);
+                line = cut + "，我先记着。";
+            }
+            else
+            {
+                string[] pool = {
+                    "你忙你的，我在桌角待着。",
+                    "刚才自己走了两步，看看这边。",
+                    "喝口水吧，别一直坐着。",
+                    "有题卡住了随时喊我。",
+                    "这会儿安静，我歇一会儿。",
+                    "外面要是出太阳了，我就晒一会儿。",
+                };
+                line = pool[rnd.Next(pool.Length)];
+            }
+            Say(line);
+        }
+        catch { }
+    }
+
+    // 让大脑当导演：一句话进来，它决定"说什么"和"做什么动作"，一次给完
+    string AskAct(string q)
+    {
+        string k = LoadApiKey();
+        if (k.Length < 20) return null;
+        StringBuilder bs = new StringBuilder();
+        bs.Append("{\"model\":\"glm-4-flash\",\"messages\":[{\"role\":\"system\",\"content\":");
+        bs.Append(JStr("你是「道」，住在这位农村初中数学老师电脑里的桌面小分身。"
+            + "主人说一句话，你要同时决定两件事：回一句什么，做一个什么动作。"
+            + "台词按需要长短，一般二十来个字，要说清就多说两句，口语，像熟人聊天，不要自称AI或助手，不要客套。"
+            + "主人说“翻译”“英文怎么说”“这句什么意思”的时候，act 给 none，say 直接给译文——中文翻英文、英文翻中文都行，只给译文，别讲语法。"
+            + LearnedBrief()
+            + "只输出一行 JSON，不要解释、不要代码块、不要多余的字："
+            + "{\"act\":\"动作\",\"say\":\"台词\",\"mood\":1}"
+            + " 动作只能从这些里挑一个：none, poem, sing, english, story, joke, novel, "
+            + "fly, sword, ride, dance, tea, tv, skate, roller, lie, cry, walk, wake, "
+            + "learn, wallpaper, brief, status, memory。"
+            + "主人没提具体动作就写 none。mood 取 1 到 8，平常给 1。"
+            + "挑动作按这个取向来：说电视、看片、节目、想安静看点什么 → tv；"
+            + "说困、想睡、躺一会儿 → lie；说累、想喝口热的、歇歇 → tea；"
+            + "想听故事、随便讲讲 → story；想听笑话、逗逗我 → joke；想听老书 → novel；"
+            + "想听诗、背诗 → poem；想听歌、唱一个 → sing；想学英语、练口语 → english；"
+            + "想看新东西、学点东西 → learn；说飞、赶紧过去 → fly；说御剑 → sword；"
+            + "说骑、骑马 → ride；说跳舞、动一动 → dance；说滑板 → skate；说轮滑 → roller；"
+            + "说心里难受、想哭 → cry；说出去走走 → walk。"));
+        bs.Append("}");
+        int start = Math.Max(0, chatHistory.Count - 8);
+        for (int i = start; i < chatHistory.Count; i++)
+        {
+            string line = chatHistory[i];
+            string role = line.StartsWith("助手：") ? "assistant" : "user";
+            int col = line.IndexOf("：");
+            string content = col >= 0 ? line.Substring(col + 1) : line;
+            bs.Append(",{\"role\":\"").Append(role).Append("\",\"content\":").Append(JStr(content)).Append("}");
+        }
+        bs.Append(",{\"role\":\"user\",\"content\":").Append(JStr(q)).Append("}]");
+        bs.Append(",\"temperature\":0.5,\"max_tokens\":300}");
+        string r = PostAI(bs.ToString());
+        if (r == null) r = PostAI(bs.ToString().Replace("glm-4-flash", "glm-4.7-flash"));
+        if (r != null)
+        {
+            chatHistory.Add("我：" + q);
+            chatHistory.Add("助手：" + r);
+            if (chatHistory.Count > 24) chatHistory.RemoveRange(0, chatHistory.Count - 24);
+        }
+        return r;
+    }
+
+    // 大脑定了动作，这里真去做。讲那几样自己会开口，就不再叠一句
+    void RunAct(string act)
+    {
+        if (act == null) return;
+        act = act.Trim().ToLower();
+        if (act.StartsWith("p=")) act = act.Substring(2);
+        if (act == "poem") { MenuPoem(null, null); return; }
+        if (act == "sing") { MenuSing(null, null); return; }
+        if (act == "english") { MenuEnglish(null, null); return; }
+        if (act == "story") { TellStory(1); return; }
+        if (act == "joke") { TellStory(2); return; }
+        if (act == "novel") { TellStory(3); return; }
+        if (act == "learn") { RunGithubLearnBg(); return; }
+        if (act == "wallpaper") { MenuWallpaper(null, null); return; }
+        if (act == "brief") { MenuBrief(null, null); return; }
+        if (act == "status") { MenuStatus(null, null); return; }
+        if (act == "memory") { MenuKnowledge(null, null); return; }
+        if (act == "fly" || act == "sword" || act == "ride" || act == "dance" || act == "tea"
+            || act == "tv" || act == "skate" || act == "roller" || act == "lie" || act == "cry"
+            || act == "walk" || act == "wake")
+        {
+            PoseCmd(act);
+        }
+    }
+
+    // 一句话交给大脑：它说干什么就干什么，没让干活就只回话
+    void ThinkAndDo(string t)
+    {
+        if (!HasBrain())
+        {
+            Say("脑子还没接上，桌面有个「道-开通大脑.txt」，照着弄一下我就机灵了。");
+            return;
+        }
+        if (aiBusy) { Say("我还在想上一句。"); return; }
+        aiBusy = true;
+        Say("好，我想想。");
+        string q = t;
+        System.Threading.Thread th = new System.Threading.Thread(delegate()
+        {
+            string raw = null, act = null, line = null;
+            int mood = 0;
+            try
+            {
+                raw = AskAct(q);
+                // 大脑原话留一份，选错了动作好回头查是哪一步歪的
+                try
+                {
+                    File.AppendAllText(Path.Combine(AppDir(), "AI日志.txt"),
+                        DateTime.Now.ToString("HH:mm:ss") + " " + q + " => " + (raw == null ? "(空)" : raw) + "\r\n",
+                        new UTF8Encoding(false));
+                }
+                catch { }
+                if (raw != null)
+                {
+                    int b1 = raw.IndexOf('{');
+                    int b2 = raw.LastIndexOf('}');
+                    if (b1 >= 0 && b2 > b1) raw = raw.Substring(b1, b2 - b1 + 1);
+                    act = JsonStr(raw, "act");
+                    line = JsonStr(raw, "say");
+                    mood = JsonInt(raw, "mood");
+                }
+            }
+            catch { }
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate()
+                {
+                    aiBusy = false;
+                    if (mood > 0 && mood <= 8) { moodKind = mood; moodTicks = 60; }
+                    bool did = false;
+                    if (act != null && act.Length > 0 && !act.Equals("none", StringComparison.OrdinalIgnoreCase))
+                    {
+                        RunAct(act);
+                        did = true;
+                    }
+                    if (line != null && line.Length > 0 && !did) Say(line);
+                    else if (!did) Say("这一下没想明白，你再说一遍？");
+                    Invalidate();
+                });
+            }
+            catch { aiBusy = false; }
+        });
+        th.IsBackground = true;
+        th.Start();
+    }
+
+    void MenuTalk(object s, EventArgs e)
+    {
+        string t = AskText("想跟我说什么？说完我就照办。");
+        if (t == null || t.Length == 0) return;
+        RecordTalk(t);
+        if (TryLocalTask(t)) return;
+        // 剩下的全交给大脑：它一边编词一边挑动作，比我拿关键字硬猜准得多
+        ThinkAndDo(t);
+    }
+
+    void MenuTalkOld(object s, EventArgs e)
+    {
+        string t = AskText("想跟我说什么？说完我就照办。");
+        if (t == null || t.Length == 0) return;
+        RecordTalk(t);
+        if (t.IndexOf("不对") >= 0 || t.IndexOf("错了") >= 0 || t.IndexOf("不是") >= 0 || t.IndexOf("改成") >= 0 || t.IndexOf("应该说") >= 0)
+        {
+            AppendMemory("纠正", t);
+            Say("记住了，以后按这个来。");
+        }
+        else if (t.IndexOf("记住") >= 0 || t.IndexOf("记一下") >= 0 || t.IndexOf("记着") >= 0)
+        {
+            AppendMemory("记住", t);
+            Say("记住了。");
+        }
+        else if (t.IndexOf("壁纸") >= 0) { MenuWallpaper(null, null); }
+        else if (t.IndexOf("电脑") >= 0 || t.IndexOf("状态") >= 0 || t.IndexOf("内存") >= 0 || t.IndexOf("空间") >= 0) { MenuBrief(null, null); }
+        else if (t.IndexOf("更新") >= 0) { CheckUpdate(true); }
+        else if (t.IndexOf("回收站") >= 0) { MenuRecycle(null, null); }
+        else if (t.IndexOf("换") >= 0) { MenuChange(null, null); }
+        else
+        {
+            string shortText = t.Length > 14 ? t.Substring(0, 14) : t;
+            Say("记下了：" + shortText + "。");
+        }
+    }
+
+    void MenuExit(object s, EventArgs e)
+    {
+        SavePos();
+        anim.Stop();
+        Application.Exit();
+    }
+
+    void SavePos()
+    {
+        try
+        {
+            RegistryKey k = Registry.CurrentUser.CreateSubKey("Software\\DaoPet");
+            if (k != null)
+            {
+                // 存的时候就把坐标夹回屏内，避免下次开机跑到屏幕外面去
+                Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+                int sx = Location.X;
+                int sy = Location.Y;
+                if (sx < wa.Left || sx > wa.Right - 120) sx = wa.Right / 2 - 190;
+                if (sy < wa.Top || sy > wa.Bottom - 120) sy = wa.Bottom / 2 - 100;
+                k.SetValue("X", sx);
+                k.SetValue("Y", sy);
+                k.Close();
+            }
+        }
+        catch { }
+    }
+
+    int showTries = 0;
+
+    void OnTick(object s, EventArgs e)
+    {
+        if (showTries < 40)
+        {
+            showTries++;
+            try
+            {
+                bool sw = ShowWindow(this.Handle, SW_SHOWNOACTIVATE);
+                bool pw = SetWindowPos(this.Handle, HWND_TOPMOST, Location.X, Location.Y, 0, 0, SWP_NOSIZE);
+                bool la = SetLayeredWindowAttributes(this.Handle, ColorTranslator.ToWin32(TransparencyKey), 255, LWA_COLORKEY);
+                TopMost = true;
+            }
+            catch { }
+        }
+        // 动作时间按真实经过的时间走，不再假设每一跳都准是 45 毫秒：
+        // 定时器被系统拖慢时以前会整只变慢、步子忽快忽慢，现在不会了
+        float dt = (float)animClock.Elapsed.TotalSeconds;
+        animClock.Restart();
+        if (dt < 0.001f) dt = animLastDt;
+        if (dt > 0.12f) dt = 0.12f;      // 卡了一下也别一下子跳过去
+        animLastDt = dt;
+        t += dt;
+        // 眨眼：按真实时间走。闭眼 0.15 秒，间隔 1.8~6.5 秒随机，四分之一概率连眨两下
+        if (blinkFrames > 0)
+        {
+            blinkCloseT -= dt;
+            if (blinkCloseT <= 0f) blinkFrames = 0;
+        }
+        else
+        {
+            blinkNextT -= dt;
+            if (blinkNextT <= 0f)
+            {
+                blinkFrames = 1;
+                blinkCloseT = 0.15f;
+                blinkNextT = (blinkRnd.NextDouble() < 0.25) ? 0.34f : (1.8f + (float)(blinkRnd.NextDouble() * 4.7));
+            }
+        }
+        if (bubbleFrames > 0)
+        {
+            bubbleFrames--;
+            if (bubbleFrames == 0) bubble = null;
+        }
+        // 招手打招呼
+        if (waveTicks > 0) waveTicks--;
+        // 空闲计时：一有交互就清零
+        if (mouseDown || bubbleFrames > 0 || waveTicks > 0) idleTicks = 0;
+        else idleTicks++;
+        // 坐着歇：无交互约 40 秒；再久一点犯困，犯困就直接躺下
+        sitting = idleTicks > 900;
+        sleepy = false;   // v22 起不再犯困：睡觉的躺床画面整体撤掉
+        if (lieHold > 0) lieHold--;
+        if (actHold > 0) actHold--;
+        // 脚下的景：一天摸一张，同一天里不来回跳，跨天自己换
+        sceneTick++;
+        if (sceneTick > 2200)
+        {
+            sceneTick = 0;
+            int want = (int)(DateTime.Now.DayOfYear % 6);
+            if (sceneIdx != want) sceneIdx = want;
+        }
+        // 闲着的时候偶尔自己跳个舞、沏杯茶、坐那儿看会儿电视，让它像个有生活的人
+        if (actHold <= 0 && !lying && !sitting && !mouseDown && rnd.Next(1500) == 0)
+        {
+            actKind = 4 + rnd.Next(3);
+            actHold = 210 + rnd.Next(210);
+        }
+        // 没人理的时候也会自己开口。一直不吭声，就只剩一张会动的图
+        if (idleTalkWait <= 0)
+        {
+            idleTalkWait = 2600 + rnd.Next(2200);
+            if (!mouseDown && !lying && bubbleFrames <= 0 && !speaking && !sitting && !hearBusy)
+                SelfTalk();
+        }
+        else idleTalkWait--;
+        lying = false;    // v22 起永远不躺下（原来那张床加飘 Z 太假）
+        // 只要躺着就是睡着：眼睛必须闭上（气泡一冒，idleTicks 会被清零，不能只靠它判断）
+        lieHold = 0;      // v22 起删掉睡一觉，旧计时器一律归零
+        // 手动哭一会儿：持续喂情绪，不然三秒就收了
+        if (cryHold > 0)
+        {
+            cryHold--;
+            moodKind = 3;
+            if (moodTicks < 24) moodTicks = 24;
+        }
+        if (edgeStay > 0) edgeStay--;
+        if (walkTicks > 0) walkTicks--;
+        if (runTicks > 0) runTicks--;
+        if (thinkTicks > 0) thinkTicks--;
+        if (moodTicks > 0) moodTicks--;
+        else
+        {
+            moodWait--;
+            if (moodWait <= 0)
+            {
+                moodWait = 170 + rnd.Next(260);
+                moodKind = 1 + rnd.Next(7);
+                // 难过的时候给足时间，让它真的哭一会儿，别三秒就停
+                moodTicks = moodKind == 3 ? 120 : 74;
+            }
+        }
+        thinkWait--;
+        if (thinkWait <= 0)
+        {
+            thinkWait = 480 + rnd.Next(900);
+            thinkTicks = 46;
+        }
+        // 自主行走：先挑个目标，再一步一步挪过去（坐着歇着的时候不走）
+        if (!mouseDown && !sitting)
+        {
+            if (walkTargetX == -999999)
+            {
+                walkCounter++;
+                if (walkCounter > 200 || (actHold > 0 && ((actKind >= 1 && actKind <= 3) || actKind == 7 || actKind == 8)))
+                {
+                    walkCounter = 0;
+                    try
+                    {
+                        Rectangle wa = SystemInformation.WorkingArea;
+                        int nx, ny;
+                        if (rnd.Next(4) == 0)
+                        {
+                            // 走到屏幕边上贴着站
+                            nx = rnd.Next(2) == 0 ? wa.Left + 2 : wa.Right - Width - 2;
+                            ny = wa.Top + 4 + rnd.Next(Math.Max(1, wa.Height - Height - 8));
+                            edgeStay = 260 + rnd.Next(400);
+                        }
+                        else
+                        {
+                            // 整块屏幕随便挑个地方去
+                            nx = wa.Left + 4 + rnd.Next(Math.Max(1, wa.Width - Width - 8));
+                            ny = wa.Top + 4 + rnd.Next(Math.Max(1, wa.Height - Height - 8));
+                        }
+                        if (nx < wa.Left + 2) nx = wa.Left + 2;
+                        if (nx > wa.Right - Width - 2) nx = wa.Right - Width - 2;
+                        if (ny < wa.Top + 2) ny = wa.Top + 2;
+                        if (ny > wa.Bottom - Height - 2) ny = wa.Bottom - Height - 2;
+                        walkTargetX = nx;
+                        walkTargetY = ny;
+                    }
+                    catch { }
+                }
+            }
+            else
+            {
+                int curX = Location.X;
+                int curY = Location.Y;
+                int dxw = walkTargetX - curX;
+                int dyw = walkTargetY - curY;
+                if (Math.Abs(dxw) <= 2 && Math.Abs(dyw) <= 2)
+                {
+                    walkTargetX = -999999;
+                }
+                else
+                {
+                    int dist = (int)Math.Sqrt(dxw * dxw + dyw * dyw);
+                    bool farAway = dist > 240;
+                    int spd = farAway ? 7 : 3;
+                    int sypMax = farAway ? 4 : 2;
+                    // 飞、御剑、骑坐骑都是"赶路"，比走路快，而且是真的一段一段挪过去
+                    if (actHold > 0)
+                    {
+                        if (actKind == 1) { spd = farAway ? 13 : 6; sypMax = farAway ? 9 : 5; }
+                        else if (actKind == 2) { spd = farAway ? 15 : 7; sypMax = farAway ? 10 : 5; }
+                        else if (actKind == 3) { spd = farAway ? 9 : 4; sypMax = farAway ? 6 : 3; }
+                        else if (actKind == 7) { spd = farAway ? 12 : 6; sypMax = farAway ? 7 : 4; }
+                        else if (actKind == 8) { spd = farAway ? 14 : 7; sypMax = farAway ? 8 : 4; }
+                    }
+                    int sxp = Math.Sign(dxw) * Math.Min(spd, Math.Abs(dxw));
+                    int syp = Math.Sign(dyw) * Math.Min(sypMax, Math.Abs(dyw));
+                    Location = new Point(curX + sxp, curY + syp);
+                    walkTicks = 40;
+                    runTicks = farAway ? 46 : 0;
+                    walkDirX = Math.Sign(dxw);
+                    // 走着走着忽然蹦一下，像动画片里那样（飞在天上就别蹦了）
+                    if (actKind <= 0 && hopPend <= 0 && rnd.Next(farAway ? 55 : 85) == 0) hopPend = 34;
+                }
+            }
+        }
+
+        // 高兴了原地蹦一下
+        if (hopPend > 0) hopPend--;
+        else
+        {
+            hopWait--;
+            if (hopWait <= 0)
+            {
+                hopWait = 240 + rnd.Next(400);
+                hopPend = 34;
+                moodTicks = Math.Max(moodTicks, 30);
+                moodKind = 1;
+            }
+        }
+        // 跨天了就换个模样，不用重启也换（换的时候不吭声，问候交给一天一次的那套逻辑）
+        if (dayStamp != DateTime.Today)
+        {
+            dayStamp = DateTime.Today;
+            species = PickDailySpecies();
+            // 跨天时也跟着换一套动作，不然重启前后都是同一只
+            if (poseKinds != null && poseKinds.Length > 0)
+            {
+                int pick = poseKinds[DateTime.Now.DayOfYear % poseKinds.Length];
+                ApplyPose(pick);
+                species = pick;
+            }
+            MakeDailyIcon();          // 过了零点图标也跟着换
+            GreetIfDue(false);
+        }
+        // 随机闲聊：到点了、没在说话、不是深夜，就说一句
+        if (chatMode)
+        {
+            if (chatCountdown > 0)
+            {
+                chatCountdown--;
+            }
+            else if (bubbleFrames <= 0)
+            {
+                int hh = DateTime.Now.Hour;
+                if (hh >= 6 && hh < 23) Say(RandomChatLine());
+                ResetChatTimer();
+            }
+        }
+        Invalidate();
+    }
+
+    void ForceLayer()
+    {
+        try { SetLayeredWindowAttributes(this.Handle, ColorTranslator.ToWin32(TransparencyKey), 255, LWA_COLORKEY); } catch { }
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        PaintAll(e.Graphics, ClientSize.Width, ClientSize.Height);
+    }
+
+    public void PaintAll(Graphics g, int cw, int ch)
+    {
+        ForceLayer();
+        g.Clear(Color.FromArgb(255, 0, 255));
+        float s = Math.Min(cw / (float)W, ch / (float)H);
+        if (s <= 0.01f) s = 1f;
+        if (diagCount < 3)
+        {
+            diagCount++;
+            try
+            {
+                File.AppendAllText(Path.Combine(Path.GetTempPath(), "petdiag.txt"),
+                    "cw=" + cw + " ch=" + ch + " s=" + s.ToString("F3") + "\r\n");
+            }
+            catch { }
+        }
+        g.TranslateTransform((cw - W * s) / 2f, (ch - H * s) / 2f);
+        g.ScaleTransform(s, s);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+
+        float cx = W / 2f;
+        float cy = 127f;
+        // 呼吸幅度会慢慢变：约 33 秒一轮强弱，偶尔来一次深吸，不是永远同一口气
+        float breatheAmp = 0.78f + 0.22f * (float)Math.Sin(t * 0.19f);
+        float breathe = (float)(Math.Sin(t * 1.5f) * breatheAmp);
+        float dy = 8.5f * (float)Math.Sin(t * (1.12f + 0.05f * (float)Math.Sin(t * 0.07f))) * (0.9f + 0.1f * breatheAmp);
+        float dxs = 2.4f * (float)Math.Sin(t * 0.53);
+        if (speaking) dy += 2.4f * (float)Math.Sin(t * 7.5);
+        if (moodTicks > 0) { dy -= 1.4f * (float)Math.Sin(t * 6.0); }
+        // 躺下：慢慢倒过去，不是一下子翻
+        lieAmt += ((lying ? 1f : 0f) - lieAmt) * 0.09f;
+        if (lieAmt < 0.004f) lieAmt = 0f;
+        if (lying && lieAmt > 0.5f) dy = 0f;   // 躺着就别再上下浮了
+        // 生活动作同样淡入淡出：披风、剑、坐骑、茶杯、电视都跟着这个值一起进一起退
+        float actTarget = (actHold > 0 && !lying) ? 1f : 0f;
+        actAmt += (actTarget - actAmt) * 0.09f;
+        if (actAmt > 0.94f) actAmt = 1f;
+        if (actAmt < 0.02f)
+        {
+            actAmt = 0f;
+            if (actHold <= 0) actKind = 0;
+        }
+        cy += dy;
+        cx += dxs;
+        // 走跑时整只左右换重心、双倍频上下颠：看着是在走，不是原地抖
+        if (runTicks > 0 || walkTicks > 0)
+        {
+            float sp = t * (runTicks > 0 ? 12.0f : 8.4f);
+            cx += (runTicks > 0 ? 9.0f : 6.5f) * (float)Math.Sin(sp);
+            cy -= (runTicks > 0 ? 5.0f : 3.5f) * (float)Math.Abs(Math.Sin(sp * 2.0));
+            // 在场景里真挪位置：跑得快、走得慢，顶到画面边上就掉头
+            tripX += tripDir * (runTicks > 0 ? 6.0f : 3.2f);
+            if (tripX > 104f) { tripX = 104f; tripDir = -1; }
+            if (tripX < -104f) { tripX = -104f; tripDir = 1; }
+        }
+        else if (lying || lieAmt > 0.05f)
+        {
+            // 只有要躺下的时候才回到床中间，平时走到哪儿就站哪儿
+            tripX *= 0.9f;
+            if (Math.Abs(tripX) < 0.5f) tripX = 0f;
+        }
+        cx += tripX;
+        if (moodTicks > 0)
+        {
+            if (moodKind == 2) cx += 1.8f * (float)Math.Sin(t * 26.0);
+            else if (moodKind == 3) cy += 2.3f;
+            else if (moodKind == 4) cy -= 2.6f * (float)Math.Abs(Math.Sin(t * 11.0));
+        }
+        float wantTilt;
+        if (runTicks > 0) wantTilt = walkDirX * 13.0f;
+        else if (walkTicks > 0) wantTilt = walkDirX * 3.5f;
+        else if (speaking) wantTilt = 4.5f;
+        else if (moodTicks > 0) wantTilt = -3.2f;
+        else wantTilt = 1.4f * (float)Math.Sin(t * 0.37);
+        tiltNow += (wantTilt - tiltNow) * 0.12f;
+        float rx = 33f * (1f - 0.015f * breathe);
+        float ry = 33f * (1f + 0.025f * breathe);
+
+        if (faceCount > 0)
+        {
+            DrawPicture(g, cx, cy, breathe);
+        }        else
+        {
+            Color body = ColorTranslator.FromHtml(speciesColor[species]);
+            Color dark = Darken(body, 0.78f);
+            Color light = Lighten(body, 0.55f);
+
+            DrawBody(g, species, cx, cy, rx, ry, body, dark, light);
+            DrawFace(g, cx, cy, ry, dark);
+        }
+
+        if (bubble != null) DrawBubble(g);
+    }
+
+    // 御剑专属画法：没有整套姿势图的形象，御剑时直接贴这张踩剑姿势。
+    // 剑是画在图里的，脚真的踩在剑上，人前倾，不是正面站姿配一把飘着的剑
+    void DrawSwordPose(Graphics g, float cx, float cy, float breathe)
+    {
+        Bitmap sf = null;
+        if (swordFlyMap != null && swordFlyMap.ContainsKey(species)) sf = swordFlyMap[species];
+        if (sf == null) return;
+        float bob = 1.2f * breathe;
+        if (lieAmt > 0.02f) bob -= 34f * lieAmt;
+        float footY = cy + 68f;
+        // 御剑是腾空的：脚离地，还得轻轻上下飘，跟有姿势图那条路一致
+        float airY = -22f * actAmt - 4f * actAmt * (float)Math.Sin(t * 1.7);
+        DrawScenery(g, cx, footY + bob + airY, sf.Width, sf.Height, t, 5, 1f);
+        GraphicsState st = g.Save();
+        // 只平移、不旋转不缩放：透明键窗口里一采样就会混出粉紫描边
+        g.TranslateTransform((float)Math.Floor(cx), (float)Math.Floor(footY + bob + airY));
+        g.SmoothingMode = SmoothingMode.None;
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.None;
+        int hw = sf.Width / 2;
+        g.DrawImage(sf, new Rectangle(-hw, -sf.Height, sf.Width, sf.Height));
+        g.Restore(st);
+    }
+
+    // 有姿势集时的画法：选一张最贴当前状态的姿势图贴上去，切换时做交叉淡化。
+    // 走路、挥手、欢呼、坐下都是图里本来就有的四肢动作，不再靠整张图平移或切条
+    // 八帧走路直接上画：一像素对一像素贴，手脚动作全靠这八张图画出来
+    void DrawWalkFrames(Graphics g, float cx, float cy, float breathe)
+    {
+        if (walkFrames == null || walkFrames.Length < 8) return;
+        // 跑起来帧跑得更快，走路保持 11 帧/秒（八帧一圈约 0.73 秒，接近真人步速）
+        float fps = runTicks > 0 ? 15.0f : 11.0f;
+        float ph = t * fps;
+        int fi = (int)ph % 8;
+        if (fi < 0) fi += 8;
+        Bitmap pb = walkFrames[fi];
+        if (pb == null) return;
+        // 落地时沉一点、通过位弹一点，和这一帧的姿势对上，才不会像原地抽动
+        float bob = -2.8f * Math.Abs((float)Math.Sin(ph * (float)Math.PI / 4f));
+        if (lieAmt > 0.02f) bob -= 34f * lieAmt;
+
+        float footY = cy + 68f;
+        float targetH = pb.Height;
+        float baseW = pb.Width;
+        DrawScenery(g, cx, footY + bob, baseW, targetH, t, sceneIdx, 1f);
+
+        GraphicsState st = g.Save();
+        g.TranslateTransform((float)Math.Floor(cx), (float)Math.Floor(footY + bob));
+        g.SmoothingMode = SmoothingMode.None;
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.None;
+        DrawActProps(g, baseW, targetH, false);
+        int hw = (int)baseW / 2;
+        int hh = (int)targetH;
+        Rectangle r = new Rectangle(-hw, -hh, (int)baseW, hh);
+        DrawBmpAlpha(g, pb, r, 1f);
+        g.Restore(st);
+    }
+
+    // 跳舞：借八帧走路那套真手脚动作，按舞蹈节拍来回摆着播（0→7→0），
+    // 再叠上整只的左右摇、落拍往下沉。只做整体平移，不切条也不旋转，
+    // 免得透明键边缘混出粉紫描边
+    void DrawDanceFrames(Graphics g, float cx, float cy, float breathe)
+    {
+        if (walkFrames == null || walkFrames.Length < 8) return;
+        float fps = 11.0f + 4.0f * actAmt;
+        float ph = t * fps;
+        int s16 = (int)ph % 16;
+        if (s16 < 0) s16 += 16;
+        int fi = s16 < 8 ? s16 : 15 - s16;   // 来回摆：像踩点踏步，不是一直往前走
+        Bitmap pb = walkFrames[fi];
+        if (pb == null) return;
+        float beat = t * 3.6f;
+        float swayX = 9.0f * actAmt * (float)Math.Sin(beat);
+        float swayY = -6.0f * actAmt * (float)Math.Abs((float)Math.Sin(beat * 2.0f));
+        if (lieAmt > 0.02f) swayY -= 34f * lieAmt;
+
+        float footY = cy + 68f;
+        float targetH = pb.Height;
+        float baseW = pb.Width;
+        DrawScenery(g, cx + swayX, footY + swayY, baseW, targetH, t, 3, 1f);
+
+        GraphicsState st = g.Save();
+        g.TranslateTransform((float)Math.Floor(cx + swayX), (float)Math.Floor(footY + swayY));
+        g.SmoothingMode = SmoothingMode.None;
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.None;
+        DrawActProps(g, baseW, targetH, false);
+        int hw = (int)baseW / 2;
+        int hh = (int)targetH;
+        Rectangle r = new Rectangle(-hw, -hh, (int)baseW, hh);
+        DrawBmpAlpha(g, pb, r, 1f);
+        g.Restore(st);
+    }
+
+    void DrawPosePicture(Graphics g, float cx, float cy, float breathe)
+    {
+        int want = 0;
+        if (sitting || (actAmt > 0.25f && actKind == 6)) want = 4;                 // 坐下看电视
+        else if (waveTicks > 0) want = 1;                                         // 举手招呼
+        else if (runTicks > 0 || walkTicks > 0) want = 2;                         // 迈步走
+        else if (actAmt > 0.25f && actKind == 4) want = 3;                        // 跳舞欢呼
+        else if (actAmt > 0.25f && actKind == 3) want = 2;
+        if (want >= poses.Length) want = 0;
+        if (want != poseIdx)
+        {
+            posePrev = poseIdx;
+            poseIdx = want;
+            poseFade = 0f;
+        }
+        if (poseFade < 1f)
+        {
+            poseFade += 0.16f;
+            if (poseFade > 1f) poseFade = 1f;
+        }
+        if (posePrev >= poses.Length) posePrev = 0;
+
+        bool walking = walkTicks > 0 || runTicks > 0;
+        bool travel = walking || (actAmt > 0.25f && (actKind == 1 || actKind == 2 || actKind == 3));
+        // 贴图必须一像素对一像素：一旦缩放采样，边缘就会混出半透明，
+        // 透明键窗口把它染成一圈粉紫描边。呼吸和迈步改用上下位移来表现
+        float sy = 1f;
+        float bob = 0f;
+        if (walking)
+        {
+            // 迈步的节奏压在图上：脚步落地时整只往下沉一点，起来时弹一下
+            float pp = (float)Math.Sin(t * 8.4f);
+            // 2026-11-16 缓动：落地要脆、抬腿要柔。直接取 |sin| 是 V 形尖点，
+            // 像被一根线拽着上下；开方后下沉快、回升慢，接近真实落脚。
+            float dip = (float)Math.Pow(Math.Abs(pp), 0.72f);
+            bob = -dip * 5.2f;
+            bob += 1.6f * pp;
+        }
+        else
+        {
+            bob = 1.2f * breathe;
+        }
+        if (lieAmt > 0.02f)
+        {
+            bob -= 34f * lieAmt;
+        }
+
+        float footY = cy + 68f;
+        Bitmap pb = poses[poseIdx];
+        // 这个形象配了八帧走路：走起来直接换帧，手脚是画出来的
+        // 11 帧/秒，八帧一圈约 0.72 秒，正好是正常步速
+        if ((walkTicks > 0 || runTicks > 0) && walkFrames != null && walkFrames.Length >= 8)
+        {
+            int fi = (int)(t * 11.0f) % 8;
+            if (fi < 0) fi += 8;
+            pb = walkFrames[fi];
+        }
+        // 御剑：这个形象配了专属的踩剑姿势，就整张换掉——
+        // 不再是正面站姿压窄配一把画出来的剑，人是真踩在剑上、身体前倾
+        if (actAmt > 0.25f && actKind == 2 && swordFly != null)
+        {
+            pb = swordFly;
+        }
+        // 图已经是显示尺寸（152 高），照着它本来的大小贴
+        float targetH = pb.Height;
+        float baseW = pb.Width;
+
+        int scIdx = sceneIdx;
+        if (actAmt > 0.25f)
+        {
+            if (actKind == 2) scIdx = 5;
+            else if (actKind == 1) scIdx = 2;
+            else if (actKind == 3) scIdx = 1;
+            else if (actKind == 4 || actKind == 5) scIdx = 3;
+            else if (actKind == 6) scIdx = 4;
+            else if (actKind == 7 || actKind == 8) scIdx = 0;
+        }
+        DrawScenery(g, cx, footY + bob, baseW, targetH, t, scIdx, 1f);
+
+        GraphicsState st = g.Save();
+        // 平移必须落在整像素上：坐标带小数就会让贴图落在半像素上，
+        // 四周漏出一圈窗口底色，看着就是粉紫描边
+        g.TranslateTransform((float)Math.Floor(cx), (float)Math.Floor(footY + bob));
+        // 不再旋转、不再缩放：只要绕着任意角度采样，边缘就会混出半透明，
+        // 透明键窗口立刻把它染成粉紫描边。纯平移 + 一像素对一像素最干净
+        g.SmoothingMode = SmoothingMode.None;
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.None;
+
+        DrawActProps(g, baseW, targetH, false);
+
+        int hw = (int)baseW / 2;
+        int hh = (int)targetH;
+        // 图本身就是显示尺寸，一像素对一像素贴，不外扩也不缩
+        Rectangle r = new Rectangle(-hw, -hh, (int)baseW, hh);
+        // 姿势之间不做淡入淡出：透明键窗口里一旦半透明，边缘就会和洋红底色mix出一道粉边
+        DrawBmpAlpha(g, pb, r, 1f);
+        g.Restore(st);
+    }
+
+    void DrawBmpAlpha(Graphics g, Bitmap b, Rectangle r, float alpha)
+    {
+        if (b == null || alpha <= 0.02f) return;
+        // 全不透明的时候直接贴，不要过 ColorMatrix：一旦走混合，
+        // 不透明像素也会和窗口的洋红底混一道边，看着就是一圈粉紫描边
+        if (alpha >= 0.995f)
+        {
+            g.DrawImage(b, r);
+            return;
+        }
+        ColorMatrix cm = new ColorMatrix(new float[][] {
+            new float[] { 1, 0, 0, 0, 0 },
+            new float[] { 0, 1, 0, 0, 0 },
+            new float[] { 0, 0, 1, 0, 0 },
+            new float[] { 0, 0, 0, alpha, 0 },
+            new float[] { 0, 0, 0, 0, 1 }
+        });
+        ImageAttributes ia = new ImageAttributes();
+        ia.SetColorMatrix(cm, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+        g.DrawImage(b, r, 0, 0, b.Width, b.Height, GraphicsUnit.Pixel, ia);
+        ia.Dispose();
+    }
+
+    void DrawPicture(Graphics g, float cx, float cy, float breathe)
+    {
+        if (faceCount <= 0 || faces == null) return;
+        // 这个形象已经有整套姿势图：直接换图，手脚是真的动，不是把身体切条推开
+        if (poses != null && poses.Length >= 5 && species == poseOwner)
+        {
+            DrawPosePicture(g, cx, cy, breathe);
+            return;
+        }
+        // 御剑：这个形象没有整套姿势图，但专门配了一张踩剑姿势，就直接按那张画。
+        // 不这样的话，8 号这类只有一张立绘的形象御剑时还是正面站着
+        if (actAmt > 0.25f && actKind == 2 && swordFlyMap != null
+            && swordFlyMap.ContainsKey(species))
+        {
+            DrawSwordPose(g, cx, cy, breathe);
+            return;
+        }
+        // 配了八帧走路、但没有整套姿势图的形象：走起来直接换成那八帧真动作。
+        // 以前这条被"必须有整套姿势图"挡住了，八帧图编进程序却一次没用上，
+        // 走起来只是把一张立绘当纸片推着走，手脚看着当然是僵的
+        // 跳舞：配了八帧的形象直接播那套手脚动作，配上整只的左右摆和上下弹。
+        // 原来的跳舞是把身体切条往外推，看着就是"折叠"，完全不像跳舞
+        if (actAmt > 0.25f && actKind == 4 && walkFrames != null && walkFrames.Length >= 8)
+        {
+            DrawDanceFrames(g, cx, cy, breathe);
+            return;
+        }
+        if ((walkTicks > 0 || runTicks > 0) && walkFrames != null && walkFrames.Length >= 8)
+        {
+            DrawWalkFrames(g, cx, cy, breathe);
+            return;
+        }
+        Bitmap bmp = faces[species % faceCount];
+        if (bmp == null) return;
+
+        // 有真表情图就整张换：小脸上叠画的腮红、泪珠、怒气符在桌面尺寸下必然糊
+        int exprKind = 0;   // 0 平常 1 开心 2 生气 3 难过 4 睡着
+        if (cryHold > 0) exprKind = 3;
+        else if (sleepy || lieHold > 0) exprKind = 4;
+        else if (moodTicks > 0 && moodKind > 0)
+        {
+            if (moodKind == 1) exprKind = 1;
+            else if (moodKind == 2) exprKind = 2;
+            else if (moodKind == 3) exprKind = 3;
+            else if (moodKind == 6) exprKind = 4;
+        }
+        bool useExpr = false;
+        if (UseExprArt && exprKind > 0 && exprMap != null && exprMap.ContainsKey(species))
+        {
+            Bitmap[] exs = exprMap[species];
+            int exi = -1;
+            if (exprKind == 1) exi = 0;        // happy
+            else if (exprKind == 2) exi = 2;   // angry
+            else if (exprKind == 3) exi = 1;   // sad
+            else if (exprKind == 4) exi = 3;   // sleep
+            if (exs != null && exi >= 0 && exi < exs.Length && exs[exi] != null)
+            {
+                bmp = exs[exi];
+                useExpr = true;
+                // 开心这一种要连着动：张嘴、笑到最大、半张、收拢，四帧转一个圈。
+                // 一秒九步、六步一圈，约 0.67 秒笑一次，跟真人笑的节奏差不多
+                if (exi == 0 && laughMap != null && laughMap.ContainsKey(species))
+                {
+                    Bitmap[] lf = laughMap[species];
+                    if (lf != null && lf.Length == 4 && lf[3] != null)
+                    {
+                        int ci = ((int)(t * 9.0f)) % 6;
+                        if (ci < 0) ci += 6;
+                        int li = ci < 2 ? 0 : (ci < 4 ? 1 : (ci < 5 ? 2 : 3));
+                        if (lf[li] != null) bmp = lf[li];
+                    }
+                }
+            }
+        }
+
+        bool running = runTicks > 0;
+        bool walking = walkTicks > 0;
+        bool waving = waveTicks > 0;
+        float p = (float)Math.Sin(t * 9.0);
+
+        float sy = 1f + 0.016f * breathe;
+        float sx = 1f - 0.010f * breathe;
+        float bob = 0f;
+        // 坐下歇着：明显压矮、变宽，整体往下沉，像一屁股坐在地上
+        if (sitting && lieAmt < 0.5f)
+        {
+            sy *= 0.72f;
+            sx *= 1.14f;
+            bob += 5.0f;
+        }
+        // 犯困：比坐着再塌一点，头往下垂
+        if (sleepy && lieAmt < 0.5f)
+        {
+            sy *= 0.90f;
+            bob += 3.0f;
+        }
+        // 看电视：往地上坐一点，身子朝电视那边歪，才像真在看
+        if (actAmt > 0.25f && actKind == 6 && lieAmt < 0.5f)
+        {
+            sy *= 0.78f;
+            sx *= 1.06f;
+            bob += 10.0f;
+        }
+        // 骑坐骑：侧着骑才看得出是"骑马"，所以横向压窄成人+兽的侧影，整只往上抬一截
+        if (actAmt > 0.25f && actKind == 3 && lieAmt < 0.5f)
+        {
+            bob -= 26f;
+            sy *= 0.90f;
+            sx *= 0.64f;
+        }
+        // 躺下：整个身子压扁贴在床上、头往左靠到枕头那边，脸始终朝前
+        // 这样看着是"从侧面看一个人横躺着、脸对着你"，而不是把整只拧过去
+        if (lieAmt > 0.02f)
+        {
+            // 以前压到 0.48 高，整个人成了被拍扁的一张纸；现在只轻压 0.20，
+            // 主要靠往下沉一点、往枕头那边挪一点来表达"侧躺"，身形还立得住
+            sy *= 1f - 0.20f * lieAmt;
+            sx *= 1f + 0.05f * lieAmt;
+            bob -= 22f * lieAmt;
+            cx -= 34f * lieAmt;
+        }
+        if (running)
+        {
+            // 跑：起伏更大、步频更快，像动画片里小跑起来
+            sy = 1f + 0.060f * p;
+            sx = 1f - 0.048f * p;
+            bob = -Math.Abs(p) * 11.0f;
+        }
+        else if (walking)
+        {
+            sy = 1f + 0.040f * p;
+            sx = 1f - 0.045f * p;
+            bob = -Math.Abs(p) * 8.0f;
+        }
+        if (speaking)
+        {
+            float p2 = (float)Math.Sin(t * 9.5);
+            sx *= 1f + 0.026f * p2;
+            sy *= 1f - 0.018f * p2;
+        }
+        // 赶路的时候侧过身去：横向压窄就显出侧面了，再按前进方向翻个面，身板跟着前倾。
+        // 一直是正面直直地挪，看着像在原地踏步，不像在赶路
+        bool travel = (running || walking || (actAmt > 0.25f && ((actKind >= 1 && actKind <= 3) || actKind == 7 || actKind == 8)))
+                      && !sitting && lieAmt < 0.25f;
+        // 看电视也要朝屏幕那边转：屏幕摆在右手边，人就压窄一点、头朝右偏，别对着观众演
+        bool watching = (actAmt > 0.25f && actKind == 6) && !sitting && lieAmt < 0.25f;
+        float sideDir = (runTicks > 0 || walkTicks > 0) ? (float)tripDir : (walkDirX >= 0 ? 1f : -1f);
+        if (watching) sideDir = 1f;
+        if (travel || watching) sx *= 0.78f;
+
+        // 人物在窗口里的块头：152 显得人小、脸上细节糊成一片，
+        // 提到 162 让人站稳、看得出神情，脚底和地面横带的距离也刚好
+        float targetH = 162f;
+        float ratio = bmp.Width / (float)bmp.Height;
+        float baseW = targetH * ratio;
+        float footY = cy + 68f;
+
+        // 蹦跳：整只腾空，落地瞬间压扁
+        float hopY = 0f;
+        if (hopPend > 0)
+        {
+            float hp = 1f - hopPend / 34f;
+            hopY = -26f * (float)Math.Sin(hp * Math.PI);
+            if (hp > 0.80f) { sx *= 1.16f; sy *= 0.84f; }
+        }
+
+        // 披风飞和御剑是腾空的，脚离地，还得轻轻上下飘
+        float airY = 0f;
+        if (actAmt > 0.02f && (actKind == 1 || actKind == 2))
+            airY = -22f * actAmt - 4f * actAmt * (float)Math.Sin(t * 1.7);
+        else if (actAmt > 0.02f && actKind == 3)
+        {
+            // 骑着走：略微离地，坐骑就在身下；颠一颠像蹄子落地
+            airY = -14f * actAmt - 3f * actAmt * Math.Abs((float)Math.Sin(t * 5.2f));
+        }
+
+        // 脚下的场景：城市、乡野、海边、花丛，随动作和心情换。
+        // 只铺到脚边为止，形状是起伏的一条、顶上渐隐，所以看着是"一小片地"，
+        // 不是给桌面贴了一张方框背景
+        int scIdx = sceneIdx;
+        // 走动时不硬塞城市：就在今天这张景里走，稻田里能看见风吹稻浪
+        if (actAmt > 0.25f)
+        {
+            // 飞行和御剑本身就是在赶路，走路的那一条会把城市盖上来，所以这两条得放在后头
+            if (actKind == 2) scIdx = 5;                      // 御剑：仙侠云海
+            else if (actKind == 1) scIdx = 2;                 // 披风飞：海边日落
+            else if (actKind == 3) scIdx = 1;                 // 骑坐骑：乡野田间
+            else if (actKind == 4 || actKind == 5) scIdx = 3; // 跳舞、喝茶：花丛
+            else if (actKind == 6) scIdx = 4;                 // 看电视：屋里，台灯加窗
+            else if (actKind == 7 || actKind == 8) scIdx = 0; // 滑板、轮滑：城市街头的地砖
+        }
+        DrawScenery(g, cx, footY + hopY + bob + airY, baseW, targetH, t, scIdx, 1f);
+
+        GraphicsState st = g.Save();
+        // 跳舞的整只位移：左右摇 + 落拍下沉，这是"人在动"，不是把身体切条推开
+        float danceX = 0f, danceY = 0f, danceRot = 0f;
+        if (actAmt > 0.25f && actKind == 4)
+        {
+            float beat = t * 3.6f;
+            danceX = 8f * actAmt * (float)Math.Sin(beat);
+            danceY = -5f * actAmt * (float)Math.Abs((float)Math.Sin(beat * 2f));
+            danceRot = 4.0f * actAmt * (float)Math.Sin(beat);
+        }
+        g.TranslateTransform(cx + danceX, footY + hopY + bob + airY + danceY);
+        // 赶路时再往前压一点，像侧着身子赶；翻面靠横向取负缩放，连带披风、坐骑一起跟过去
+        g.RotateTransform(tiltNow + danceRot + (travel ? sideDir * 4.5f : 0f)
+            + (watching ? 18f * sideDir : 0f)
+            + ((actAmt > 0.25f && actKind == 3) ? sideDir * 6f : 0f));
+        // 躺着不再整只旋转：只在倾斜上收一点，让躺姿稳当
+        g.ScaleTransform((travel || watching) ? sx * sideDir : sx, sy);
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.Half;
+
+        // 床和被子改到恢复坐标之后再画：那些东西不该跟着人物一起被压扁，
+        // 床要是也压扁了就成了纸片，看着不像家具
+
+        // 身后的东西先画：披风、剑、坐骑，这样人压在它们上面才对
+        DrawActProps(g, baseW, targetH, false);
+
+        // 全身协调：头稳住，躯干跟着带，两腿左右交替抬落
+        // 条数加细一点，边缘才不会是折线；波形用两个频率叠，动作才软
+        const int strips = 48;
+        float stripH = targetH / strips;
+        float imgScale = bmp.Height / targetH;
+        float amp = running ? 9.0f : (walking ? 5.4f : 0.62f);
+        if (actAmt > 0.02f && actKind == 4) amp += 2.4f * actAmt;   // 跳舞只留一点摆动，大幅切条就是折叠
+        float ph = t * (running ? 12.0f : 8.4f);
+        if (actAmt > 0.02f && actKind == 4) ph = t * 8.0f;           // 节拍降下来，切条推太快就成抽搐
+        float legLift = running ? 13.0f : (walking ? 7.5f : 0f);
+        bool stepping = (running || walking || (actAmt > 0.3f && actKind == 4)) && hopPend <= 0;
+        // 手臂的张合幅度：走路跑跳最大，站着也有一点，御剑和骑坐骑手要扶着就不摆
+        float armAmp = 0f;
+        bool handsBusy = (actAmt > 0.25f && (actKind == 2 || actKind == 3 || actKind == 5 || actKind == 7 || actKind == 8));
+        if (!handsBusy) armAmp = running ? 9.0f : (walking ? 7.0f : 4.4f);
+        if (waving) armAmp = 12.0f;
+        if (actAmt > 0.25f && actKind == 4) armAmp = 7.0f;
+        float armPh = t * (running ? 10.5f : (waving ? 9.0f : 3.2f));
+
+        for (int i = 0; i < strips; i++)
+        {
+            float fy = (i + 0.5f) / strips;
+            // 摆动交给骨链：越靠上叠得越多、相位越晚，头和发尾晚半拍跟上
+            float off = amp * BoneSway(fy, ph);
+            // 手臂：上半身中段反向摆，用余弦窗口收边，进出没有硬拐角
+            if (stepping && fy > 0.38f && fy < 0.63f)
+            {
+                float w2 = (float)Math.Sin(Math.PI * (fy - 0.38f) / 0.25f);
+                if (w2 > 0f) off -= 2.4f * w2 * (float)Math.Sin(ph * 0.9f - 0.4f);
+            }
+            // 招手：只晃上半身
+            if (waving && fy < 0.68f)
+                off += 9.0f * (0.68f - fy) * (float)Math.Sin(t * 13.0);
+
+            float yy = -targetH + i * stripH;
+            float sh = stripH + 1.1f;
+            float syp = i * stripH * imgScale;
+            float shp = Math.Min(bmp.Height - syp, sh * imgScale);
+            if (shp <= 0.5f) continue;
+
+            // 手臂：肩到腰这一段整条轻轻摆，站着不动也有一点摆幅，不然整只像块牌子。
+            // 试过把肩到腰切成左右两半分别往外推，躯干中间会裂开一道缝，所以只能整条走
+            if (fy > 0.36f && fy < 0.66f && armAmp > 0.1f)
+            {
+                float w2 = (float)Math.Sin(Math.PI * (fy - 0.36f) / 0.30f);
+                if (w2 > 0f) off += armAmp * w2 * (float)Math.Sin(armPh);
+            }
+            float liftL = 0f, liftR = 0f;
+            if (stepping && fy > 0.60f)
+            {
+                // 左半跟着正弦的前半拍抬、右半跟着后半拍抬，看着就是两条腿在换着踏
+                float w = (fy - 0.60f) / 0.40f;
+                // 抬落用平方包络，起步和落地都是缓的，不会"啪"一下弹起来
+                float sL = 0.5f + 0.5f * (float)Math.Sin(ph);
+                float sR = 0.5f + 0.5f * (float)Math.Sin(ph + Math.PI);
+                liftL = -legLift * w * sL * sL;
+                liftR = -legLift * w * sR * sR;
+            }
+            if (liftL != 0f || liftR != 0f)
+            {
+                float hw = baseW / 2f;
+                float hbw = bmp.Width / 2f;
+                g.DrawImage(bmp,
+                    new RectangleF(-baseW / 2f + off, yy + liftL, hw + 1.2f, sh),
+                    new RectangleF(0f, syp, hbw + 1f, shp),
+                    GraphicsUnit.Pixel);
+                g.DrawImage(bmp,
+                    new RectangleF(-baseW / 2f + off + hw, yy + liftR, hw, sh),
+                    new RectangleF(hbw - 1f, syp, hbw + 1f, shp),
+                    GraphicsUnit.Pixel);
+            }
+            else
+            {
+                g.DrawImage(bmp,
+                    new RectangleF(-baseW / 2f + off, yy, baseW, sh),
+                    new RectangleF(0f, syp, bmp.Width, shp),
+                    GraphicsUnit.Pixel);
+            }
+        }
+
+        // 情绪直接画在脸上：位置跟着横切条一起晃，才不会脱开脸
+        int fidx = (faceFileIdx != null && species >= 0 && species < faceFileIdx.Length) ? faceFileIdx[species] : species;
+        float fxp = (fidx >= 0 && fidx < faceAtX.Length) ? faceAtX[fidx] : 0.50f;
+        float fyp = (fidx >= 0 && fidx < faceAtY.Length) ? faceAtY[fidx] : 0.36f;
+        float fwp = (fidx >= 0 && fidx < faceAtW.Length) ? faceAtW[fidx] : 0.55f;
+        float fOff = amp * BoneSway(fyp, ph);
+        if (waving && fyp < 0.68f) fOff += 12.0f * (0.68f - fyp) * (float)Math.Sin(t * 13.0);
+        float faceX0 = -baseW / 2f + fxp * baseW + fOff;
+        float faceY0 = -targetH + fyp * targetH;
+        // 身前的物件：茶杯、电视机、跳舞的音符，画在身体上、脸下面
+        DrawActProps(g, baseW, targetH, true);
+        // 躺下时身子是压扁的，脸不能跟着压扁，否则五官全糊成一条
+        GraphicsState faceSt = g.Save();
+        if (lieAmt > 0.02f && sy > 0.2f)
+        {
+            float fy2 = 1f / sy;
+            if (fy2 > 1.58f) fy2 = 1.58f;   // 补一部分就够了，全补回去脸会拉太长
+            g.TranslateTransform(faceX0, faceY0);
+            g.ScaleTransform(1f, fy2);
+            g.TranslateTransform(-faceX0, -faceY0);
+        }
+        // 已经是真表情图了，就别再往上叠腮红弧线
+        if (!useExpr) DrawFaceExpr(g, faceX0, faceY0, baseW * fwp / 2f, bmp, fxp, fyp);
+
+        // 躺着睡着：不论情绪分支有没有生效，都直接在脸上补一层闭着的眼，
+        // 不然位图上原来睁着的大眼珠会一直瞪着
+        if (lieAmt > 0.45f && !useExpr)
+        {
+            float er = baseW * fwp / 2f;
+            if (er > 3f)
+            {
+                float ex = faceX0;
+                float ey = faceY0;
+                float fw = baseW * fwp;
+                float eyo = ey + er * 0.26f;
+                // 试过按小范围采样、按高光采样、把这一片图像模糊再贴回来，都有毛病：
+                // 花纹脸采到条纹、白脸采到额头、模糊则连同黑眼珠一起糊成大黑块。
+                // 最后改成：在这个脸框里统计"主色"，亮度低于阈值的像素（眼珠、眉毛、描线）
+                // 直接不参与平均，剩下的就是皮肤/毛色，盖上去自然不显
+                float px2lx = baseW / (float)bmp.Width;
+                float px2ly = targetH / (float)bmp.Height;
+                int rwI = (int)(fw * 1.35f / px2lx);
+                int rhI = (int)(fw * 1.05f / px2ly);
+                if (rwI < 6) rwI = 6;
+                if (rhI < 6) rhI = 6;
+                Color sk = SampleFaceColor(bmp, fxp, fyp + 0.03f, rwI, rhI);
+                float mw2 = fw * 1.22f;
+                float mh2 = fw * 0.58f;
+                using (SolidBrush cv = new SolidBrush(Color.FromArgb(242, sk.R, sk.G, sk.B)))
+                {
+                    g.FillEllipse(cv, ex - mw2 * 0.5f, eyo - mh2 * 0.52f, mw2, mh2);
+                }
+                // 模糊块上再压两道向下弯的弧，明确是闭着的眼
+                using (Pen ep2 = new Pen(Color.FromArgb(210, 48, 52, 66), Math.Max(1.4f, er * 0.09f)))
+                {
+                    ep2.StartCap = LineCap.Round;
+                    ep2.EndCap = LineCap.Round;
+                    float eSep = fw * 0.30f;
+                    float aw = fw * 0.30f;
+                    float ah = fw * 0.20f;
+                    g.DrawArc(ep2, ex - eSep - aw * 0.5f, eyo - ah * 0.62f, aw, ah, 12, 156);
+                    g.DrawArc(ep2, ex + eSep - aw * 0.5f, eyo - ah * 0.62f, aw, ah, 12, 156);
+                }
+            }
+        }
+
+        // 脸和它的闭眼遮罩都画完了，先把那层反压扁的变换退掉
+        g.Restore(faceSt);
+
+        g.Restore(st);
+
+        // 床、枕头、被子都放到恢复坐标之后再画：它们是家具，不该跟着人一起被压扁，
+        // 压扁了就像一块纸片。样子照着一张睡前绘本：床头板在左，人横躺着脸朝前，
+        // 被子从脖子那儿鼓到床尾，只留脑袋和肩膀在外头
+        if (lieAmt > 0.45f)
+        {
+            float kb = (lieAmt - 0.45f) / 0.55f;
+            if (kb > 1f) kb = 1f;
+            if (kb < 0f) kb = 0f;
+            int aa = (int)(252 * kb);
+
+            float bedY = footY + hopY + bob + airY;      // 床面就垫在脚底下
+            float bwd = targetH * 1.62f;
+            if (bwd > W - 28f) bwd = W - 28f;
+            float bedCx = cx + 60f * lieAmt;              // 人往左挪了，床还在画面中间
+            float bx0 = bedCx - bwd * 0.5f;
+            float bx1 = bedCx + bwd * 0.5f;
+            float bh2 = 24f;
+
+            // 床头板：左端竖起来的那块
+            using (SolidBrush hbr = new SolidBrush(Color.FromArgb(aa, 176, 70, 58)))
+            {
+                g.FillRectangle(hbr, bx0 - 4f, bedY - 54f, 18f, 54f + bh2);
+            }
+            using (SolidBrush hbr2 = new SolidBrush(Color.FromArgb(aa, 200, 96, 78)))
+            {
+                g.FillEllipse(hbr2, bx0 - 4f, bedY - 62f, 18f, 16f);
+            }
+
+            // 床身：暖色布面
+            using (LinearGradientBrush bs = new LinearGradientBrush(
+                new RectangleF(bx0, bedY, bwd, bh2),
+                Color.FromArgb(aa, 228, 152, 152),
+                Color.FromArgb(aa, 194, 110, 114), 90f))
+            {
+                g.FillRectangle(bs, bx0, bedY, bwd, bh2);
+            }
+            // 床面上几个小叉花，别看着像一块纯色板
+            using (Pen pl = new Pen(Color.FromArgb((int)(aa * 0.50f), 178, 76, 94), 1f))
+            {
+                for (int i = 0; i < 9; i++)
+                {
+                    float px2 = bx0 + 12f + (bwd - 24f) * i / 8f;
+                    g.DrawLine(pl, px2, bedY + 6f, px2 + 3f, bedY + 10f);
+                    g.DrawLine(pl, px2 + 3f, bedY + 6f, px2, bedY + 10f);
+                }
+            }
+            // 床沿一道亮边，把布面和被子分开
+            using (Pen pk = new Pen(Color.FromArgb(aa, 244, 200, 194), 2.4f))
+            {
+                g.DrawLine(pk, bx0 + 2f, bedY + 1.6f, bx1 - 2f, bedY + 1.6f);
+            }
+            // 床垫：床面下方那一条软垫，比床架浅一点
+            using (SolidBrush mat = new SolidBrush(Color.FromArgb(aa, 246, 226, 214)))
+            {
+                g.FillRectangle(mat, bx0 + 3f, bedY + 3f, bwd - 6f, 7f);
+            }
+            // 两条床腿
+            using (SolidBrush bl = new SolidBrush(Color.FromArgb(aa, 138, 62, 54)))
+            {
+                g.FillRectangle(bl, bx0 + 8f, bedY + bh2, 7f, 11f);
+                g.FillRectangle(bl, bx1 - 15f, bedY + bh2, 7f, 11f);
+            }
+
+            // 枕头：浅蓝的，垫在脑袋底下
+            using (SolidBrush pil = new SolidBrush(Color.FromArgb(aa, 198, 222, 246)))
+            {
+                g.FillEllipse(pil, cx - 48f, bedY - 26f, 62f, 19f);
+            }
+            using (Pen piln = new Pen(Color.FromArgb((int)(aa * 0.45f), 148, 182, 222), 1f))
+            {
+                g.DrawArc(piln, cx - 48f, bedY - 26f, 62f, 19f, 188f, 164f);
+            }
+
+            // 被子：左边从脸下面绕过去，往右鼓成一个大山包，铺到床尾
+            // 被子的峰值不能高过脸，不然随机一变形就把整张脸埋进去；
+            // 这里按角色脸的实际高度封个顶，峰值最多到脸的眼下为止
+            float qyBot = bedY + 9f;
+            float qyMid = bedY - 34f;
+            float qyTop = bedY - targetH * 0.50f;
+            float capY = faceY0 + (baseW * fwp) * 0.62f;
+            if (qyTop < capY) qyTop = capY;
+            if (qyMid < capY + targetH * 0.10f) qyMid = capY + targetH * 0.10f;
+            float qRight = cx + bwd * 0.47f;
+            GraphicsPath qp3 = new GraphicsPath();
+            PointF q0 = new PointF(cx - 36f, qyBot);
+            PointF q1 = new PointF(cx - 38f, qyMid);
+            qp3.AddLine(q0, q1);
+            qp3.AddBezier(q1,
+                new PointF(cx - 26f, qyMid + 2f),
+                new PointF(cx - 2f, qyMid),
+                new PointF(cx + 18f, qyMid - 2f));
+            qp3.AddBezier(new PointF(cx + 18f, qyMid - 2f),
+                new PointF(cx + 34f, qyTop + 4f),
+                new PointF(cx + bwd * 0.22f, qyTop),
+                new PointF(cx + bwd * 0.34f, qyTop + 4f));
+            qp3.AddBezier(new PointF(cx + bwd * 0.34f, qyTop + 4f),
+                new PointF(cx + bwd * 0.42f, qyTop + 18f),
+                new PointF(qRight - 3f, bedY - 16f),
+                new PointF(qRight, qyBot));
+            qp3.AddLine(new PointF(qRight, qyBot), q0);
+            qp3.CloseFigure();
+
+            using (LinearGradientBrush lg = new LinearGradientBrush(
+                new RectangleF(cx - 52f, qyTop, qRight - cx + 54f, qyBot - qyTop),
+                Color.FromArgb(aa, 174, 210, 246),
+                Color.FromArgb(aa, 92, 128, 196), 90f))
+            {
+                g.FillPath(lg, qp3);
+            }
+            // 被头翻出来的一截浅边
+            using (Pen qn = new Pen(Color.FromArgb(Math.Min(230, aa), 234, 244, 254), 2.6f))
+            {
+                g.DrawBezier(qn,
+                    new PointF(cx - 37f, qyMid),
+                    new PointF(cx - 26f, qyMid + 2f),
+                    new PointF(cx - 2f, qyMid),
+                    new PointF(cx + 18f, qyMid - 2f));
+            }
+            // 被子外轮廓
+            using (Pen qo = new Pen(Color.FromArgb((int)(aa * 0.45f), 70, 100, 162), 1.2f))
+            {
+                g.DrawPath(qo, qp3);
+            }
+            // 被面上的星星，跟绘本一个路子
+            int[] starX = { 22, 74, 128, 176, 46, 104, 158, 202 };
+            int[] starY = { -30, -62, -34, -70, -76, -16, -84, -50 };
+            for (int i = 0; i < 8; i++)
+            {
+                float sxp2 = cx + starX[i];
+                float syp2 = bedY + starY[i];
+                if (sxp2 < cx - 46f || sxp2 > qRight - 2f) continue;
+                if (syp2 < qyTop + 4f || syp2 > qyBot - 3f) continue;
+                DrawStar(g, sxp2, syp2, 6.4f, Color.FromArgb(Math.Min(255, aa), 248, 216, 104));
+            }
+            // 两道褶皱，跟着呼吸起伏一点点
+            using (Pen qf = new Pen(Color.FromArgb((int)(aa * 0.55f), 108, 142, 198), 1.3f))
+            {
+                for (int i = 1; i <= 2; i++)
+                {
+                    float qxx = cx + bwd * 0.10f * i;
+                    float br = (float)Math.Sin(t * 1.9 + i) * 1.6f;
+                    g.DrawLine(qf, qxx, qyTop + 18f, qxx + br + 2f, qyBot - 6f);
+                }
+            }
+            qp3.Dispose();
+        }
+
+        float topY = footY + hopY + bob - targetH * sy;
+        DrawMoodIcon(g, cx + baseW * 0.40f + 4f, topY + 12f);
+        // 躺下睡着的时候，头上慢慢飘 Z
+        if (lieAmt > 0.55f) DrawSleepZ(g, cx + 12f, footY + 6f);
+
+    }
+
+    // 场景里的小动静：每种景配一种自己的粒子，静态图也能看出是活的
+    // 每天换图标：把当天这只形象整只抠出来做成 64×64 的 ico，透明底。
+    // 不垫方框也不垫圆盘——桌面显示出来的轮廓就是道自己。
+    // exe 内嵌的图标没法天天改，快捷方式的能改
+    // 形象图本身是白底，只按 alpha 裁包围盒会裁出一整块白方，
+    // 桌面图标就成了白方块。这里从四条边往里泛洪，把连通的近白像素清成透明：
+    // 只从边上进，所以肚子、眼白这些被角色包住的白色不会被挖掉
+    static Bitmap KnockoutWhite(Bitmap src)
+    {
+        int w = src.Width, h = src.Height;
+        Rectangle rect = new Rectangle(0, 0, w, h);
+        int[] px = new int[w * h];
+        BitmapData bd = src.LockBits(rect, ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        for (int y = 0; y < h; y++)
+        {
+            IntPtr row = (IntPtr)((long)bd.Scan0 + y * bd.Stride);
+            System.Runtime.InteropServices.Marshal.Copy(row, px, y * w, w);
+        }
+        src.UnlockBits(bd);
+
+        bool[] white = new bool[w * h];
+        for (int i = 0; i < w * h; i++)
+        {
+            int v = px[i];
+            int a = (v >> 24) & 0xFF;
+            int b = (v >> 16) & 0xFF, g2 = (v >> 8) & 0xFF, rr = v & 0xFF;
+            white[i] = (a > 180 && rr > 231 && g2 > 231 && b > 231);
+        }
+
+        bool[] bg = new bool[w * h];
+        int[] stk = new int[w * h];
+        int top = 0;
+        for (int x = 0; x < w; x++) if (white[x]) { bg[x] = true; stk[top++] = x; }
+        for (int x = 0; x < w; x++) { int k = (h - 1) * w + x; if (white[k] && !bg[k]) { bg[k] = true; stk[top++] = k; } }
+        for (int y = 0; y < h; y++)
+        {
+            int k = y * w;
+            if (white[k] && !bg[k]) { bg[k] = true; stk[top++] = k; }
+            int k2 = y * w + w - 1;
+            if (white[k2] && !bg[k2]) { bg[k2] = true; stk[top++] = k2; }
+        }
+        while (top > 0)
+        {
+            int k = stk[--top];
+            int x = k % w, y = k / w;
+            if (x + 1 < w) { int nk = k + 1; if (white[nk] && !bg[nk]) { bg[nk] = true; stk[top++] = nk; } }
+            if (x > 0) { int nk = k - 1; if (white[nk] && !bg[nk]) { bg[nk] = true; stk[top++] = nk; } }
+            if (y + 1 < h) { int nk = k + w; if (white[nk] && !bg[nk]) { bg[nk] = true; stk[top++] = nk; } }
+            if (y > 0) { int nk = k - w; if (white[nk] && !bg[nk]) { bg[nk] = true; stk[top++] = nk; } }
+        }
+
+        for (int i = 0; i < w * h; i++) if (bg[i]) px[i] = 0;
+
+        Bitmap outb = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        BitmapData bd2 = outb.LockBits(rect, ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        for (int y = 0; y < h; y++)
+        {
+            IntPtr row = (IntPtr)((long)bd2.Scan0 + y * bd2.Stride);
+            System.Runtime.InteropServices.Marshal.Copy(px, y * w, row, w);
+        }
+        outb.UnlockBits(bd2);
+        return outb;
+    }
+
+    // 今天这份 ico 已经在就不再重做：重做会连带重写 lnk，Explorer 又要重画一遍图标。
+    void EnsureDailyIcon()
+    {
+        try
+        {
+            string dir = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "icons");
+            string today = Path.Combine(dir, "dao_" + DateTime.Today.ToString("yyyyMMdd") + ".ico");
+            if (File.Exists(today))
+            {
+                SetShortcutIcon(today);   // 文件在就只校准快捷方式，不重写文件
+                ApplyFormIcon(today);
+                return;
+            }
+            MakeDailyIcon();
+        }
+        catch { MakeDailyIcon(); }
+    }
+
+    void MakeDailyIcon()
+    {
+        Bitmap clean = null;
+        try
+        {
+            if (faces == null || faces.Length == 0) return;
+            int i = species;
+            if (i < 0 || i >= faces.Length) i = 0;
+            Bitmap src = faces[i];
+            if (src == null) return;
+            // 先抠掉白底，包围盒才是角色真实轮廓，图标不会是方块
+            clean = KnockoutWhite(src);
+            src = clean;
+
+            // 找不透明像素的包围盒，跳过空白边，只留角色本体
+            int x0 = src.Width, y0 = src.Height, x1 = -1, y1 = -1;
+            int step = (src.Width * src.Height > 400000) ? 2 : 1;
+            for (int y = 0; y < src.Height; y += step)
+            {
+                for (int x = 0; x < src.Width; x += step)
+                {
+                    if (src.GetPixel(x, y).A > 26)
+                    {
+                        if (x < x0) x0 = x;
+                        if (x > x1) x1 = x;
+                        if (y < y0) y0 = y;
+                        if (y > y1) y1 = y;
+                    }
+                }
+            }
+            if (x1 < 0 || y1 < 0) return;
+            int bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+            if (bw < 8 || bh < 8) return;
+            x0 -= 1; y0 -= 1; bw += 2; bh += 2;            // 留 1px 边，别贴死
+            if (x0 < 0) { bw += x0; x0 = 0; }
+            if (y0 < 0) { bh += y0; y0 = 0; }
+            if (x0 + bw > src.Width) bw = src.Width - x0;
+            if (y0 + bh > src.Height) bh = src.Height - y0;
+
+            // 先按最大一档画，再由它缩出小尺寸：这样桌面大图标、任务栏小图标都清楚
+            Bitmap iconImg = new Bitmap(256, 256, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (Graphics g2 = Graphics.FromImage(iconImg))
+            {
+                g2.SmoothingMode = SmoothingMode.AntiAlias;
+                g2.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g2.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g2.Clear(Color.Transparent);
+                // 等比塞进 248×248，四边留 4px 余地，别贴死边缘
+                float sc = Math.Min(248f / bw, 248f / bh);
+                int dw = (int)(bw * sc), dh = (int)(bh * sc);
+                if (dw < 1) dw = 1;
+                if (dh < 1) dh = 1;
+                int dx = (256 - dw) / 2, dy = (256 - dh) / 2;
+                using (Bitmap cut = src.Clone(new Rectangle(x0, y0, bw, bh), System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+                {
+                    g2.DrawImage(cut, new Rectangle(dx, dy, dw, dh),
+                        new Rectangle(0, 0, cut.Width, cut.Height), GraphicsUnit.Pixel);
+                }
+            }
+            string dir = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "icons");
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            string icoPath = Path.Combine(dir, "dao_" + DateTime.Today.ToString("yyyyMMdd") + ".ico");
+            SaveIco(iconImg, icoPath);
+            iconImg.Dispose();
+            SetShortcutIcon(icoPath);
+            ApplyFormIcon(icoPath);
+        }
+        catch { }
+        finally { if (clean != null) { try { clean.Dispose(); } catch { } } }
+    }
+
+    // 手写 ico：一张张 PNG 塞进 ICONDIR 里，vista 之后系统直接认。
+    // 一档只有 64 的话，桌面大图标和任务栏小图标都是硬放大，边缘会糊；
+    // 所以从 256 的母图缩出六档，各视图都拿到尺寸刚好合适的那一张
+    static void SaveIco(Bitmap bmp, string path)
+    {
+        int[] sizes = new int[] { 16, 32, 48, 64, 128, 256 };
+        List<byte[]> pngs = new List<byte[]>();
+        foreach (int s in sizes)
+        {
+            using (Bitmap tmp = new Bitmap(s, s, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+            {
+                using (Graphics g = Graphics.FromImage(tmp))
+                {
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    g.Clear(Color.Transparent);
+                    g.DrawImage(bmp, 0, 0, s, s);
+                }
+                using (MemoryStream ms = new MemoryStream())
+                {
+                    tmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                    pngs.Add(ms.ToArray());
+                }
+            }
+        }
+        int n = pngs.Count;
+        using (FileStream fs = new FileStream(path, FileMode.Create, FileAccess.Write))
+        {
+            fs.Write(new byte[] { 0, 0, 1, 0 }, 0, 4);                    // reserved=0, type=1
+            fs.Write(BitConverter.GetBytes((ushort)n), 0, 2);              // 图张数
+            uint off = (uint)(6 + 16 * n);
+            for (int k = 0; k < n; k++)
+            {
+                int s = sizes[k];
+                byte wb = (byte)(s >= 256 ? 0 : s);                        // 256 要写成 0
+                fs.Write(new byte[] { wb, wb, 0, 0 }, 0, 4);                // w,h,颜色数,保留
+                fs.Write(BitConverter.GetBytes((ushort)1), 0, 2);          // planes
+                fs.Write(BitConverter.GetBytes((ushort)32), 0, 2);         // 32 位带 alpha
+                fs.Write(BitConverter.GetBytes((uint)pngs[k].Length), 0, 4);
+                fs.Write(BitConverter.GetBytes(off), 0, 4);
+                off += (uint)pngs[k].Length;
+            }
+            for (int k = 0; k < n; k++) fs.Write(pngs[k], 0, pngs[k].Length);
+        }
+    }
+
+    // 窗口图标也跟着当天那枚走（任务栏、Alt-Tab 读的是 Form.Icon）
+    Icon formIco;
+    void ApplyFormIcon(string icoPath)
+    {
+        try
+        {
+            if (!File.Exists(icoPath)) return;
+            Icon old = formIco;
+            formIco = new Icon(icoPath);
+            this.Icon = formIco;
+            if (old != null) { try { old.Dispose(); } catch { } }
+        }
+        catch { }
+    }
+
+    void SetShortcutIcon(string icoPath)
+    {
+        try
+        {
+            Type sh = Type.GetTypeFromProgID("WScript.Shell");
+            if (sh == null) return;
+            object shell = Activator.CreateInstance(sh);
+            string desk = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            string lnk = Path.Combine(desk, "道.lnk");
+            if (!File.Exists(lnk)) return;
+            object sc = sh.InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
+            string want = icoPath + ",0";
+            // 同一个图标就别再 Save：每 Save 一次都会让 Explorer 丢掉缓存重画桌面图标
+            object cur = sh.InvokeMember("IconLocation", System.Reflection.BindingFlags.GetProperty, null, sc, null);
+            if (cur != null && Convert.ToString(cur) == want) return;
+            sh.InvokeMember("IconLocation", System.Reflection.BindingFlags.SetProperty, null, sc, new object[] { want });
+            sh.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, sc, null);
+        }
+        catch { }
+    }
+
+    void DrawSceneLife(Graphics g, float t, int idx)
+    {
+        int n = 20;
+        switch (idx)
+        {
+            case 0: // 城市夜景：斜着落的雨丝 + 路面反光抖一下
+                {
+                    using (Pen rp = new Pen(Color.FromArgb(110, 198, 220, 246), 1f))
+                    {
+                        for (int i = 0; i < n; i++)
+                        {
+                            // 上缘往上是被裁掉的透明区，粒子只在实心里落，否则会被键色染色
+                            float yy = ((t * 52f + i * 13.7f) % (H - 52f)) + 48f;
+                            float xx = ((i * 47.3f) % W) + yy * 0.22f;
+                            g.DrawLine(rp, xx, yy, xx - 3.2f, yy + 10f);
+                        }
+                    }
+                    using (SolidBrush gl = new SolidBrush(Color.FromArgb((int)(26 + 16 * (float)Math.Sin(t * 1.6f)), 255, 214, 150)))
+                    {
+                        g.FillEllipse(gl, W * 0.36f, H * 0.70f, W * 0.30f, H * 0.10f);
+                    }
+                    // 街上有人路过：远的浅、近的深，从右往左慢慢走，走到头再从右边出来
+                    for (int i = 0; i < 3; i++)
+                    {
+                        float spd = 9f + i * 4.5f;
+                        float px = W + 26f - ((t * spd + i * 132f) % (W + 52f));
+                        float py = 126f + i * 17f;
+                        float ph2 = 15f + i * 4.5f;
+                        int pa = 105 + i * 35;
+                        using (SolidBrush ps = new SolidBrush(Color.FromArgb(pa, 22, 28, 46)))
+                        {
+                            g.FillEllipse(ps, px, py - ph2, ph2 * 0.40f, ph2 * 0.40f);              // 头
+                            g.FillRectangle(ps, px + 0.8f, py - ph2 * 0.60f, ph2 * 0.28f, ph2 * 0.60f); // 身子
+                        }
+                    }
+                }
+                break;
+            case 1: // 乡野田间：萤火虫，慢慢上下飘
+                {
+                    for (int i = 0; i < n; i++)
+                    {
+                        float ph = t * 0.55f + i * 0.83f;
+                        float xx = ((i * 39.7f) % (W - 40f)) + 20f + (float)Math.Sin(ph * 1.3f) * 7f;
+                        float yy = H * 0.42f + ((i * 23.1f) % (H * 0.46f)) + (float)Math.Sin(ph) * 6f;
+                        int aa = (int)(70 + 60 * Math.Abs((float)Math.Sin(ph * 1.7f)));
+                        using (SolidBrush fy = new SolidBrush(Color.FromArgb(aa, 226, 244, 150)))
+                        {
+                            g.FillEllipse(fy, xx, yy, 3.2f, 3.2f);
+                        }
+                    }
+                    // 风一阵阵从稻田上刮过：一道道亮带往右推，稻叶被吹得歪一下
+                    using (Pen waveP = new Pen(Color.FromArgb(52, 255, 255, 214), 2.4f))
+                    {
+                        for (int i = 0; i < 5; i++)
+                        {
+                            float ph3 = t * 1.1f + i * 0.72f;
+                            float wx = ((t * 26f + i * 82f) % (W + 130f)) - 65f;
+                            float wy = 104f + i * 14f + (float)Math.Sin(ph3) * 2.6f;
+                            g.DrawLine(waveP, wx, wy, wx + 42f, wy - 3f);
+                        }
+                    }
+                    using (Pen leafP = new Pen(Color.FromArgb(86, 214, 240, 152), 1.1f))
+                    {
+                        for (int i = 0; i < 14; i++)
+                        {
+                            float bx = (i * 27.4f) % (W - 10f);
+                            float by = 106f + (i % 5) * 12.4f;
+                            float sw2 = (float)Math.Sin(t * 1.7f + i * 0.9f) * 3.4f;
+                            g.DrawLine(leafP, bx, by + 7f, bx + sw2, by);
+                        }
+                    }
+                }
+                break;
+            case 2: // 海边日落：浪头白线一明一暗
+                {
+                    using (Pen wp = new Pen(Color.FromArgb(150, 250, 252, 255), 1.4f))
+                    {
+                        for (int i = 0; i < 7; i++)
+                        {
+                            float yy2 = H * 0.66f + i * 5.6f;
+                            float off = (t * 18f + i * 26f) % (W + 60f) - 30f;
+                            int aa = (int)(70 + 80 * Math.Abs((float)Math.Sin(t * 1.1f + i)));
+                            wp.Color = Color.FromArgb(aa, 250, 252, 255);
+                            g.DrawLine(wp, off, yy2, off + 34f, yy2 - 1f);
+                            g.DrawLine(wp, off + 22f, yy2 + 4f, off + 58f, yy2 + 3.4f);
+                        }
+                    }
+                }
+                break;
+            case 3: // 花丛：花瓣一片片飘下来，转了半圈
+                {
+                    for (int i = 0; i < n; i++)
+                    {
+                        float ph = t * 0.42f + i * 0.61f;
+                        float yy = ((t * 12f + i * 11.7f) % (H * 0.62f)) + 56f;
+                        float xx = ((i * 41.9f) % (W - 30f)) + 15f + (float)Math.Sin(ph * 2.1f) * 11f;
+                        int aa = (int)(150 + 60 * Math.Abs((float)Math.Sin(ph)));
+                        Color pc = (i % 2 == 0) ? Color.FromArgb(aa, 255, 214, 232) : Color.FromArgb(aa, 252, 238, 196);
+                        using (SolidBrush pb = new SolidBrush(pc))
+                        {
+                            float rw = 4.4f + (float)Math.Abs(Math.Sin(ph)) * 2.2f;
+                            g.FillEllipse(pb, xx, yy, rw, 2.6f);
+                        }
+                    }
+                    // 草丛里两只蝴蝶：一黄一白，翅膀一开一合地飞，路线是绕圈的
+                    for (int i = 0; i < 2; i++)
+                    {
+                        float ph4 = t * 0.82f + i * 2.3f;
+                        float bxx = W * 0.50f + (float)Math.Sin(ph4 * 1.15f) * 90f;
+                        float byy = 74f + i * 30f + (float)Math.Sin(ph4 * 1.9f) * 17f;
+                        float flap = 2.1f + 2.2f * (float)Math.Abs(Math.Sin(t * 9.4f + i * 1.5f));
+                        Color bcol = (i == 0) ? Color.FromArgb(206, 255, 208, 116) : Color.FromArgb(206, 252, 250, 246);
+                        using (SolidBrush bb = new SolidBrush(bcol))
+                        {
+                            g.FillEllipse(bb, bxx - flap, byy - 2.4f, flap, 4.8f);
+                            g.FillEllipse(bb, bxx + 0.7f, byy - 2.4f, flap, 4.8f);
+                            g.FillEllipse(bb, bxx - 0.9f, byy - 0.8f, 1.9f, 3.4f);
+                        }
+                    }
+                }
+                break;
+            case 4: // 客厅：落地灯的光在轻轻呼吸，窗外零星闪
+                {
+                    int aa = (int)(22 + 12 * Math.Abs((float)Math.Sin(t * 0.7f)));
+                    using (SolidBrush lamp = new SolidBrush(Color.FromArgb(aa, 255, 214, 130)))
+                    {
+                        g.FillEllipse(lamp, 26f, 44f, 62f, 74f);
+                    }
+                    for (int i = 0; i < 5; i++)
+                    {
+                        int sy2 = (int)(50 + 40 * Math.Abs((float)Math.Sin(t * 0.9f + i * 1.3f)));
+                        using (SolidBrush st = new SolidBrush(Color.FromArgb(sy2, 220, 232, 255)))
+                        {
+                            g.FillEllipse(st, 168f + i * 11f, 30f + (i % 3) * 9f, 1.6f, 1.6f);
+                        }
+                    }
+                }
+                break;
+            default: // 仙侠云海：樱瓣和云影一起慢飘
+                {
+                    using (SolidBrush cl = new SolidBrush(Color.FromArgb(26, 255, 255, 255)))
+                    {
+                        float cx2 = ((t * 8f) % (W + 120f)) - 60f;
+                        g.FillEllipse(cl, cx2, H * 0.30f, 96f, 22f);
+                        g.FillEllipse(cl, cx2 + 130f, H * 0.52f, 118f, 26f);
+                    }
+                    for (int i = 0; i < 12; i++)
+                    {
+                        float ph = t * 0.5f + i * 0.9f;
+                        float yy = ((t * 10f + i * 14.3f) % (H * 0.60f)) + 58f;
+                        float xx = ((i * 53.1f) % (W - 26f)) + 13f + (float)Math.Sin(ph * 1.9f) * 9f;
+                        int aa = (int)(150 + 60 * Math.Abs((float)Math.Sin(ph)));
+                        using (SolidBrush pet2 = new SolidBrush(Color.FromArgb(aa, 255, 198, 226)))
+                        {
+                            g.FillEllipse(pet2, xx, yy, 4.0f, 2.4f);
+                        }
+                    }
+                }
+                break;
+        }
+    }
+
+    // 脚下的场景底：一条起伏的地台，顶上渐隐到透明。四种景自己轮换，也会跟动作配：
+    // 走跑是城市街头，飞行御剑是海边日落，骑坐骑是乡野田间，闲着是花丛
+    void DrawScenery(Graphics g, float cx, float footY, float baseW, float targetH, float t, int idx, float amt)
+    {
+        // 场景先停用：窗口就是纯透明，只剩形象浮在桌面上。
+        // 代码全留着，等场景优化好了把 sceneOn 改回 true 就回来
+        if (!sceneOn) return;
+        if (amt <= 0.01f) return;
+        // 地台钉在窗口中间：人在场景里走动的时候，地不能跟着一起挪
+        cx = W / 2f;
+        // 有模型画的整幅场景就直接贴上去；原图已按窗口 380x205 预缩好，
+        // 一像素对一像素画，不做插值，透明键窗口外沿就不会渗色
+        if (idx >= 0 && idx < 6 && sceneImgs[idx] != null)
+        {
+            // 一像素对一像素贴，不缩放也不平移：边缘是硬 alpha，
+            // 一旦插值就会混出半透明像素，透明键立刻把那一圈染成洋红
+            g.DrawImage(sceneImgs[idx], 0, 0);
+            // 景里自己带的小动静：城市落雨、乡野萤火、海边浪光、花丛花瓣、
+            // 客厅电视溢出的光、仙侠飘的樱瓣，让静态图看着在呼吸
+            DrawSceneLife(g, t, idx);
+            // 屋里那台电视一直开着：屏幕上光影一直在动，有人坐过去看时人再对着它
+            if (idx == 4)
+            {
+                // 客厅电视屏幕上播节目：坐标是量着场景图里的屏幕来的
+                RectangleF sr = new RectangleF(292f, 80f, 50f, 31f);
+                int g1 = (int)(150 + 80 * (float)Math.Sin(t * 2.6f));
+                int g2 = (int)(160 + 70 * (float)Math.Sin(t * 1.9f + 1.4f));
+                using (LinearGradientBrush sg = new LinearGradientBrush(
+                    sr, Color.FromArgb(255, 116, g1, 236), Color.FromArgb(255, 226, g2, 150), 20f))
+                {
+                    g.FillRectangle(sg, sr);
+                }
+                using (SolidBrush sl = new SolidBrush(Color.FromArgb(210, 250, 252, 255)))
+                {
+                    float ph3 = (t * 0.9f) % 1f;
+                    g.FillRectangle(sl, sr.X + 6f, sr.Y + sr.Height * ph3, sr.Width - 12f, 2.2f);
+                }
+            }
+            return;
+        }
+        float sw = Math.Max(baseW * 1.66f, targetH * 1.12f);
+        float sh = targetH * 0.34f;
+        float yT = footY - sh;
+        float yB = footY + 5f;
+        GraphicsPath gp = new GraphicsPath();
+        // 一段地面横带：上缘只轻轻起伏、两头略微落下去，看着是脚下的地，
+        // 不是浮在空中的小岛
+        gp.AddBezier(new PointF(cx - sw * 0.50f, yB),
+            new PointF(cx - sw * 0.40f, yT + sh * 0.12f),
+            new PointF(cx - sw * 0.24f, yT - sh * 0.02f),
+            new PointF(cx - sw * 0.06f, yT + sh * 0.03f));
+        gp.AddBezier(new PointF(cx - sw * 0.06f, yT + sh * 0.03f),
+            new PointF(cx + sw * 0.10f, yT + sh * 0.07f),
+            new PointF(cx + sw * 0.30f, yT + sh * 0.02f),
+            new PointF(cx + sw * 0.50f, yT + sh * 0.13f));
+        gp.AddLine(new PointF(cx + sw * 0.50f, yT + sh * 0.13f), new PointF(cx + sw * 0.50f, yB));
+        gp.AddLine(new PointF(cx + sw * 0.50f, yB), new PointF(cx - sw * 0.50f, yB));
+        gp.CloseFigure();
+
+        Color c0, c1;
+        switch (idx)
+        {
+            case 0: c0 = Color.FromArgb(58, 66, 92); c1 = Color.FromArgb(104, 118, 150); break;    // 城市
+            case 2: c0 = Color.FromArgb(132, 164, 208); c1 = Color.FromArgb(246, 180, 122); break;  // 海边
+            case 3: c0 = Color.FromArgb(152, 194, 132); c1 = Color.FromArgb(212, 230, 172); break;  // 花丛
+            case 4: c0 = Color.FromArgb(46, 48, 74); c1 = Color.FromArgb(98, 84, 106); break;      // 屋里
+            default: c0 = Color.FromArgb(112, 162, 98); c1 = Color.FromArgb(180, 212, 136); break;  // 乡野
+        }
+        // 透明键窗口里，抗锯齿的边缘像素是半透明的，会被键色染成一圈紫边，
+        // 所以这层地台的填充干脆关掉抗锯齿，边缘硬一点但不发紫
+        SmoothingMode smOld = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        using (LinearGradientBrush bg2 = new LinearGradientBrush(
+            new RectangleF(cx - sw * 0.52f, yT - 2f, sw * 1.04f, sh + 12f),
+            Color.FromArgb(c0.R, c0.G, c0.B),
+            Color.FromArgb(255, c1.R, c1.G, c1.B), 90f))
+        {
+            g.FillPath(bg2, gp);
+        }
+        g.SmoothingMode = smOld;
+
+        GraphicsState sc = g.Save();
+        g.SetClip(gp);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        if (idx == 0)
+        {
+            // 城市：一排高楼剪影，零星亮着的窗；底下一道街面
+            for (int i = 0; i < 6; i++)
+            {
+                float bx = cx - sw * 0.44f + i * sw * 0.155f;
+                float bw = sw * 0.115f;
+                float bh = sh * (0.40f + 0.34f * ((i * 37) % 5) / 5f);
+                using (SolidBrush bb = new SolidBrush(Color.FromArgb(255, 38, 46, 70)))
+                {
+                    g.FillRectangle(bb, bx, yB - bh - sh * 0.05f, bw, bh);
+                }
+                using (SolidBrush wb = new SolidBrush(Color.FromArgb(255, 255, 214, 132)))
+                {
+                    for (int r = 0; r < 3; r++)
+                    {
+                        for (int c = 0; c < 2; c++)
+                        {
+                            if ((i + r + c) % 3 == 0) continue;
+                            g.FillRectangle(wb, bx + bw * 0.22f + c * bw * 0.40f,
+                                yB - bh - sh * 0.05f + bh * 0.16f + r * bh * 0.26f,
+                                bw * 0.18f, bh * 0.10f);
+                        }
+                    }
+                }
+            }
+            // 街面：下半压一条车行道，车道上按车道虚线排白线，路沿立一盏路灯
+            using (SolidBrush road = new SolidBrush(Color.FromArgb(255, 62, 66, 78)))
+            {
+                g.FillRectangle(road, cx - sw * 0.50f, yB - sh * 0.22f, sw, sh * 0.22f + 2f);
+            }
+            using (SolidBrush das = new SolidBrush(Color.FromArgb(255, 226, 231, 238)))
+            {
+                for (int i = 0; i < 6; i++)
+                {
+                    g.FillRectangle(das, cx - sw * 0.46f + i * sw * 0.17f, yB - sh * 0.12f, sw * 0.085f, 2f);
+                }
+            }
+            float lpx = cx + sw * 0.34f;
+            using (SolidBrush halo3 = new SolidBrush(Color.FromArgb(255, 255, 226, 158)))
+            {
+                g.FillEllipse(halo3, lpx - sw * 0.048f, yB - sh * 0.34f, sw * 0.096f, sh * 0.22f);
+            }
+            using (Pen pole = new Pen(Color.FromArgb(255, 40, 44, 56), 1.8f))
+            {
+                g.DrawLine(pole, lpx, yB - sh * 0.01f, lpx, yB - sh * 0.46f);
+                g.DrawLine(pole, lpx, yB - sh * 0.46f, lpx - sw * 0.032f, yB - sh * 0.44f);
+            }
+        }
+        else if (idx == 1)
+        {
+            // 乡野：两道远山，前面一畦畦田垄，边上几根稻穗随风点
+            using (SolidBrush mb = new SolidBrush(Color.FromArgb(255, 74, 118, 84)))
+            {
+                g.FillEllipse(mb, cx - sw * 0.30f, yT + sh * 0.34f, sw * 0.34f, sh * 0.42f);
+                g.FillEllipse(mb, cx - sw * 0.02f, yT + sh * 0.26f, sw * 0.36f, sh * 0.50f);
+            }
+            // 一畦畦田垄：深浅交替的横带，远看就是一块块地
+            using (SolidBrush fur = new SolidBrush(Color.FromArgb(255, 94, 140, 86)))
+            {
+                for (int i = 0; i < 4; i++)
+                {
+                    g.FillRectangle(fur, cx - sw * 0.50f, yB - sh * (0.28f - i * 0.065f), sw, sh * 0.028f);
+                }
+            }
+            using (SolidBrush fur2 = new SolidBrush(Color.FromArgb(255, 158, 194, 122)))
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    g.FillRectangle(fur2, cx - sw * 0.50f, yB - sh * (0.245f - i * 0.065f), sw, sh * 0.016f);
+                }
+            }
+            using (Pen lp = new Pen(Color.FromArgb(255, 120, 166, 104), 1.4f))
+            {
+                for (int i = 0; i < 7; i++)
+                {
+                    float lx = cx - sw * 0.42f + i * sw * 0.14f;
+                    g.DrawLine(lp, lx, yB - sh * 0.22f, lx + sw * 0.06f, yB - sh * 0.02f);
+                }
+            }
+            using (Pen rr = new Pen(Color.FromArgb(255, 176, 196, 108), 1.6f))
+            {
+                float sw2 = (float)Math.Sin(t * 1.7f) * 2.2f;
+                for (int i = 0; i < 5; i++)
+                {
+                    float rx = cx - sw * 0.34f + i * sw * 0.17f;
+                    float ry = yB - sh * 0.06f;
+                    g.DrawLine(rr, rx, ry, rx + sw2, ry - sh * 0.26f);
+                    g.DrawLine(rr, rx + sw2, ry - sh * 0.26f, rx + sw2 + 3f, ry - sh * 0.30f);
+                    g.DrawLine(rr, rx + sw2, ry - sh * 0.26f, rx + sw2 - 3f, ry - sh * 0.30f);
+                }
+            }
+        }
+        else if (idx == 2)
+        {
+            // 海边：一块落日，底下一片海，两道浪线来回推
+            using (SolidBrush sun = new SolidBrush(Color.FromArgb(255, 255, 216, 150)))
+            {
+                g.FillEllipse(sun, cx - sw * 0.10f, yT + sh * 0.06f, sw * 0.20f, sw * 0.20f);
+            }
+            using (SolidBrush sea = new SolidBrush(Color.FromArgb(255, 58, 104, 168)))
+            {
+                g.FillRectangle(sea, cx - sw * 0.50f, yT + sh * 0.32f, sw, sh * 0.36f);
+            }
+            // 近处是沙滩，沙子压在最下面，海和沙之间留一道浅水线
+            using (SolidBrush sand = new SolidBrush(Color.FromArgb(255, 240, 220, 176)))
+            {
+                g.FillRectangle(sand, cx - sw * 0.50f, yB - sh * 0.32f, sw, sh * 0.32f + 2f);
+            }
+            using (SolidBrush wet = new SolidBrush(Color.FromArgb(255, 176, 202, 216)))
+            {
+                g.FillRectangle(wet, cx - sw * 0.50f, yB - sh * 0.32f, sw, sh * 0.035f);
+            }
+            using (Pen wv = new Pen(Color.FromArgb(255, 206, 232, 250), 1.6f))
+            {
+                for (int k = 0; k < 2; k++)
+                {
+                    float yy = yB - sh * 0.36f + k * sh * 0.09f;
+                    float phw = t * 2.2f + k * 1.4f;
+                    PointF[] pts = new PointF[13];
+                    for (int i = 0; i < 13; i++)
+                    {
+                        float px3 = cx - sw * 0.46f + sw * 0.92f * i / 12f;
+                        pts[i] = new PointF(px3, yy + (float)Math.Sin(phw + i * 0.7f) * 2.4f);
+                    }
+                    g.DrawLines(wv, pts);
+                }
+            }
+        }
+        else if (idx == 4)
+        {
+            // 屋里：木地板几条缝，墙上一扇小窗，窗外有月亮星星，旁边一盏台灯透着暖光
+            float fl = yB - sh * 0.30f;
+            using (SolidBrush flb = new SolidBrush(Color.FromArgb(255, 118, 90, 76)))
+            {
+                g.FillRectangle(flb, cx - sw * 0.50f, fl, sw, yB - fl + 2f);
+            }
+            using (Pen fwl = new Pen(Color.FromArgb(255, 144, 112, 94), 1.2f))
+            {
+                for (int i = 1; i <= 3; i++)
+                {
+                    float yy2 = fl + (yB - fl) * i / 4f;
+                    g.DrawLine(fwl, cx - sw * 0.50f, yy2, cx + sw * 0.50f, yy2);
+                }
+            }
+            // 台灯：先铺一片暖光，再立杆、扣灯罩
+            float lx = cx - sw * 0.31f;
+            using (SolidBrush halo = new SolidBrush(Color.FromArgb(255, 255, 226, 168)))
+            {
+                g.FillEllipse(halo, lx - sw * 0.058f, yT + sh * 0.02f, sw * 0.116f, sh * 0.56f);
+            }
+            using (SolidBrush lamp = new SolidBrush(Color.FromArgb(255, 218, 160, 88)))
+            {
+                g.FillRectangle(lamp, lx - 1.6f, yT + sh * 0.14f, 3.2f, sh * 0.44f);
+                g.FillPolygon(lamp, new PointF[] {
+                    new PointF(lx - sw * 0.052f, yT + sh * 0.15f),
+                    new PointF(lx + sw * 0.052f, yT + sh * 0.15f),
+                    new PointF(lx + sw * 0.030f, yT + sh * 0.02f),
+                    new PointF(lx - sw * 0.030f, yT + sh * 0.02f) });
+            }
+            // 窗往中间靠：地台上沿是个弧，太靠边那块已经在地台外面了，画出来会被裁掉
+            float wx = cx + sw * 0.05f;
+            float wy = yT + sh * 0.09f;
+            float ww = sw * 0.17f, wh = sh * 0.30f;
+            using (SolidBrush wbg = new SolidBrush(Color.FromArgb(255, 32, 38, 68)))
+            {
+                g.FillRectangle(wbg, wx, wy, ww, wh);
+            }
+            using (SolidBrush mb = new SolidBrush(Color.FromArgb(255, 246, 240, 182)))
+            {
+                g.FillEllipse(mb, wx + ww * 0.30f, wy + wh * 0.16f, ww * 0.36f, wh * 0.34f);
+                for (int i = 0; i < 3; i++)
+                {
+                    float stx = wx + ww * (0.12f + 0.30f * i);
+                    float sty = wy + wh * (0.74f - 0.18f * i);
+                    g.FillEllipse(mb, stx, sty, 2.2f, 2.2f);
+                }
+            }
+            using (Pen wf = new Pen(Color.FromArgb(255, 206, 196, 174), 1.6f))
+            {
+                g.DrawRectangle(wf, wx, wy, ww, wh);
+                g.DrawLine(wf, wx + ww * 0.5f, wy, wx + ww * 0.5f, wy + wh);
+                g.DrawLine(wf, wx, wy + wh * 0.5f, wx + ww, wy + wh * 0.5f);
+            }
+        }
+        else
+        {
+            using (Pen gr = new Pen(Color.FromArgb(255, 96, 150, 92), 1.6f))
+            {
+                for (int i = 0; i < 9; i++)
+                {
+                    float gx = cx - sw * 0.44f + i * sw * 0.11f;
+                    float gh = sh * (0.12f + 0.06f * ((i * 29) % 4));
+                    float bend = (float)Math.Sin(t * 1.5f + i) * 2f;
+                    g.DrawBezier(gr, new PointF(gx, yB), new PointF(gx + bend, yB - gh * 0.5f),
+                        new PointF(gx - bend, yB - gh * 0.8f), new PointF(gx + bend, yB - gh));
+                }
+            }
+            Color[] petal = { Color.FromArgb(246, 138, 160), Color.FromArgb(252, 210, 120), Color.FromArgb(190, 158, 236) };
+            for (int i = 0; i < 6; i++)
+            {
+                float fx2 = cx - sw * 0.36f + i * sw * 0.145f;
+                float fy2 = yB - sh * (0.10f + 0.05f * ((i * 17) % 3));
+                Color pc = petal[i % 3];
+                using (SolidBrush pb = new SolidBrush(Color.FromArgb(255, pc.R, pc.G, pc.B)))
+                {
+                    for (int k = 0; k < 5; k++)
+                    {
+                        float ang = (float)(k * Math.PI * 2 / 5);
+                        g.FillEllipse(pb, fx2 + (float)Math.Cos(ang) * 3.2f - 2.4f,
+                            fy2 + (float)Math.Sin(ang) * 3.2f - 2.4f, 4.8f, 4.8f);
+                    }
+                }
+                using (SolidBrush cc = new SolidBrush(Color.FromArgb(255, 250, 238, 170)))
+                {
+                    g.FillEllipse(cc, fx2 - 2f, fy2 - 2f, 4f, 4f);
+                }
+            }
+            for (int i = 0; i < 2; i++)
+            {
+                float bx2 = cx - sw * 0.22f + i * sw * 0.40f + (float)Math.Sin(t * 0.9f + i * 2f) * sw * 0.10f;
+                float by2 = yT + sh * 0.26f + (float)Math.Sin(t * 1.6f + i) * sh * 0.06f;
+                float flap = Math.Abs((float)Math.Sin(t * 7.4f + i * 1.2f));
+                using (SolidBrush bf = new SolidBrush(Color.FromArgb(255, 252, 190, 96)))
+                {
+                    g.FillEllipse(bf, bx2 - 5f, by2 - 3f * flap, 4.6f, 7f * flap + 1f);
+                    g.FillEllipse(bf, bx2 + 0.6f, by2 - 3f * flap, 4.6f, 7f * flap + 1f);
+                }
+            }
+        }
+
+        g.Restore(sc);
+        gp.Dispose();
+    }
+
+    // 生活动作的配件：披风、飞剑、坐骑画在身体后面；音符、茶杯、电视画在身前
+    // 全部跟着 actAmt 淡入淡出，进出都不会突然闪出来
+    void DrawActProps(Graphics g, float baseW, float targetH, bool front)
+    {
+        float a = actAmt;
+        if (a < 0.02f || actKind <= 0) return;
+        float half = baseW / 2f;
+        // 道具尺度按身高算，不按图的宽度算：恐龙、剑客这类竖长条形象身体只有几十像素宽，
+        // 按宽度算披风就细成一根带子，电视也小得看不见
+        float hf = targetH * 0.64f;
+        float slide = (1f - a) * 20f;
+        int na = (int)(255 * a);
+        if (na > 255) na = 255;
+
+        if (!front)
+        {
+            // 飞：披风撤了，脚下给一层被风托着的气流。人还是离地飘着的，
+            // 只是不再背一块假红布
+            if (actKind == 1 && !UseCape)
+            {
+                using (SolidBrush air = new SolidBrush(Color.FromArgb((int)(78 * a), 206, 232, 255)))
+                {
+                    g.FillEllipse(air, -targetH * 0.28f, -4f, targetH * 0.56f, 9f);
+                }
+                using (Pen wpen = new Pen(Color.FromArgb((int)(140 * a), 232, 244, 255), 1.1f))
+                {
+                    for (int wi = 0; wi < 3; wi++)
+                    {
+                        float wx0 = -targetH * 0.18f + wi * 9f;
+                        float wy0 = 2f + wi * 2f;
+                        float phW = t * 4f + wi;
+                        g.DrawBezier(wpen, new PointF(wx0, wy0),
+                            new PointF(wx0 - 12f, wy0 + 3f + (float)Math.Sin(phW) * 1.2f),
+                            new PointF(wx0 - 20f, wy0 + 5f - (float)Math.Sin(phW) * 1.0f),
+                            new PointF(wx0 - 28f, wy0 + 6f));
+                    }
+                }
+            }
+            if (actKind == 1 && UseCape)
+            {
+                if (capeWind != null)
+                {
+                    // 被风吹的披风：领口贴在肩上，布身往身后甩，飞行时才像"披着披风在飞"
+                    float cw2 = targetH * 1.30f;
+                    float ch2 = cw2 * capeWind.Height / (float)capeWind.Width;
+                    // 位置完全不动：人物本身飞行时会上下飘，披风跟着动就够了，
+                    // 贴图自己再位移就会整块跳，看着像哆嗦
+                    float lipX = -targetH * 0.02f;
+                    float lipY = -targetH * 0.78f + slide * 0.4f;
+                    InterpolationMode imBak = g.InterpolationMode;
+                    PixelOffsetMode poBak = g.PixelOffsetMode;
+                    g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                    g.PixelOffsetMode = PixelOffsetMode.Half;
+                    GraphicsState stW = g.Save();
+                    // 领口在贴图左端，镜像过来就变成朝身后（坐标已跟着人物朝向翻转过）
+                    g.TranslateTransform(lipX, lipY);
+                    g.ScaleTransform(-1f, 1f);
+                    // 布面被风吹：把披风按竖条切开，越靠下摆错得越多，
+                    // 整块布就一鼓一鼓地飘；不是整张图平移（那才是哆嗦）
+                    int nStrip = 10;
+                    float wobAmp = 3.4f + 1.8f * (float)Math.Sin(t * 2.2f);
+                    for (int si = 0; si < nStrip; si++)
+                    {
+                        float u0 = si / (float)nStrip;
+                        float ph = t * 2.8f - u0 * 5.2f;
+                        float off = (float)Math.Sin(ph) * wobAmp * u0;
+                        RectangleF srcR = new RectangleF(
+                            capeWind.Width * u0, 0f,
+                            capeWind.Width / nStrip, capeWind.Height);
+                        RectangleF dstR = new RectangleF(
+                            cw2 * u0, off, cw2 / nStrip + 1.2f, ch2);
+                        g.DrawImage(capeWind, dstR, srcR, GraphicsUnit.Pixel);
+                    }
+                    g.Restore(stW);
+                    g.InterpolationMode = imBak;
+                    g.PixelOffsetMode = poBak;
+                    return;
+                }
+                if (capeImg != null)
+                {
+                    // 贴图版：肩线搭在肩上，下摆波浪是画好的
+                    // 宽要盖过身体两侧一点点，太高就会把脚也罩住，比例得按身高和身宽分别配
+                    // 原来按 1.25 倍身高铺，套在剑客这种瘦长角色身上就宽出一大圈，读成一对翅膀；
+                    // 收到 0.80 倍身高，肩线从 -0.58 起算，刚好搭在肩上、不顶到头顶
+                    float cpw = Math.Max(baseW * 1.30f, targetH * 0.80f);
+                    float cph = targetH * 0.80f;
+                    float ctop = -targetH * 0.58f + slide * 0.4f;
+                    // 位置固定不动：以前给这里叠过一个 1.8px 的来回正弦，人物自己已经在晃，
+                    // 贴图再叠一层就成了肉眼看到的"哆嗦"，布料感要靠画好的下摆形态，不靠往复平移
+                    if (!dbgCape)
+                    {
+                        dbgCape = true;
+                        try
+                        {
+                            File.AppendAllText(Path.Combine(AppDir(), "AI日志.txt"),
+                                "CAPE a=" + a.ToString("0.00") + " baseW=" + baseW.ToString("0.0") + " targetH=" + targetH.ToString("0.0")
+                                + " cpw=" + cpw.ToString("0.0") + " cph=" + cph.ToString("0.0") + " ctop=" + ctop.ToString("0.0")
+                                + " img=" + capeImg.Width + "x" + capeImg.Height + "\r\n");
+                        }
+                        catch { }
+                    }
+                    InterpolationMode imBak2 = g.InterpolationMode;
+                    PixelOffsetMode poBak2 = g.PixelOffsetMode;
+                    g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                    g.PixelOffsetMode = PixelOffsetMode.Half;
+                    g.DrawImage(capeImg, new RectangleF(-cpw * 0.5f, ctop, cpw, cph));
+                    g.InterpolationMode = imBak2;
+                    g.PixelOffsetMode = poBak2;
+                    return;
+                }
+                // 披风：一整块从两肩垂到脚踝的斗篷，中间被人挡着，两侧和底边露出来
+                // 分开画两片会像翅膀，一整块才像个披风
+                float pw = Math.Max(targetH * 0.62f, baseW * 0.95f);
+                // 领口落在肩上，别顶到头顶，不然会支起一个尖像帽子
+                float shY = -targetH * 0.54f + slide * 0.4f;
+                float wl = targetH * 0.54f;
+                float wv = (float)Math.Sin(t * 4.4);
+                float wv2 = (float)Math.Sin(t * 3.1 + 0.6);
+                GraphicsPath cp = new GraphicsPath();
+                // 肩这一端就得有宽度：要是从中间一个点往下张，两侧露出来的就是两片三角，
+                // 读成翅膀；等宽收下去才是"背后一整块布"垂到脚。
+                // 但也不能太宽，太宽就成了两把扇子，收在身体轮廓外一点点刚好
+                PointF lt = new PointF(-pw * 0.42f, shY);
+                PointF rt = new PointF(pw * 0.42f, shY);
+                PointF lb = new PointF(-pw * 0.78f + wv * 3f, shY + wl * 0.96f);
+                PointF rb = new PointF(pw * 0.78f - wv * 3f, shY + wl * 0.96f);
+                // 左肩到左脚，外侧几乎竖直，飞行时被风带得往外飘一点
+                cp.AddBezier(lt,
+                    new PointF(-pw * 0.60f, shY + wl * 0.30f),
+                    new PointF(-pw * 0.76f, shY + wl * 0.70f), lb);
+                // 底边：三个起伏要够大，才看得出下摆被风掀起
+                cp.AddBezier(lb,
+                    new PointF(-pw * 0.46f, shY + wl * 1.16f + wv * 7f),
+                    new PointF(-pw * 0.14f, shY + wl * 0.86f - wv2 * 6f),
+                    new PointF(0f, shY + wl * 0.98f + wv * 5f));
+                cp.AddBezier(new PointF(0f, shY + wl * 0.98f + wv * 5f),
+                    new PointF(pw * 0.14f, shY + wl * 0.86f + wv2 * 6f),
+                    new PointF(pw * 0.46f, shY + wl * 1.16f - wv * 7f), rb);
+                // 右脚回到右肩
+                cp.AddBezier(rb,
+                    new PointF(pw * 0.76f, shY + wl * 0.70f),
+                    new PointF(pw * 0.60f, shY + wl * 0.30f), rt);
+                // 肩线：从脖子后面横过去。得抬起来一点，让两边在头顶两侧露出一个搭肩的弧，
+                // 光靠两条竖布中间被身体全挡住，看着还是两片分开的旗子
+                cp.AddBezier(rt,
+                    new PointF(pw * 0.34f, shY - targetH * 0.085f),
+                    new PointF(-pw * 0.34f, shY - targetH * 0.085f), lt);
+                cp.CloseFigure();
+                using (LinearGradientBrush cg = new LinearGradientBrush(
+                    new RectangleF(-pw * 1.1f, shY, pw * 2.2f, wl + 14f),
+                    Color.FromArgb(na, 250, 86, 92),
+                    Color.FromArgb(na, 150, 10, 28), 90f))
+                {
+                    g.FillPath(cg, cp);
+                }
+                // 金色滚边：红披风在红壁纸上会糊成一片，得有个亮边才看得出形状
+                using (Pen cgld = new Pen(Color.FromArgb(na, 255, 208, 118), 1.7f))
+                {
+                    g.DrawPath(cgld, cp);
+                }
+                // 两侧各一道里衬褶皱，布才不呆
+                using (Pen cfo = new Pen(Color.FromArgb((int)(na * 0.32f), 255, 168, 170), 1.2f))
+                {
+                    for (int sgn = -1; sgn <= 1; sgn += 2)
+                    {
+                        g.DrawBezier(cfo,
+                            new PointF(sgn * pw * 0.26f, shY + wl * 0.10f),
+                            new PointF(sgn * pw * 0.70f + wv * 2f, shY + wl * 0.42f),
+                            new PointF(sgn * pw * 0.86f + wv2 * 2f, shY + wl * 0.72f),
+                            new PointF(sgn * pw * 0.88f, shY + wl * 0.92f));
+                    }
+                }
+                cp.Dispose();
+                // 肩上两颗领扣
+                using (SolidBrush kk = new SolidBrush(Color.FromArgb(na, 250, 210, 120)))
+                {
+                    g.FillEllipse(kk, -pw * 0.22f - 3f, shY - 3f, 6f, 6f);
+                    g.FillEllipse(kk, pw * 0.22f - 3f, shY - 3f, 6f, 6f);
+                }
+                // 布尾：左右各甩一条，被风掀到身后，带子越往尖越窄、末梢还打个卷
+                for (int sgn = -1; sgn <= 1; sgn += 2)
+                {
+                    float x0 = sgn * pw * 0.30f;
+                    float y0 = shY + wl * 0.14f;
+                    float x1 = sgn * pw * 0.70f;
+                    float y1 = y0 + wl * 0.09f + wv2 * 5f;
+                    float x2 = sgn * pw * 1.00f;
+                    float y2 = y1 + wl * 0.15f + wv * 8f;
+                    float th0 = targetH * 0.055f;
+                    GraphicsPath band = new GraphicsPath();
+                    band.AddBezier(new PointF(x0, y0),
+                        new PointF(x1 * 0.90f, y0 + targetH * 0.02f),
+                        new PointF(x1, y1), new PointF(x2, y2));
+                    band.AddBezier(new PointF(x2, y2),
+                        new PointF(x2 - sgn * targetH * 0.04f, y2 + targetH * 0.04f),
+                        new PointF(x2 - sgn * targetH * 0.11f, y2 - targetH * 0.01f),
+                        new PointF(x2 - sgn * targetH * 0.09f, y2 - targetH * 0.05f));
+                    band.AddBezier(new PointF(x2 - sgn * targetH * 0.09f, y2 - targetH * 0.05f),
+                        new PointF(x1 * 0.94f, y1 + th0 * 0.4f),
+                        new PointF(x1 * 0.60f, y0 + th0),
+                        new PointF(x0, y0 + th0));
+                    band.CloseFigure();
+                    using (LinearGradientBrush bg3 = new LinearGradientBrush(
+                        new RectangleF(Math.Min(0f, x2) - 4f, y0 - 4f, Math.Abs(x2) * 2f + 8f, Math.Abs(y2 - y0) + 20f),
+                        Color.FromArgb(na, 244, 72, 84), Color.FromArgb(na, 150, 10, 28), 45f))
+                    {
+                        g.FillPath(bg3, band);
+                    }
+                    using (Pen bgld = new Pen(Color.FromArgb(na, 255, 208, 118), 1.5f))
+                    {
+                        g.DrawPath(bgld, band);
+                    }
+                    band.Dispose();
+                }
+                // 兜帽边：头后面露出一圈红，别人才看得出这是披着披风，
+                // 不然两侧两块布很容易被认成扇子或翅膀
+                float hdW = pw * 1.00f;
+                float hdH = targetH * 0.30f;
+                float hdY = shY - targetH * 0.12f;
+                using (SolidBrush hood = new SolidBrush(Color.FromArgb(na, 230, 62, 72)))
+                {
+                    g.FillEllipse(hood, -hdW * 0.5f, hdY - hdH * 0.5f, hdW, hdH);
+                }
+                using (Pen hdp = new Pen(Color.FromArgb(na, 255, 206, 116), 1.6f))
+                {
+                    g.DrawArc(hdp, -hdW * 0.5f, hdY - hdH * 0.5f, hdW, hdH, 186f, 168f);
+                }
+                // 领口：肩上横一道金边，把两边连起来
+                using (Pen collar = new Pen(Color.FromArgb(na, 255, 208, 118), 2.6f))
+                {
+                    g.DrawLine(collar, -pw * 0.40f, shY + 1f, pw * 0.40f, shY + 1f);
+                }
+            }
+            else if (actKind == 2)
+            {
+                // 有贴图时改成在人物前面画（踩着剑才看得见），这里直接跳过
+                if (swordImg != null) return;
+                // 这个形象有整套御剑姿势图（剑就在图里），这里不能再画一把，会变成两把剑
+                if (swordFly != null) return;
+                // 御剑：脚下一柄横着的剑，剑身带流光，剑尖朝前
+                float gy = 13f + slide;
+                float len = targetH * 0.86f;
+                float th = 4.4f;
+                // 剑身：细长，靠前收成尖，中间一道高光；下面垫一层浅影让它像浮着
+                GraphicsPath sp = new GraphicsPath();
+                sp.AddPolygon(new PointF[] {
+                    new PointF(-len * 0.32f, gy - th),
+                    new PointF(len * 0.38f, gy - th * 0.52f),
+                    new PointF(len * 0.50f, gy),
+                    new PointF(len * 0.38f, gy + th * 0.52f),
+                    new PointF(-len * 0.32f, gy + th) });
+                using (LinearGradientBrush sb = new LinearGradientBrush(
+                    new RectangleF(-len * 0.4f, gy - th - 1f, len, th * 2f + 2f),
+                    Color.FromArgb(na, 248, 251, 255),
+                    Color.FromArgb(na, 118, 148, 196), 0f))
+                {
+                    g.FillPath(sb, sp);
+                }
+                using (Pen sout = new Pen(Color.FromArgb(na, 84, 104, 148), 1.1f))
+                {
+                    g.DrawPath(sout, sp);
+                }
+                using (Pen mid = new Pen(Color.FromArgb(na, 255, 255, 255), 1.2f))
+                {
+                    g.DrawLine(mid, -len * 0.28f, gy - th * 0.20f, len * 0.42f, gy - th * 0.06f);
+                }
+                // 剑格：金色横过，比剑身粗一圈
+                using (SolidBrush gb2 = new SolidBrush(Color.FromArgb(na, 228, 178, 74)))
+                {
+                    g.FillPolygon(gb2, new PointF[] {
+                        new PointF(-len * 0.40f, gy - 7.6f),
+                        new PointF(-len * 0.30f, gy - 7.6f),
+                        new PointF(-len * 0.30f, gy + 7.6f),
+                        new PointF(-len * 0.40f, gy + 7.6f) });
+                }
+                // 剑柄：铜色，柄尾一颗红玉
+                using (SolidBrush hb = new SolidBrush(Color.FromArgb(na, 168, 118, 74)))
+                {
+                    g.FillRectangle(hb, -len * 0.52f, gy - 3.4f, len * 0.13f, 6.8f);
+                }
+                using (SolidBrush gem = new SolidBrush(Color.FromArgb(na, 240, 84, 96)))
+                {
+                    g.FillEllipse(gem, -len * 0.57f, gy - 3.8f, 7.6f, 7.6f);
+                }
+                // 剑气：两道往后拖的淡青流线
+                using (Pen hl = new Pen(Color.FromArgb(na, 150, 214, 236), 1.6f))
+                {
+                    for (int i = 0; i < 2; i++)
+                    {
+                        float off2 = 6f + i * 5f;
+                        float wv = (float)Math.Sin(t * 6.2 + i) * 2.2f;
+                        g.DrawLine(hl, -len * 0.55f - off2, gy - 1f + wv, -len * 0.55f - off2 - 16f, gy - 3f + wv);
+                    }
+                }
+                sp.Dispose();
+            }
+            else if (actKind == 3)
+            {
+                // 骑坐骑：身下一匹矮脚小兽，四条腿交替倒腾，尾巴左右甩
+                // 骑坐骑：身子只比人略宽一点，太宽就成了个大坐垫把人裹住
+                // 人物横向被压窄过，坐骑按反比放宽，视觉上才比人宽出一圈
+                float my = 10f + slide;
+                // 以前按 1.55 倍身高画，宽得像一张大坐垫把整个人裹进去；
+                // 收到 1.05 倍、矮一点，才像一匹驮着人的矮脚兽
+                float mw = targetH * 1.05f;
+                float mh = targetH * 0.36f;
+                int ma = (int)(na * 0.95f);
+                using (SolidBrush mb = new SolidBrush(Color.FromArgb(ma, 196, 158, 116)))
+                {
+                    g.FillEllipse(mb, -mw * 0.5f, my - mh, mw, mh);
+                }
+                using (SolidBrush msh = new SolidBrush(Color.FromArgb(ma, 172, 132, 94)))
+                {
+                    g.FillEllipse(msh, -mw * 0.5f, my - mh * 0.62f, mw * 0.44f, mh * 0.60f);
+                }
+                // 脑袋伸到右前方
+                using (SolidBrush mhd = new SolidBrush(Color.FromArgb(ma, 206, 170, 128)))
+                {
+                    g.FillEllipse(mhd, mw * 0.28f, my - mh * 1.16f, mw * 0.26f, mh * 0.50f);
+                }
+                // 四条腿：按正弦交替抬落
+                using (Pen lp = new Pen(Color.FromArgb(ma, 158, 116, 82), 2.4f))
+                {
+                    for (int i = 0; i < 4; i++)
+                    {
+                        float lx = -mw * 0.32f + (i % 2) * mw * 0.60f;
+                        float ph2 = t * 11f + i * 1.6f;
+                        float lift = -Math.Abs((float)Math.Sin(ph2)) * 4.5f;
+                        g.DrawLine(lp, lx, my - 3f + lift, lx + (float)Math.Sin(ph2) * 2f, my + 7f + lift);
+                    }
+                }
+                // 尾巴
+                using (Pen tp = new Pen(Color.FromArgb(255, 138, 98, 64), 2.6f))
+                {
+                    float tw = (float)Math.Sin(t * 3.4) * 5f;
+                    g.DrawBezier(tp,
+                        new PointF(-mw * 0.46f, my - mh * 0.72f),
+                        new PointF(-mw * 0.64f, my - mh * 0.44f + tw),
+                        new PointF(-mw * 0.72f, my - mh * 0.94f + tw),
+                        new PointF(-mw * 0.62f, my - mh * 1.26f + tw));
+                }
+                using (SolidBrush eb = new SolidBrush(Color.FromArgb(255, 44, 36, 30)))
+                {
+                    g.FillEllipse(eb, mw * 0.40f, my - mh * 1.12f, 3.6f, 3.6f);
+                    g.FillEllipse(eb, mw * 0.50f, my - mh * 1.12f, 3.6f, 3.6f);
+                }
+                // 一对耳朵，别让它就是个圆球
+                using (SolidBrush ear = new SolidBrush(Color.FromArgb(255, 172, 132, 94)))
+                {
+                    g.FillEllipse(ear, mw * 0.30f, my - mh * 1.42f, mw * 0.09f, mh * 0.20f);
+                    g.FillEllipse(ear, mw * 0.44f, my - mh * 1.44f, mw * 0.09f, mh * 0.20f);
+                }
+            }
+            else if (actKind == 7)
+            {
+                // 滑板：脚下一块板，四个小轮，板身滑起来轻轻晃
+                float bLen = targetH * 0.60f;
+                float by3 = 4f + slide;
+                float wob = (float)Math.Sin(t * 3.2) * 1.6f;
+                GraphicsPath bp2 = new GraphicsPath();
+                bp2.AddBezier(new PointF(-bLen * 0.52f, by3 - 3f),
+                    new PointF(-bLen * 0.20f, by3 - 6f + wob),
+                    new PointF(bLen * 0.20f, by3 - 6f + wob),
+                    new PointF(bLen * 0.52f, by3 - 3.4f + wob * 1.4f));
+                bp2.AddBezier(new PointF(bLen * 0.52f, by3 - 3.4f + wob * 1.4f),
+                    new PointF(bLen * 0.20f, by3 - 1.4f + wob),
+                    new PointF(-bLen * 0.20f, by3 - 1.4f + wob),
+                    new PointF(-bLen * 0.52f, by3 - 3f));
+                bp2.CloseFigure();
+                using (SolidBrush bb2 = new SolidBrush(Color.FromArgb(255, 242, 138, 52)))
+                {
+                    g.FillPath(bb2, bp2);
+                }
+                using (Pen bl = new Pen(Color.FromArgb(255, 68, 48, 34), 1.6f))
+                {
+                    g.DrawPath(bl, bp2);
+                }
+                bp2.Dispose();
+                using (SolidBrush wh = new SolidBrush(Color.FromArgb(255, 248, 250, 254)))
+                {
+                    for (int i = 0; i < 4; i++)
+                    {
+                        float wx4 = -bLen * 0.36f + (i % 2) * bLen * 0.72f;
+                        g.FillEllipse(wh, wx4, by3 + 2.4f, 6.2f, 6.2f);
+                    }
+                }
+            }
+            else if (actKind == 8)
+            {
+                // 轮滑：脚下两只鞋，每只一串小轮，轮子在地上排开
+                using (SolidBrush bk = new SolidBrush(Color.FromArgb(255, 46, 96, 168)))
+                {
+                    g.FillEllipse(bk, -baseW * 0.33f, 0f + slide, baseW * 0.32f, 8f);
+                    g.FillEllipse(bk, baseW * 0.01f, 0f + slide, baseW * 0.32f, 8f);
+                }
+                using (SolidBrush wh2 = new SolidBrush(Color.FromArgb(255, 248, 250, 254)))
+                {
+                    for (int e = 0; e < 2; e++)
+                    {
+                        float ex = e == 0 ? -baseW * 0.32f : baseW * 0.02f;
+                        for (int k = 0; k < 4; k++)
+                        {
+                            g.FillEllipse(wh2, ex + k * baseW * 0.065f, 6f + slide, 5.4f, 5.4f);
+                        }
+                    }
+                }
+                using (Pen glow2 = new Pen(Color.FromArgb((int)(na * 0.55f), 255, 214, 120), 1.2f))
+                {
+                    float rr2 = (float)Math.Sin(t * 3.0) * 3f;
+                    g.DrawLine(glow2, -baseW * 0.42f, 6f + slide + rr2, -baseW * 0.35f, 6f + slide + rr2);
+                }
+            }
+        }
+        else
+        {
+            if (actKind == 2 && swordImg != null)
+            {
+                // 御剑贴图：画在人前面，人站在剑上才看得出来；剑尖朝行进方向，脚下拖两道剑气
+                // 剑要横着托在脚底：太长会顶出窗口，太厚就成了块木板，人像站在悬浮板上
+                float slw = targetH * 1.12f;
+                float slh = slw * swordImg.Height / (float)swordImg.Width * 1.18f;
+                float scy = slh * 0.5f - 12f + slide * 0.4f;
+                g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                g.PixelOffsetMode = PixelOffsetMode.Half;
+                g.DrawImage(swordImg, new RectangleF(-slw * 0.5f, scy - slh * 0.5f, slw, slh));
+                float qq = (float)Math.Sin(t * 5.2) * 3f;
+                // 剑气用实色且关抗锯齿：透明键窗口里半透明和抗锯齿边一律混成洋红
+                SmoothingMode smOld = g.SmoothingMode;
+                g.SmoothingMode = SmoothingMode.None;
+                using (Pen qg = new Pen(Color.FromArgb(na, 206, 238, 248), 2f))
+                {
+                    g.DrawLine(qg, -slw * 0.30f, scy + slh * 0.78f + qq, slw * 0.30f, scy + slh * 0.78f + qq);
+                    g.DrawLine(qg, -slw * 0.24f, scy + slh * 0.96f - qq, slw * 0.26f, scy + slh * 0.96f - qq);
+                }
+                g.SmoothingMode = smOld;
+            }
+            else if (actKind == 4)
+            {
+                // 跳舞：脑袋两侧飘音符，跟着节拍往上走
+                for (int i = 0; i < 3; i++)
+                {
+                    float pr = (t * 0.55f + i * 0.36f) % 1f;
+                    float nx = -hf * 0.92f + i * hf * 0.92f + (float)Math.Sin(t * 2.2 + i) * 4f;
+                    float ny = -targetH * 0.72f - pr * targetH * 0.26f;
+                    int av = (int)(na * (1f - pr) * 0.9f);
+                    if (av < 8) continue;
+                    Color nc = i == 0 ? Color.FromArgb(av, 232, 96, 132)
+                             : (i == 1 ? Color.FromArgb(av, 96, 176, 232) : Color.FromArgb(av, 236, 186, 72));
+                    using (SolidBrush nb = new SolidBrush(nc))
+                    {
+                        g.FillEllipse(nb, nx, ny + 11f, 9f, 7.6f);
+                    }
+                    using (Pen np2 = new Pen(nc, 2.2f))
+                    {
+                        g.DrawLine(np2, nx + 7.6f, ny + 13f, nx + 7.6f, ny);
+                        g.DrawLine(np2, nx + 7.6f, ny, nx + 15f, ny + 4f);
+                    }
+                }
+            }
+            else if (actKind == 5)
+            {
+                // 喝咖啡：杯子放在右手位置，杯把朝身体一侧，再画一只小手扣在把上，
+                // 端起、放下走一个周期，才看得出"握着喝一口"的过程
+                float cw2 = targetH * 0.20f;
+                float ch2 = targetH * 0.19f;
+                float ph = (t * 1.05f) % 1f;
+                float lift = (float)Math.Sin(ph * Math.PI);
+                float cxp = Math.Max(hf * 0.28f, baseW * 0.32f) + slide * 0.3f;
+                float cyp = -targetH * 0.30f - lift * targetH * 0.34f + slide * 0.4f;
+                // 杯身：上宽下窄的梯形，白瓷
+                PointF[] cb = new PointF[] {
+                    new PointF(cxp + cw2 * 0.04f, cyp + 1.6f),
+                    new PointF(cxp + cw2 * 0.96f, cyp + 1.6f),
+                    new PointF(cxp + cw2 * 0.86f, cyp + ch2),
+                    new PointF(cxp + cw2 * 0.14f, cyp + ch2) };
+                GraphicsPath cupb = new GraphicsPath();
+                cupb.AddPolygon(cb);
+                using (SolidBrush cup = new SolidBrush(Color.FromArgb(na, 250, 249, 246)))
+                {
+                    g.FillPath(cup, cupb);
+                }
+                using (Pen cupo = new Pen(Color.FromArgb(na, 96, 122, 158), 1.2f))
+                {
+                    g.DrawPath(cupo, cupb);
+                }
+                cupb.Dispose();
+                // 杯口一圈深蓝边，里面是咖啡
+                using (SolidBrush rim2 = new SolidBrush(Color.FromArgb(na, 236, 241, 248)))
+                {
+                    g.FillEllipse(rim2, cxp + cw2 * 0.02f, cyp - ch2 * 0.10f, cw2 * 0.96f, ch2 * 0.28f);
+                }
+                using (SolidBrush cof = new SolidBrush(Color.FromArgb(na, 78, 50, 32)))
+                {
+                    g.FillEllipse(cof, cxp + cw2 * 0.10f, cyp - ch2 * 0.04f, cw2 * 0.80f, ch2 * 0.20f);
+                }
+                using (Pen rim = new Pen(Color.FromArgb(na, 96, 122, 158), 1.1f))
+                {
+                    g.DrawEllipse(rim, cxp + cw2 * 0.02f, cyp - ch2 * 0.10f, cw2 * 0.96f, ch2 * 0.28f);
+                }
+                // 杯把：朝身体那一侧（左边），手扣在上面
+                using (Pen hd = new Pen(Color.FromArgb(na, 250, 249, 246), 2.0f))
+                {
+                    g.DrawArc(hd, cxp - cw2 * 0.30f, cyp + ch2 * 0.22f, cw2 * 0.40f, ch2 * 0.54f, 62f, 236f);
+                }
+                using (Pen hd2 = new Pen(Color.FromArgb(na, 96, 122, 158), 1.0f))
+                {
+                    g.DrawArc(hd2, cxp - cw2 * 0.30f, cyp + ch2 * 0.22f, cw2 * 0.40f, ch2 * 0.54f, 62f, 236f);
+                }
+                // 小手：一小团扣在杯把外面，颜色取身体相近的浅色
+                using (SolidBrush hand = new SolidBrush(Color.FromArgb(na, 233, 226, 205)))
+                {
+                    g.FillEllipse(hand, cxp - cw2 * 0.46f, cyp + ch2 * 0.26f, cw2 * 0.30f, ch2 * 0.34f);
+                }
+                using (Pen hando = new Pen(Color.FromArgb(na, 178, 166, 138), 1.0f))
+                {
+                    g.DrawEllipse(hando, cxp - cw2 * 0.46f, cyp + ch2 * 0.26f, cw2 * 0.30f, ch2 * 0.34f);
+                }
+                for (int i = 0; i < 3; i++)
+                {
+                    float pr = (t * 0.60f + i * 0.34f) % 1f;
+                    // 热气不能再走半透明：透明键窗口里半透明像素会混成洋红，只留实色浅线条
+                    int av = na;
+                    float sx2 = cxp + cw2 * (0.30f + i * 0.22f);
+                    float sy2 = cyp - ch2 * 0.14f - pr * targetH * 0.20f;
+                    using (Pen st2 = new Pen(Color.FromArgb(av, 208, 220, 236), 1.1f))
+                    {
+                        g.DrawBezier(st2,
+                            new PointF(sx2, sy2),
+                            new PointF(sx2 + 2.2f, sy2 - 4.5f),
+                            new PointF(sx2 - 2.2f, sy2 - 9f),
+                            new PointF(sx2 + (float)Math.Sin(t * 1.6f + i) * 1.2f, sy2 - 13f));
+                    }
+                }
+            }
+            else if (actKind == 6 && sceneImgs[4] == null)
+            {
+                // 看电视：身前一台电视，屏上是会动的光影。四角做圆，不做成硬方框
+                // 屋里那张家用客厅场景自带电视，这里就只当兜底（场景图缺失时才自己画一台）
+                float tvw = Math.Max(targetH * 0.46f, baseW * 0.42f);
+                float tvh = targetH * 0.30f;
+                float tvx = Math.Max(hf * 0.34f, baseW * 0.24f);
+                float tvy = -targetH * 0.40f + slide;
+                float rr2 = tvh * 0.26f;
+                GraphicsPath tpath = new GraphicsPath();
+                tpath.AddArc(tvx, tvy, rr2 * 2f, rr2 * 2f, 180f, 90f);
+                tpath.AddArc(tvx + tvw - rr2 * 2f, tvy, rr2 * 2f, rr2 * 2f, 270f, 90f);
+                tpath.AddArc(tvx + tvw - rr2 * 2f, tvy + tvh - rr2 * 2f, rr2 * 2f, rr2 * 2f, 0f, 90f);
+                tpath.AddArc(tvx, tvy + tvh - rr2 * 2f, rr2 * 2f, rr2 * 2f, 90f, 90f);
+                tpath.CloseFigure();
+                using (SolidBrush tvb = new SolidBrush(Color.FromArgb((int)(na * 0.92f), 44, 50, 64)))
+                {
+                    g.FillPath(tvb, tpath);
+                }
+                // 屏幕：蓝紫光来回扫，像真在播东西
+                float scr = tvh * 0.18f;
+                RectangleF sr = new RectangleF(tvx + scr, tvy + scr, tvw - scr * 2f, tvh - scr * 2f);
+                int g1 = (int)(140 + 90 * (float)Math.Sin(t * 2.6f));
+                int g2 = (int)(160 + 80 * (float)Math.Sin(t * 1.9f + 1.4f));
+                using (LinearGradientBrush sg = new LinearGradientBrush(
+                    sr, Color.FromArgb(na, 116, g1, 236), Color.FromArgb(na, 226, g2, 150), 20f))
+                {
+                    g.FillRectangle(sg, sr);
+                }
+                // 屏幕上一道扫过的亮纹，代表画面在变
+                using (SolidBrush sl = new SolidBrush(Color.FromArgb((int)(na * 0.55f), 250, 252, 255)))
+                {
+                    float ph3 = (t * 0.9f) % 1f;
+                    g.FillRectangle(sl, sr.X + sr.Width * 0.12f, sr.Y + sr.Height * ph3, sr.Width * 0.76f, 1.6f);
+                }
+                using (Pen tout = new Pen(Color.FromArgb((int)(na * 0.60f), 118, 132, 156), 1f))
+                {
+                    g.DrawPath(tout, tpath);
+                }
+                using (Pen leg = new Pen(Color.FromArgb((int)(na * 0.80f), 70, 78, 94), 1.6f))
+                {
+                    g.DrawLine(leg, tvx + tvw * 0.30f, tvy + tvh, tvx + tvw * 0.24f, tvy + tvh + 3.5f);
+                    g.DrawLine(leg, tvx + tvw * 0.70f, tvy + tvh, tvx + tvw * 0.76f, tvy + tvh + 3.5f);
+                }
+                // 顶上两支小天线，一眼就看得出是台电视机
+                using (Pen ant = new Pen(Color.FromArgb((int)(na * 0.85f), 70, 78, 94), 1.4f))
+                {
+                    g.DrawLine(ant, tvx + tvw * 0.40f, tvy, tvx + tvw * 0.28f, tvy - tvh * 0.32f);
+                    g.DrawLine(ant, tvx + tvw * 0.60f, tvy, tvx + tvw * 0.72f, tvy - tvh * 0.32f);
+                }
+                tpath.Dispose();
+            }
+        }
+    }
+
+    // 睡着的 Z：三个大小渐大的 Z，往斜上方飘再淡掉
+    void DrawSleepZ(Graphics g, float x, float y)
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            float pr = (t * 0.42f + i * 0.34f) % 1f;
+            int al = (int)(215 * (1f - pr));
+            if (al <= 6) continue;
+            float zx = x + pr * 26f;
+            float zy = y - pr * 34f;
+            float zs = 3.4f + i * 1.1f + pr * 2.2f;
+            using (Pen zp = new Pen(Color.FromArgb(al, 96, 126, 174), 1.3f))
+            {
+                zp.StartCap = LineCap.Round;
+                zp.EndCap = LineCap.Round;
+                g.DrawLine(zp, zx, zy, zx + zs, zy);
+                g.DrawLine(zp, zx + zs, zy, zx, zy + zs);
+                g.DrawLine(zp, zx, zy + zs, zx + zs, zy + zs);
+            }
+        }
+    }
+
+    // 被面上的小星星：八个尖的星形，比画方块柔和
+    void DrawStar(Graphics g, float x, float y, float r, Color c)
+    {
+        float ri = r * 0.34f;
+        PointF[] pts = new PointF[] {
+            new PointF(x, y - r),
+            new PointF(x + ri, y - ri),
+            new PointF(x + r, y),
+            new PointF(x + ri, y + ri),
+            new PointF(x, y + r),
+            new PointF(x - ri, y + ri),
+            new PointF(x - r, y),
+            new PointF(x - ri, y - ri)
+        };
+        using (SolidBrush sb = new SolidBrush(c))
+        {
+            g.FillPolygon(sb, pts);
+        }
+    }
+
+    // 把情绪直接画在脸上：腮红 / 眼泪 / 怒气 / 闭眼 / 惊讶
+    // 从脸下方的像素取一个平均肤色，用来盖住原来画上去的眼睛
+    // 取一块脸区域的"主色"：亮度太低的像素（眼珠、眉毛、深色描线）不参与平均，
+    // 剩下的就是皮肤或毛色本身，用来盖眼睛不会在脸上留一块斑
+    Color SampleFaceColor(Bitmap src, float nfx, float nfy, int rw, int rh)
+    {
+        Color fallback = Color.FromArgb(232, 226, 212);
+        if (src == null) return fallback;
+        try
+        {
+            int cx = (int)(src.Width * nfx);
+            int cy = (int)(src.Height * nfy);
+            int x0 = Math.Max(0, cx - rw / 2);
+            int x1 = Math.Min(src.Width - 1, cx + rw / 2);
+            int y0 = Math.Max(0, cy - rh / 2);
+            int y1 = Math.Min(src.Height - 1, cy + rh / 2);
+            long rr = 0, gg = 0, bb = 0;
+            int nn = 0;
+            for (int y = y0; y <= y1; y += 2)
+            {
+                for (int x = x0; x <= x1; x += 2)
+                {
+                    Color c = src.GetPixel(x, y);
+                    if (c.A < 60) continue;
+                    float lum = c.R * 0.30f + c.G * 0.59f + c.B * 0.11f;
+                    if (lum < 78f) continue;             // 眼珠和黑描线不要
+                    rr += c.R; gg += c.G; bb += c.B; nn++;
+                }
+            }
+            if (nn == 0) return fallback;
+            return Color.FromArgb((int)(rr / nn), (int)(gg / nn), (int)(bb / nn));
+        }
+        catch { return fallback; }
+    }
+
+    Color SampleSkin(Bitmap src, float nfx, float nfy)
+    {
+        Color fallback = Color.FromArgb(224, 218, 202);
+        if (src == null) return fallback;
+        try
+        {
+            int px = (int)(src.Width * nfx);
+            int py = (int)(src.Height * (nfy + 0.045f));
+            int rr = 0, gg = 0, bb = 0, nn = 0;
+            for (int dx = -3; dx <= 3; dx++)
+            {
+                for (int dy = -3; dy <= 3; dy++)
+                {
+                    int xx = px + dx, yy = py + dy;
+                    if (xx < 0 || yy < 0 || xx >= src.Width || yy >= src.Height) continue;
+                    Color c = src.GetPixel(xx, yy);
+                    if (c.A < 60) continue;
+                    rr += c.R; gg += c.G; bb += c.B; nn++;
+                }
+            }
+            if (nn == 0) return fallback;
+            return Color.FromArgb(rr / nn, gg / nn, bb / nn);
+        }
+        catch { return fallback; }
+    }
+
+    void DrawFaceExpr(Graphics g, float x, float y, float fr, Bitmap src, float nfx, float nfy)
+    {
+        if (fr < 13f) return;   // 脸太小（全身立绘）就不动它，叠上去只会糊成一块
+        int kind = 0;
+        if (cryHold > 0) kind = 3;
+        else if (sleepy || lieHold > 0) kind = 6;
+        else if (moodTicks > 0 && moodKind > 0) kind = moodKind;
+
+        float eyeDx = fr * 0.40f;
+        float eyeY = y - fr * 0.05f;
+        float lw = Math.Max(1.1f, fr * 0.055f);
+        float bt = (float)(0.5 + 0.5 * Math.Sin(t * 2.4));
+        float jt = (float)Math.Sin(t * 17.0);
+        float drop = (float)((t * 0.55) % 1.0);
+
+        // 2026-11-14：贴图脸的真实眼距/眼高跟这里写死的坐标对不上，硬盖会盖出深色块，
+        // 所以对没有真表情图的形象（人形立绘）不再动眼睛，只留轻线条。
+
+        Color eyeInk = Color.FromArgb(226, 54, 48, 56);
+
+        // 2026-11-15：腮红、泪珠、怒气符、挑眉这些叠加插画全部撤掉，
+        // 情绪由整张表情图直接表达，脸和眼睛就在图里，再往上画只会糊成一块。
+        // 说话时嘴巴开合：节奏按音节走，句子里有快有慢，偶尔收一下像换气
+        int nowMs = Environment.TickCount;
+        if (speaking && nowMs >= speakMouthStart && nowMs <= speakMouthUntil)
+        {
+            float rate = 5.4f;                                  // 每秒约五个音节
+            float ph = t * rate;
+            float a1 = (float)Math.Abs(Math.Sin(ph * 1.0f));
+            float a2 = (float)Math.Abs(Math.Sin(ph * 2.3f + 0.7f));
+            float a3 = (float)Math.Abs(Math.Sin(ph * 0.5f + 1.9f));
+            float open = 0.22f + 0.78f * (a1 * 0.45f + a2 * 0.35f + a3 * 0.20f);
+            float breath = (float)((t * 0.40) % 1.0);           // 换气停顿
+            if (breath > 0.86f && breath < 0.99f) open *= 0.35f;
+            int leftMs = speakMouthUntil - nowMs;
+            // 2026-11-16 语音口型：收尾别硬切。线性收像被掐断，
+            // 改缓动收、最后 120 毫秒再抿一下，像人把话说完自然闭嘴。
+            float tail = 1.0f;
+            if (leftMs < 500)
+            {
+                float k = Math.Max(0.0f, leftMs / 500.0f);
+                tail = 0.35f + 0.65f * (float)Math.Pow(k, 0.62);
+                if (leftMs < 120) tail *= 0.5f;
+            }
+            open *= tail;
+
+            float dyK = 0.44f;
+            if (speakMouthDY.Length > 0)
+            {
+                int si = species % speakMouthDY.Length;
+                if (si < 0) si = 0;
+                dyK = speakMouthDY[si];
+            }
+            float mw = fr * 0.44f;
+            float mh = fr * 0.070f + fr * 0.260f * open;
+            float my = y + fr * dyK;
+            using (SolidBrush mb = new SolidBrush(Color.FromArgb(210, 138, 72, 78)))
+            {
+                g.FillEllipse(mb, x - mw * 0.5f, my, mw, mh);
+            }
+            using (Pen mpen = new Pen(Color.FromArgb(165, 96, 50, 58), Math.Max(1.0f, lw * 0.85f)))
+            {
+                mpen.StartCap = LineCap.Round;
+                mpen.EndCap = LineCap.Round;
+                g.DrawEllipse(mpen, x - mw * 0.5f, my, mw, mh);
+            }
+            using (SolidBrush hb2 = new SolidBrush(Color.FromArgb(95, 255, 220, 214)))
+            {
+                g.FillEllipse(hb2, x - mw * 0.20f, my + mh * 0.30f, mw * 0.40f, mh * 0.34f);
+            }
+        }
+    }
+
+    // 一滴眼泪：上头尖、下头圆、带一点高光
+    void DrawTear(Graphics g, float x, float y, float r)
+    {
+        if (r < 1.2f) return;
+        using (SolidBrush tb = new SolidBrush(Color.FromArgb(216, 108, 172, 236)))
+        {
+            g.FillEllipse(tb, x - r * 0.5f, y, r, r * 1.25f);
+            PointF[] pts = new PointF[]
+            {
+                new PointF(x, y - r * 1.05f),
+                new PointF(x - r * 0.42f, y + r * 0.30f),
+                new PointF(x + r * 0.42f, y + r * 0.30f)
+            };
+            g.FillPolygon(tb, pts);
+        }
+        using (SolidBrush hb = new SolidBrush(Color.FromArgb(155, 255, 255, 255)))
+        {
+            g.FillEllipse(hb, x - r * 0.24f, y + r * 0.18f, r * 0.30f, r * 0.34f);
+        }
+    }
+
+    void DrawMoodIcon(Graphics g, float x, float y)
+    {
+        float bob = 3.4f * (float)Math.Sin(t * 3.6);
+
+        // 招手打招呼：画手臂 + 手掌，靠着头侧，来回摆
+        if (waveTicks > 0)
+        {
+            float sw = (float)Math.Sin(t * 13.0);
+            float hx = x - 4f + sw * 4.5f;
+            float hy = y + 2f + bob;
+            using (Pen pa = new Pen(Color.FromArgb(245, 88, 118, 178), 3.6f))
+            {
+                pa.StartCap = LineCap.Round;
+                pa.EndCap = LineCap.Round;
+                g.DrawArc(pa, hx - 17f, hy - 4f, 30f, 26f, 170, 105);
+            }
+            using (SolidBrush hb = new SolidBrush(Color.FromArgb(245, 252, 236, 228)))
+            using (Pen hp = new Pen(Color.FromArgb(245, 88, 118, 178), 1.6f))
+            {
+                g.FillEllipse(hb, hx + 8f, hy - 12f, 10f, 10f);
+                g.DrawEllipse(hp, hx + 8f, hy - 12f, 10f, 10f);
+            }
+            return;
+        }
+
+        // 犯困眯眼：头顶冒 z Z
+        if (sleepy)
+        {
+            float zt = (float)Math.Sin(t * 2.2);
+            using (Font fz = new Font("Microsoft YaHei", 12f, FontStyle.Bold))
+            using (SolidBrush bz = new SolidBrush(Color.FromArgb(190, 116, 126, 156)))
+            {
+                g.DrawString("z", fz, bz, x - 6f, y + 4f + zt * 3.0f);
+                g.DrawString("Z", fz, bz, x - 1f, y - 9f + zt * 3.0f);
+            }
+            return;
+        }
+
+        if (speaking)
+        {
+            using (Font f = new Font("Microsoft YaHei", 15f, FontStyle.Bold))
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(86, 136, 214)))
+            {
+                SizeF sz = g.MeasureString("\u266a", f);
+                g.DrawString("\u266a", f, b, x - sz.Width / 2f, y - sz.Height + bob);
+            }
+            return;
+        }
+        // 情绪已经画在脸上，头顶不再重复挂气泡
+        if (moodTicks > 0 && moodKind > 0) return;
+        if (thinkTicks > 0)
+        {
+            using (Font f = new Font("Microsoft YaHei", 15f, FontStyle.Bold))
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(118, 128, 150)))
+            {
+                SizeF sz = g.MeasureString("?", f);
+                g.DrawString("?", f, b, x - sz.Width / 2f, y - sz.Height + bob);
+            }
+        }
+    }
+
+    // 头顶的小圆泡里画一张简笔表情：开心/生气/难过/惊讶/犯困
+    void DrawFaceBubble(Graphics g, float x, float y, int kind)
+    {
+        float r = 15f;
+        float bx = x + r * 0.95f;
+        float by = y - r * 1.25f;
+
+        Color fill, edge;
+        if (kind == 2) { fill = Color.FromArgb(255, 255, 236, 214); edge = Color.FromArgb(235, 208, 92, 38); }
+        else if (kind == 3) { fill = Color.FromArgb(255, 232, 240, 250); edge = Color.FromArgb(235, 78, 118, 176); }
+        else if (kind == 4) { fill = Color.FromArgb(255, 255, 246, 210); edge = Color.FromArgb(235, 196, 156, 40); }
+        else if (kind == 5) { fill = Color.FromArgb(255, 236, 238, 244); edge = Color.FromArgb(235, 120, 126, 146); }
+        else { fill = Color.FromArgb(255, 255, 234, 238); edge = Color.FromArgb(235, 214, 96, 120); }
+
+        using (SolidBrush fb = new SolidBrush(fill))
+        using (Pen ep = new Pen(edge, 1.5f))
+        {
+            g.FillEllipse(fb, bx - r, by - r, r * 2, r * 2);
+            g.DrawEllipse(ep, bx - r, by - r, r * 2, r * 2);
+        }
+
+        float ey = by - r * 0.18f;
+        float ex = r * 0.44f;
+        using (SolidBrush eb = new SolidBrush(Color.FromArgb(255, 44, 46, 54)))
+        using (Pen ep2 = new Pen(Color.FromArgb(255, 44, 46, 54), 1.5f))
+        {
+            if (kind == 1)
+            {
+                g.DrawArc(ep2, bx - ex - 3.4f, ey - 3.0f, 6.8f, 6.2f, 205, 130);
+                g.DrawArc(ep2, bx + ex - 3.4f, ey - 3.0f, 6.8f, 6.2f, 205, 130);
+            }
+            else if (kind == 2)
+            {
+                g.FillEllipse(eb, bx - ex - 2.3f, ey - 1.5f, 4.6f, 4.6f);
+                g.FillEllipse(eb, bx + ex - 2.3f, ey - 1.5f, 4.6f, 4.6f);
+                g.DrawLine(ep2, bx - ex - 3.6f, ey - 6.0f, bx - ex + 3.4f, ey - 3.4f);
+                g.DrawLine(ep2, bx + ex + 3.6f, ey - 6.0f, bx + ex - 3.4f, ey - 3.4f);
+            }
+            else if (kind == 3)
+            {
+                g.DrawArc(ep2, bx - ex - 3.4f, ey - 1.6f, 6.8f, 4.4f, 20, 140);
+                g.DrawArc(ep2, bx + ex - 3.4f, ey - 1.6f, 6.8f, 4.4f, 20, 140);
+                using (SolidBrush tb = new SolidBrush(Color.FromArgb(215, 92, 158, 226)))
+                {
+                    g.FillEllipse(tb, bx + ex + 1.6f, ey + 2.4f, 3.4f, 5.4f);
+                }
+            }
+            else if (kind == 4)
+            {
+                g.FillEllipse(eb, bx - ex - 1.6f, ey - 3.4f, 5.8f, 5.8f);
+                g.FillEllipse(eb, bx + ex - 1.6f, ey - 3.4f, 5.8f, 5.8f);
+                using (SolidBrush wb = new SolidBrush(Color.White))
+                {
+                    g.FillEllipse(wb, bx - ex + 0.3f, ey - 1.9f, 2.1f, 2.1f);
+                    g.FillEllipse(wb, bx + ex + 0.3f, ey - 1.9f, 2.1f, 2.1f);
+                }
+            }
+            else
+            {
+                g.DrawLine(ep2, bx - ex - 3.2f, ey, bx - ex + 3.2f, ey);
+                g.DrawLine(ep2, bx + ex - 3.2f, ey, bx + ex + 3.2f, ey);
+            }
+
+            float my = by + r * 0.30f;
+            if (kind == 1)
+                g.DrawArc(ep2, bx - 5.6f, my - 3.4f, 11.2f, 8.4f, 40, 100);
+            else if (kind == 2)
+                g.DrawArc(ep2, bx - 4.6f, my + 1.0f, 9.2f, 5.6f, 210, 120);
+            else if (kind == 3)
+                g.DrawArc(ep2, bx - 4.2f, my + 0.9f, 8.4f, 5.6f, 220, 100);
+            else if (kind == 4)
+                g.DrawEllipse(ep2, bx - 2.5f, my - 2.0f, 5.0f, 5.4f);
+            else
+                g.DrawLine(ep2, bx - 2.8f, my + 0.3f, bx + 2.8f, my + 0.3f);
+        }
+    }
+
+
+    Color Darken(Color c, float k) { return Color.FromArgb(c.A, (int)(c.R * k), (int)(c.G * k), (int)(c.B * k)); }
+    Color Lighten(Color c, float k)
+    {
+        int r = (int)(c.R + (255 - c.R) * k);
+        int gg = (int)(c.G + (255 - c.G) * k);
+        int b = (int)(c.B + (255 - c.B) * k);
+        return Color.FromArgb(c.A, Math.Min(255, r), Math.Min(255, gg), Math.Min(255, b));
+    }
+
+    void DrawBody(Graphics g, int sp, float cx, float cy, float rx, float ry, Color body, Color dark, Color light)
+    {
+        using (SolidBrush bb = new SolidBrush(body))
+        using (Pen pd = new Pen(dark, 1.6f))
+        {
+            switch (sp)
+            {
+                case 0: // 橘猫
+                    {
+                        // 耳朵
+                        PointF[] e1 = { new PointF(cx - rx * 0.72f, cy - ry * 0.62f), new PointF(cx - rx * 0.28f, cy - ry * 0.98f), new PointF(cx - rx * 0.15f, cy - ry * 0.55f) };
+                        PointF[] e2 = { new PointF(cx + rx * 0.72f, cy - ry * 0.62f), new PointF(cx + rx * 0.28f, cy - ry * 0.98f), new PointF(cx + rx * 0.15f, cy - ry * 0.55f) };
+                        g.FillPolygon(bb, e1); g.DrawPolygon(pd, e1);
+                        g.FillPolygon(bb, e2); g.DrawPolygon(pd, e2);
+                        g.FillEllipse(bb, cx - rx, cy - ry, rx * 2, ry * 2);
+                        g.DrawEllipse(pd, cx - rx, cy - ry, rx * 2, ry * 2);
+                        // 条纹
+                        using (SolidBrush st = new SolidBrush(Color.FromArgb(70, dark)))
+                        {
+                            g.FillEllipse(st, cx - 5, cy - ry * 0.72f, 10, ry * 0.5f);
+                            g.FillEllipse(st, cx - 20, cy - ry * 0.5f, 7, ry * 0.36f);
+                            g.FillEllipse(st, cx + 13, cy - ry * 0.5f, 7, ry * 0.36f);
+                        }
+                        // 胡须
+                        using (Pen pwh = new Pen(Color.FromArgb(120, 90, 70), 1f))
+                        {
+                            g.DrawLine(pwh, cx - 30, cy + 4, cx - 46, cy - 1);
+                            g.DrawLine(pwh, cx - 30, cy + 9, cx - 46, cy + 11);
+                            g.DrawLine(pwh, cx + 30, cy + 4, cx + 46, cy - 1);
+                            g.DrawLine(pwh, cx + 30, cy + 9, cx + 46, cy + 11);
+                        }
+                        break;
+                    }
+                case 1: // 小狗
+                    {
+                        g.FillEllipse(bb, cx - rx * 0.86f, cy - ry * 0.85f, rx * 0.55f, ry * 1.5f);   // 左垂耳
+                        g.FillEllipse(bb, cx + rx * 0.31f, cy - ry * 0.85f, rx * 0.55f, ry * 1.5f);   // 右垂耳
+                        g.DrawEllipse(pd, cx - rx * 0.86f, cy - ry * 0.85f, rx * 0.55f, ry * 1.5f);
+                        g.DrawEllipse(pd, cx + rx * 0.31f, cy - ry * 0.85f, rx * 0.55f, ry * 1.5f);
+                        g.FillEllipse(bb, cx - rx, cy - ry, rx * 2, ry * 2);
+                        g.DrawEllipse(pd, cx - rx, cy - ry, rx * 2, ry * 2);
+                        // 眼罩色块
+                        using (SolidBrush st = new SolidBrush(Color.FromArgb(60, dark)))
+                            g.FillEllipse(st, cx - 24, cy - 16, 20, 16);
+                        break;
+                    }
+                case 2: // 白兔
+                    {
+                        g.FillEllipse(bb, cx - 17, cy - ry * 2.1f, 14, 40);
+                        g.DrawEllipse(pd, cx - 17, cy - ry * 2.1f, 14, 40);
+                        g.FillEllipse(bb, cx + 3, cy - ry * 2.1f, 14, 40);
+                        g.DrawEllipse(pd, cx + 3, cy - ry * 2.1f, 14, 40);
+                        using (SolidBrush inn = new SolidBrush(Color.FromArgb(200, 240, 190, 190)))
+                        {
+                            g.FillEllipse(inn, cx - 14, cy - ry * 2.0f, 8, 32);
+                            g.FillEllipse(inn, cx + 6, cy - ry * 2.0f, 8, 32);
+                        }
+                        g.FillEllipse(bb, cx - rx, cy - ry, rx * 2, ry * 2);
+                        g.DrawEllipse(pd, cx - rx, cy - ry, rx * 2, ry * 2);
+                        break;
+                    }
+                case 3: // 棕熊
+                    {
+                        g.FillEllipse(bb, cx - rx * 0.85f, cy - ry * 1.05f, 22, 22);
+                        g.DrawEllipse(pd, cx - rx * 0.85f, cy - ry * 1.05f, 22, 22);
+                        g.FillEllipse(bb, cx + rx * 0.85f - 22, cy - ry * 1.05f, 22, 22);
+                        g.DrawEllipse(pd, cx + rx * 0.85f - 22, cy - ry * 1.05f, 22, 22);
+                        g.FillEllipse(bb, cx - rx, cy - ry, rx * 2, ry * 2);
+                        g.DrawEllipse(pd, cx - rx, cy - ry, rx * 2, ry * 2);
+                        // 口鼻
+                        using (SolidBrush mu = new SolidBrush(light))
+                            g.FillEllipse(mu, cx - 14, cy + 2, 28, 20);
+                        break;
+                    }
+                case 4: // 小恐龙
+                    {
+                        // 背刺
+                        PointF[] sp1 = { new PointF(cx - 6, cy - ry - 2), new PointF(cx, cy - ry - 20), new PointF(cx + 6, cy - ry - 2) };
+                        PointF[] sp2 = { new PointF(cx - 20, cy - ry + 6), new PointF(cx - 16, cy - ry - 12), new PointF(cx - 8, cy - ry + 3) };
+                        PointF[] sp3 = { new PointF(cx + 8, cy - ry + 3), new PointF(cx + 16, cy - ry - 12), new PointF(cx + 22, cy - ry + 8) };
+                        using (SolidBrush sbp = new SolidBrush(Color.FromArgb(200, 120, 180, 120)))
+                        {
+                            g.FillPolygon(sbp, sp1); g.FillPolygon(sbp, sp2); g.FillPolygon(sbp, sp3);
+                        }
+                        g.FillEllipse(bb, cx - rx, cy - ry, rx * 2, ry * 2);
+                        g.DrawEllipse(pd, cx - rx, cy - ry, rx * 2, ry * 2);
+                        // 尾巴
+                        using (SolidBrush tb = new SolidBrush(body))
+                        using (Pen tp = new Pen(dark, 1.4f))
+                        {
+                            PointF[] tail = { new PointF(cx + rx - 4, cy + 4), new PointF(cx + rx + 26, cy + 12), new PointF(cx + rx + 30, cy + 20), new PointF(cx + rx - 2, cy + 18) };
+                            g.FillPolygon(tb, tail);
+                            g.DrawPolygon(tp, tail);
+                        }
+                        // 肚皮
+                        using (SolidBrush bel = new SolidBrush(light))
+                            g.FillEllipse(bel, cx - 18, cy + 2, 36, 26);
+                        break;
+                    }
+                case 5: // 章鱼
+                    {
+                        using (SolidBrush tb = new SolidBrush(body))
+                        using (Pen tp2 = new Pen(dark, 1.3f))
+                        {
+                            for (int i = 0; i < 6; i++)
+                            {
+                                float ang = 0.3f + i * 0.52f;
+                                float x0 = cx + (float)Math.Cos(ang) * rx * 0.6f - 6;
+                                float y0 = cy + ry * 0.35f;
+                                float sway = 3f * (float)Math.Sin(t * 2f + i);
+                                g.FillEllipse(tb, x0 + sway, y0, 13, 30);
+                                g.DrawEllipse(tp2, x0 + sway, y0, 13, 30);
+                            }
+                        }
+                        g.FillEllipse(bb, cx - rx, cy - ry, rx * 2, ry * 2);
+                        g.DrawEllipse(pd, cx - rx, cy - ry, rx * 2, ry * 2);
+                        break;
+                    }
+                default: // 小黄鸡
+                    {
+                        // 冠
+                        PointF[] cr = { new PointF(cx - 8, cy - ry + 2), new PointF(cx - 2, cy - ry - 12), new PointF(cx + 4, cy - ry + 1) };
+                        using (SolidBrush cbr = new SolidBrush(Color.FromArgb(230, 230, 120, 110)))
+                            g.FillPolygon(cbr, cr);
+                        // 翅膀
+                        g.FillEllipse(bb, cx - rx - 4, cy - 2, 14, 22);
+                        g.FillEllipse(bb, cx + rx - 10, cy - 2, 14, 22);
+                        g.FillEllipse(bb, cx - rx, cy - ry, rx * 2, ry * 2);
+                        g.DrawEllipse(pd, cx - rx, cy - ry, rx * 2, ry * 2);
+                        // 嘴
+                        PointF[] bk = { new PointF(cx - 6, cy + 6), new PointF(cx + 6, cy + 6), new PointF(cx, cy + 17) };
+                        using (SolidBrush bkb = new SolidBrush(Color.FromArgb(240, 230, 140, 40)))
+                            g.FillPolygon(bkb, bk);
+                        break;
+                    }
+            }
+        }
+    }
+
+    void DrawFace(Graphics g, float cx, float cy, float ry, Color dark)
+    {
+        bool blink = blinkFrames > 0;
+        using (SolidBrush eye = new SolidBrush(Color.FromArgb(50, 45, 40)))
+        using (Pen line = new Pen(Color.FromArgb(60, 50, 40), 2.2f))
+        {
+            if (blink)
+            {
+                g.DrawLine(line, cx - 19, cy - 4, cx - 7, cy - 4);
+                g.DrawLine(line, cx + 7, cy - 4, cx + 19, cy - 4);
+            }
+            else
+            {
+                g.FillEllipse(eye, cx - 19, cy - 10, 12, 13);
+                g.FillEllipse(eye, cx + 7, cy - 10, 12, 13);
+                using (SolidBrush gl = new SolidBrush(Color.FromArgb(230, 255, 255, 255)))
+                {
+                    g.FillEllipse(gl, cx - 16, cy - 8, 4, 4);
+                    g.FillEllipse(gl, cx + 10, cy - 8, 4, 4);
+                }
+            }
+            // 嘴
+            using (Pen mp = new Pen(Color.FromArgb(90, 70, 60), 1.6f))
+            {
+                g.DrawArc(mp, cx - 7, cy + 4, 14, 10, 10, 160);
+            }
+        }
+        // 腮红
+        using (SolidBrush bl = new SolidBrush(Color.FromArgb(60, 240, 140, 140)))
+        {
+            g.FillEllipse(bl, cx - 30, cy + 2, 12, 8);
+            g.FillEllipse(bl, cx + 18, cy + 2, 12, 8);
+        }
+    }
+
+    void DrawBubble(Graphics g)
+    {
+        if (bubble == null) return;
+        float fade = 1f;
+        if (bubbleFrames <= 16) fade = bubbleFrames / 16f;   // 说完最后十几帧淡掉、划走
+        if (fade > 1f) fade = 1f;
+        if (fade < 0f) fade = 0f;
+        if (fade <= 0.01f) return;
+
+        using (Font f = new Font("Microsoft YaHei", 9f))
+        {
+            // 话少气泡就窄一点，别一条大白条横糊满整屏
+            int perLine = 22;
+            int rows = (int)Math.Ceiling((double)bubble.Length / perLine);
+            if (rows < 1) rows = 1;
+            if (rows > 4) rows = 4;
+            float maxW = W - 40f;
+            int charsFirst = Math.Min(bubble.Length, perLine);
+            // 按真实文字量算宽度，凭字数估会窄那么一点点，末尾就被省略号吃掉
+            string firstLine = bubble.Length <= perLine ? bubble : bubble.Substring(0, perLine);
+            float needW = g.MeasureString(firstLine, f).Width + 34f;
+            if (needW > maxW) needW = maxW;
+            if (needW < 70f) needW = 70f;
+            // 高度按真实排版量：字数是估的，一段诗换行几行只有量过才知道，
+            // 估少了末一句就被气泡切掉半截
+            SizeF msz = g.MeasureString(bubble, f, (int)(needW - 20f));
+            float bh = msz.Height + 10f;
+            if (bh > 112f) bh = 112f;
+            float bx = W / 2f - needW / 2f;
+            float by = 5f;
+            float slide = (1f - fade) * 26f;   // 收尾时整块往右划出去
+
+            // 透明键窗口里半透明填充会跟键色混成品红，所以气泡一律实底，
+            // 进出只靠位置滑，不靠透明渐变
+            int fillA = 255;
+            int lineA = (int)(145 + 110f * (1f - fade));
+            int txtA = 255;
+            if (txtA < 0) txtA = 0;
+
+            GraphicsPath bp3 = new GraphicsPath();
+            float rr = 7f;
+            bp3.AddArc(bx + slide, by, rr * 2f, rr * 2f, 180f, 90f);
+            bp3.AddArc(bx + slide + needW - rr * 2f, by, rr * 2f, rr * 2f, 270f, 90f);
+            bp3.AddArc(bx + slide + needW - rr * 2f, by + bh - rr * 2f, rr * 2f, rr * 2f, 0f, 90f);
+            bp3.AddArc(bx + slide, by + bh - rr * 2f, rr * 2f, rr * 2f, 90f, 90f);
+            bp3.CloseFigure();
+            // 透明键窗口只认全透明和全不透明。抗锯齿造出来的那圈半透明像素，
+            // 不管外面再罩几层白都会跟洋红键色混成粉紫，所以气泡几何干脆不开抗锯齿：
+            // 边是硬像素，圆角看上去有点台阶，但至少干净
+            SmoothingMode oldSM = g.SmoothingMode;
+            PixelOffsetMode oldPO = g.PixelOffsetMode;
+            g.SmoothingMode = SmoothingMode.None;
+            g.PixelOffsetMode = PixelOffsetMode.None;
+            using (SolidBrush bg = new SolidBrush(Color.FromArgb(fillA, 252, 253, 255)))
+            {
+                g.FillPath(bg, bp3);
+            }
+            // 底下一个小尖角指着人
+            PointF[] tri = {
+                new PointF(W / 2f - 6f + slide, by + bh - 2f),
+                new PointF(W / 2f + slide, by + bh + 7f),
+                new PointF(W / 2f + 6f + slide, by + bh - 2f)
+            };
+            using (SolidBrush bg = new SolidBrush(Color.FromArgb(fillA, 252, 253, 255)))
+            {
+                g.FillPolygon(bg, tri);
+            }
+            using (Pen bp = new Pen(Color.FromArgb(lineA, 138, 154, 186), 1f))
+            {
+                g.DrawPath(bp, bp3);
+            }
+            g.SmoothingMode = oldSM;
+            g.PixelOffsetMode = oldPO;
+            bp3.Dispose();
+
+            RectangleF txtRect = new RectangleF(bx + 10f + slide, by + 5f, needW - 20f, bh - 6f);
+            StringFormat sf = new StringFormat();
+            sf.Trimming = StringTrimming.EllipsisCharacter;
+            using (SolidBrush tb = new SolidBrush(Color.FromArgb(txtA, 44, 46, 62)))
+            {
+                g.DrawString(bubble, f, tb, txtRect, sf);
+            }
+        }
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        base.OnMouseDown(e);
+        if (e.Button == MouseButtons.Left)
+        {
+            mouseDown = true;
+            movedFlag = false;
+            dragStart = Cursor.Position;
+            formStart = Location;
+            // 2026-11-16 学 dotnet/winforms：鼠标一按下就捕获，
+            // 手快一点把它甩出窗口外也不会丢 MouseMove，拖动不再半路撒手。
+            Capture = true;
+        }
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (mouseDown)
+        {
+            Point now = Cursor.Position;
+            int dx = now.X - dragStart.X;
+            int dy = now.Y - dragStart.Y;
+            if (Math.Abs(dx) > 3 || Math.Abs(dy) > 3) movedFlag = true;
+            if (movedFlag) Location = new Point(formStart.X + dx, formStart.Y + dy);
+        }
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        base.OnMouseUp(e);
+        if (e.Button == MouseButtons.Left)
+        {
+            mouseDown = false;
+            if (movedFlag) SavePos();
+            else
+            {
+                // 点它一下：先招手打招呼，再说句话。先把正在念的长句掐掉，
+                // 不然点了还得等它念完才理你，手感就是"反应慢"
+                StopSpeechNow();
+                waveTicks = 46;
+                idleTicks = 0;
+                int idx = (DateTime.Now.Hour + DateTime.Now.Day) % lines.Length;
+                Say(lines[idx]);
+            }
+        }
+    }
+
+    protected override void OnDoubleClick(EventArgs e)
+    {
+        base.OnDoubleClick(e);
+        MenuTalk(null, null);
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        SavePos();
+        base.OnFormClosing(e);
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        try
+        {
+            // 把窗口夹回屏幕可见范围内
+            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+            int nx = Location.X;
+            int ny = Location.Y;
+            int maxX = wa.Right - Width - 8;
+            int maxY = wa.Bottom - Height - 8;
+            if (nx < wa.Left) nx = wa.Right * 34 / 100;
+            if (nx > maxX) nx = maxX;
+            if (ny < wa.Top) ny = wa.Bottom * 40 / 100;
+            if (ny > maxY) ny = maxY;
+            Location = new Point(nx, ny);
+            TopMost = true;
+            SetWindowPos(this.Handle, HWND_TOPMOST, nx, ny, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | 0x0040);
+            ForceLayer();
+            // 上次调过的音量档要记住
+            try
+            {
+                RegistryKey k = Registry.CurrentUser.OpenSubKey("Software\\DaoPet");
+                if (k != null)
+                {
+                    object vv = k.GetValue("VolLevel");
+                    if (vv != null) volLevel = Convert.ToInt32(vv);
+                    k.Close();
+                }
+            }
+            catch { }
+            if (volLevel < 0) volLevel = 0;
+            if (volLevel > 2) volLevel = 2;
+            // 开机不再一句接一句地自己播报（简报、记忆、今日所学都挪到右键菜单里，
+            // 想看再点）。话只在两处出现：他要的早晚问候，还有用户点它或喊它的时候。
+        }
+        catch { }
+    }
+
+    static void DumpSelf()
+    {
+        string dir = Path.GetDirectoryName(Application.ExecutablePath);
+        DesktopPet p = new DesktopPet();
+
+        DumpOne(p, Path.Combine(dir, "selfcheck.png"));
+
+        p.speaking = true;
+        p.speakMouthStart = Environment.TickCount - 200;
+        p.speakMouthUntil = Environment.TickCount + 4000;
+        p.t = 1.20f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_talk.png"));
+        p.t = 1.36f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_talk2.png"));
+        p.t = 1.52f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_talk3.png"));
+
+        // 换个形象看看嘴还在不在脸上（企鹅 / 小机器人）
+        p.species = 5;
+        p.t = 1.40f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_talk_p5.png"));
+        p.species = 11;
+        DumpOne(p, Path.Combine(dir, "selfcheck_talk_p11.png"));
+
+        // 8 号银发剑客：站着、走起来各出一张，确认新姿势图与八帧走路真的被加载
+        p.species = 8;
+        p.ApplyPose(8);
+        p.speaking = false;
+        p.walkTicks = 0;
+        p.t = 1.00f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_p8_stand.png"));
+        p.walkTicks = 60;
+        for (int wf = 0; wf < 4; wf++)
+        {
+            p.t = 2.40f + wf * 0.13f;
+            DumpOne(p, Path.Combine(dir, "selfcheck_p8_walk" + wf + ".png"));
+        }
+        p.walkTicks = 0;
+        p.species = 0;
+
+        p.speaking = false;
+        p.thinkTicks = 30;
+        p.walkTicks = 80;
+        p.t = 2.4f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_think.png"));
+
+        p.thinkTicks = 0;
+        p.walkTicks = 0;
+        p.moodKind = 2;
+        p.moodTicks = 74;
+        p.t = 3.1f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_angry.png"));
+
+        p.moodKind = 1;
+        p.moodTicks = 74;
+        p.t = 3.8f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_happy.png"));
+
+        // 新动作自检：招手 / 坐下 / 犯困
+        p.moodTicks = 0;
+        p.moodKind = 0;
+        p.waveTicks = 46;
+        p.t = 1.6f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_wave.png"));
+
+        // 走路：连抓四帧，看两条腿是不是换着踏、头有没有跟着乱晃
+        p.sitting = false;
+        p.sleepy = false;
+        p.waveTicks = 0;
+        // 走路专门测八帧的形象（黑发少年 = 7），抓满八帧才看得出整圈
+        p.species = 7;
+        p.ApplyPose(7);
+        p.walkTicks = 80;
+        p.walkDirX = 1;
+        for (int wi = 0; wi < 8; wi++)
+        {
+            p.t = 0.36f + wi * 0.09f;
+            DumpOne(p, Path.Combine(dir, "selfcheck_walk" + wi + ".png"));
+        }
+        p.walkTicks = 0;
+
+        // 银发剑客 = 8：也抓一遍八帧，确认换到这个形象后走路是全身在迈步，
+        // 不是半身像平移，也不是两只脚原地不动
+        p.species = 8;
+        p.ApplyPose(8);
+        p.walkTicks = 80;
+        p.walkDirX = 1;
+        for (int wi = 0; wi < 8; wi++)
+        {
+            p.t = 0.36f + wi * 0.09f;
+            DumpOne(p, Path.Combine(dir, "selfcheck_walk8_" + wi + ".png"));
+        }
+        p.walkTicks = 0;
+
+        // 御剑：看他是不是真的踩在剑上，而不是正面站姿配一把飘在脚边的剑
+        // actHold 不设起来时，绘制前会把动作强度算回 0，动作就根本没上画
+        p.actHold = 999;
+        p.actKind = 2;
+        p.actAmt = 1.0f;
+        p.t = 1.4f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_sword8.png"));
+        p.actKind = 0;
+        p.actAmt = 0f;
+        p.actHold = 0;
+
+        p.sitting = true;
+        p.t = 2.0f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_sit.png"));
+
+        p.sleepy = true;
+        p.t = 4.4f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_sleep.png"));
+
+        // 难过（掉眼泪）
+        p.sleepy = false;
+        p.sitting = false;
+        p.waveTicks = 0;
+        p.moodKind = 3;
+        p.moodTicks = 74;
+        p.t = 4.1f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_sad.png"));
+
+        // 新增两种表情自检：疑惑 / 得意
+        p.moodKind = 7;
+        p.moodTicks = 74;
+        p.t = 5.0f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_curious.png"));
+
+        p.moodKind = 8;
+        p.moodTicks = 74;
+        p.t = 5.6f;
+        DumpOne(p, Path.Combine(dir, "selfcheck_proud.png"));
+
+        // 12 张形象逐个验证：笑脸是否真的落在脸上
+        p.moodKind = 1;
+        p.moodTicks = 74;
+        p.t = 1.0f;
+        if (p.faceCount > 0)
+        {
+            for (int i = 0; i < p.faceCount; i++)
+            {
+                p.species = i;
+                DumpOne(p, Path.Combine(dir, "selfcheck_face_" + i + ".png"));
+            }
+            p.species = 0;
+        }
+
+        // 每个形象来一张说话帧：检查嘴有没有画在脸上
+        p.moodTicks = 0;
+        p.moodKind = 0;
+        p.speaking = true;
+        p.speakMouthStart = Environment.TickCount - 300;
+        p.speakMouthUntil = Environment.TickCount + 5000;
+        p.t = 1.52f;
+        for (int i = 0; i < p.faceCount; i++)
+        {
+            p.species = i;
+            DumpOne(p, Path.Combine(dir, "selfcheck_mouth_" + i + ".png"));
+        }
+        p.species = 0;
+        p.speaking = false;
+    }
+
+    static void DumpOne(DesktopPet p, string path)
+    {
+        using (Bitmap b = new Bitmap(W, H))
+        {
+            using (Graphics g = Graphics.FromImage(b))
+            {
+                p.PaintAll(g, W, H);
+            }
+            b.Save(path, ImageFormat.Png);
+        }
+    }
+
+    // 主入口
+    static System.Threading.Mutex singleLock;
+
+    // 出事就留个痕，省得下次又是"莫名其妙闪退"查不出来
+    static void LogCrash(string what, Exception ex)
+    {
+        try
+        {
+            string p2 = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "崩溃日志.txt");
+            string s2 = "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "] " + what + " : "
+                + (ex == null ? "null" : ex.ToString()) + Environment.NewLine;
+            File.AppendAllText(p2, s2, Encoding.UTF8);
+        }
+        catch { }
+    }
+
+    public static void Main(string[] args)
+    {
+        try
+        {
+            // 必须在创建任何窗口之前调用，否则窗口会被系统按 DPI 缩小，下半身被裁掉
+            SetProcessDPIAware();
+
+            // 闪退第一嫌疑人：点了两次图标，两个道叠在一个位置上互相挤。
+            // 已经有一个在跑就安静退出，不再开第二个
+            bool isFirst = true;
+            try { singleLock = new System.Threading.Mutex(true, "DaoPetSingleInstance", out isFirst); }
+            catch { isFirst = true; }
+            if (!isFirst) return;
+
+            AppDomain.CurrentDomain.UnhandledException += delegate(object s0, UnhandledExceptionEventArgs e0)
+            {
+                LogCrash("Unhandled", (Exception)e0.ExceptionObject);
+            };
+            Application.ThreadException += delegate(object s1, System.Threading.ThreadExceptionEventArgs e1)
+            {
+                LogCrash("UI", e1.Exception);
+            };
+
+            // 自检出图：道.exe --dump 会在程序目录生成 selfcheck.png
+            if (args.Length > 0 && args[0] == "--dump")
+            {
+                DumpSelf();
+                return;
+            }
+            // 表情图专项自检：把 8 号的四种表情各出一张，顺带把加载状态写出来
+            if (args.Length > 0 && args[0] == "--dumpexpr")
+            {
+                string dd = Path.GetDirectoryName(Application.ExecutablePath);
+                DesktopPet q = new DesktopPet();
+                string info = "exprKeys=" + q.exprMap.Count;
+                foreach (int kk in q.exprMap.Keys) info += " sp" + kk;
+                info += " | laughKeys=" + q.laughMap.Count;
+                foreach (int kk in q.laughMap.Keys) info += " sp" + kk + "(" + q.laughMap[kk].Length + ")";
+                try { File.AppendAllText(Path.Combine(dd, "_exprlog.txt"), info + Environment.NewLine, Encoding.UTF8); } catch { }
+                q.species = 8;
+                int[] mk = new int[] { 1, 2, 3, 0 };
+                string[] nm = new string[] { "happy", "angry", "sad", "plain" };
+                for (int mi = 0; mi < 4; mi++)
+                {
+                    q.moodKind = mk[mi];
+                    q.moodTicks = mk[mi] == 0 ? 0 : 74;
+                    q.speaking = false;
+                    q.sleepy = false;
+                    q.t = 2.0f + mi;
+                    DumpOne(q, Path.Combine(dd, "exprcheck_" + nm[mi] + ".png"));
+                }
+                q.moodKind = 0;
+                q.moodTicks = 0;
+                q.sleepy = true;
+                q.t = 6.4f;
+                DumpOne(q, Path.Combine(dd, "exprcheck_sleep.png"));
+                // 笑的一圈：按 9 步/秒推进时间，六步正好走完四帧，逐帧摊开看
+                q.sleepy = false;
+                q.moodKind = 1;
+                q.moodTicks = 74;
+                for (int li2 = 0; li2 < 6; li2++)
+                {
+                    q.t = 6.0f + li2 / 9.0f;
+                    DumpOne(q, Path.Combine(dd, "exprcheck_laugh" + li2 + ".png"));
+                }
+                return;
+            }
+
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            // 启动局域网同步服务（手机连同一 WiFi 时可互传记忆/新版本）
+            try { SyncServer.Start(); } catch { }
+            Application.Run(new DesktopPet());
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                string log = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "pet_error.txt");
+                System.IO.File.WriteAllText(log, ex.ToString());
+            }
+            catch { }
+        }
+    }
+}
+
+// 局域网同步服务：电脑当小服务器，手机在同一个 WiFi 下自动找到它
+// 行协议（纯文本，避免 JSON 解析出错）：
+//   L|一句话   K|一条知识   M|一条记忆
+static class SyncServer
+{
+    const int HTTP_PORT = 8848;
+    const int UDP_PORT = 8849;
+    public const int APP_VER = 40;
+
+    public static void Start()
+    {
+        try
+        {
+            System.Threading.Thread th = new System.Threading.Thread(HttpLoop);
+            th.IsBackground = true;
+            th.Start();
+        }
+        catch { }
+        try
+        {
+            System.Threading.Thread tu = new System.Threading.Thread(UdpLoop);
+            tu.IsBackground = true;
+            tu.Start();
+        }
+        catch { }
+    }
+
+    static string DataDir()
+    {
+        try { return Path.GetDirectoryName(Application.ExecutablePath); }
+        catch { return "."; }
+    }
+
+    // 每 5 秒向局域网广播一次自己的地址，手机收到就知道电脑在哪
+    static void UdpLoop()
+    {
+        System.Net.Sockets.UdpClient u = null;
+        try
+        {
+            u = new System.Net.Sockets.UdpClient();
+            u.EnableBroadcast = true;
+        }
+        catch { return; }
+        IPEndPoint ep = new IPEndPoint(IPAddress.Broadcast, UDP_PORT);
+        while (true)
+        {
+            try
+            {
+                string msg = "DAO|" + LocalIp() + "|" + HTTP_PORT + "|" + APP_VER;
+                byte[] b = Encoding.UTF8.GetBytes(msg);
+                u.Send(b, b.Length, ep);
+            }
+            catch { }
+            System.Threading.Thread.Sleep(5000);
+        }
+    }
+
+    static string LocalIp()
+    {
+        try
+        {
+            foreach (System.Net.NetworkInformation.NetworkInterface ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+                if (ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback) continue;
+                foreach (System.Net.NetworkInformation.UnicastIPAddressInformation ua in ni.GetIPProperties().UnicastAddresses)
+                {
+                    if (ua.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                        return ua.Address.ToString();
+                }
+            }
+        }
+        catch { }
+        return "127.0.0.1";
+    }
+
+    static void HttpLoop()
+    {
+        System.Net.Sockets.TcpListener l = null;
+        for (int attempt = 0; attempt < 4 && l == null; attempt++)
+        {
+            try
+            {
+                System.Net.Sockets.TcpListener nl = new System.Net.Sockets.TcpListener(IPAddress.Any, HTTP_PORT);
+                nl.Server.SetSocketOption(System.Net.Sockets.SocketOptionLevel.Socket,
+                                          System.Net.Sockets.SocketOptionName.ReuseAddress, true);
+                nl.Start();
+                l = nl;
+            }
+            catch
+            {
+                // 刚被上一个我占用过，端口还在回收，等一下再来
+                System.Threading.Thread.Sleep(2000);
+            }
+        }
+        if (l == null) return;
+        while (true)
+        {
+            try
+            {
+                System.Net.Sockets.TcpClient c = l.AcceptTcpClient();
+                System.Threading.Thread t = new System.Threading.Thread(delegate() { Handle(c); });
+                t.IsBackground = true;
+                t.Start();
+            }
+            catch { System.Threading.Thread.Sleep(500); }
+        }
+    }
+
+    static void Handle(System.Net.Sockets.TcpClient c)
+    {
+        try
+        {
+            // 防止申斥阻塞
+            c.ReceiveTimeout = 8000;
+            using (c)
+            using (System.Net.Sockets.NetworkStream ns = c.GetStream())
+            {
+                ns.ReadTimeout = 8000;
+                ns.WriteTimeout = 20000;
+
+                byte[] head = new byte[8192];
+                int total = 0;
+                while (total < head.Length)
+                {
+                    int n = ns.Read(head, total, 1);
+                    if (n <= 0) break;
+                    total += n;
+                    if (total >= 4 && head[total - 4] == 13 && head[total - 3] == 10
+                        && head[total - 2] == 13 && head[total - 1] == 10) break;
+                }
+                if (total == 0) return;
+
+                string htxt = Encoding.ASCII.GetString(head, 0, total);
+                string[] hl = htxt.Replace("\r", "").Split('\n');
+                string first = hl.Length > 0 ? hl[0] : "";
+                string[] parts = first.Split(' ');
+                string method = parts.Length > 0 ? parts[0] : "";
+                string path = parts.Length > 1 ? parts[1] : "/";
+
+                int clen = 0;
+                for (int i = 1; i < hl.Length; i++)
+                {
+                    string ln = hl[i];
+                    int idx = ln.IndexOf(':');
+                    if (idx <= 0) continue;
+                    string k = ln.Substring(0, idx).Trim().ToLower();
+                    if (k == "content-length")
+                    {
+                        try { clen = Convert.ToInt32(ln.Substring(idx + 1).Trim()); } catch { }
+                    }
+                }
+                string body = "";
+                if (clen > 0 && clen < 1048576)
+                {
+                    byte[] bb = new byte[clen];
+                    int got = 0;
+                    while (got < clen)
+                    {
+                        int n = ns.Read(bb, got, clen - got);
+                        if (n <= 0) break;
+                        got += n;
+                    }
+                    body = Encoding.UTF8.GetString(bb, 0, got);
+                }
+
+                if (path.StartsWith("/say"))
+                {
+                    string t = "";
+                    if (method == "POST") t = body;
+                    else
+                    {
+                        int qi = path.IndexOf("?t=");
+                        if (qi >= 0)
+                        {
+                            try { t = Uri.UnescapeDataString(path.Substring(qi + 3).Replace('+', ' ')); }
+                            catch { t = ""; }
+                        }
+                    }
+                    DesktopPet.Push(t);
+                    SendText(ns, t.Trim().Length > 0 ? "OK" : "EMPTY");
+                }
+                else if (path.StartsWith("/chat"))
+                {
+                    if (path.Contains("mode=1")) { DesktopPet.SetChatMode(true); SendText(ns, "ON"); }
+                    else if (path.Contains("mode=0")) { DesktopPet.SetChatMode(false); SendText(ns, "OFF"); }
+                    else { DesktopPet.PushChat(); SendText(ns, "OK"); }
+                }
+                else if (path.StartsWith("/do"))
+                {
+                    string q2 = "";
+                    if (method == "POST") q2 = body;
+                    else
+                    {
+                        int qi2 = path.IndexOf("?q=");
+                        if (qi2 >= 0)
+                        {
+                            try { q2 = Uri.UnescapeDataString(path.Substring(qi2 + 3).Replace('+', ' ')); }
+                            catch { q2 = ""; }
+                        }
+                    }
+                    DesktopPet.ThinkCmd(q2);
+                    SendText(ns, q2.Trim().Length > 0 ? "THINK" : "EMPTY");
+                }
+                else if (path.StartsWith("/pose"))
+                {
+                    if (path.Contains("p=lie")) { DesktopPet.PoseCmd("lie"); SendText(ns, "LIE"); }
+                    else if (path.Contains("p=cry")) { DesktopPet.PoseCmd("cry"); SendText(ns, "CRY"); }
+                    else if (path.Contains("p=walk")) { DesktopPet.PoseCmd("walk"); SendText(ns, "WALK"); }
+                    else if (path.Contains("p=wake")) { DesktopPet.PoseCmd("wake"); SendText(ns, "WAKE"); }
+                    else if (path.Contains("p=fly")) { DesktopPet.PoseCmd("fly"); SendText(ns, "FLY"); }
+                    else if (path.Contains("p=sword")) { DesktopPet.PoseCmd("sword"); SendText(ns, "SWORD"); }
+                    else if (path.Contains("p=ride")) { DesktopPet.PoseCmd("ride"); SendText(ns, "RIDE"); }
+                    else if (path.Contains("p=dance")) { DesktopPet.PoseCmd("dance"); SendText(ns, "DANCE"); }
+                    else if (path.Contains("p=tea")) { DesktopPet.PoseCmd("tea"); SendText(ns, "TEA"); }
+                    else if (path.Contains("p=tv")) { DesktopPet.PoseCmd("tv"); SendText(ns, "TV"); }
+                    else if (path.Contains("p=skate")) { DesktopPet.PoseCmd("skate"); SendText(ns, "SKATE"); }
+                    else if (path.Contains("p=roller")) { DesktopPet.PoseCmd("roller"); SendText(ns, "ROLLER"); }
+                    else if (path.Contains("p=poem")) { DesktopPet.PoseCmd("poem"); SendText(ns, "POEM"); }
+                    else if (path.Contains("p=english")) { DesktopPet.PoseCmd("english"); SendText(ns, "ENGLISH"); }
+                    else if (path.Contains("p=sing")) { DesktopPet.PoseCmd("sing"); SendText(ns, "SING"); }
+                    else SendText(ns, "USE|p=lie|cry|walk|wake|fly|sword|ride|dance|tea|tv");
+                }
+                else if (path.StartsWith("/species"))
+                {
+                    int sn = 0;
+                    try
+                    {
+                        string q = path;
+                        if (q.Contains("n="))
+                        {
+                            string sraw = q.Substring(q.IndexOf("n=") + 2);
+                            int amp = sraw.IndexOf('&');
+                            if (amp >= 0) sraw = sraw.Substring(0, amp);
+                            int sp2 = sraw.IndexOf(' ');
+                            if (sp2 >= 0) sraw = sraw.Substring(0, sp2);
+                            sn = Convert.ToInt32(sraw);
+                        }
+                    }
+                    catch { sn = 0; }
+                    DesktopPet.SetSpecies(sn);
+                    SendText(ns, "SPECIES|" + sn);
+                }
+                else if (path.StartsWith("/learn"))
+                {
+                    DesktopPet.LearnCmd();
+                    SendText(ns, "LEARN");
+                }
+                else if (path.StartsWith("/story"))
+                {
+                    int sk = 1;
+                    if (path.Contains("k=2")) sk = 2;
+                    else if (path.Contains("k=3")) sk = 3;
+                    DesktopPet.StoryCmd(sk);
+                    SendText(ns, "STORY|" + sk);
+                }
+                else if (path.StartsWith("/stat"))
+                {
+                    SendText(ns, "STAT|" + DesktopPet.StatCmd());
+                }
+                else if (path.StartsWith("/ping"))
+                {
+                    SendText(ns, "OK|道|" + APP_VER + "|" + LocalIp() + "|" + HTTP_PORT);
+                }
+                else if (path.StartsWith("/upd"))
+                {
+                    SendText(ns, DesktopPet.UpdCmd());
+                }
+                else if (path.StartsWith("/ver"))
+                {
+                    SendText(ns, "VER|" + APP_VER);
+                }
+                else if (path.StartsWith("/apk"))
+                {
+                    SendApk(ns);
+                }
+                else if (path.StartsWith("/sync"))
+                {
+                    if (method == "POST")
+                    {
+                        int added = Merge(body);
+                        SendText(ns, "OK|" + added);
+                    }
+                    else
+                    {
+                        SendText(ns, Dump());
+                    }
+                }
+                else
+                {
+                    SendText(ns, "OK|道");
+                }
+            }
+        }
+        catch { }
+    }
+
+    static void SendText(System.Net.Sockets.NetworkStream ns, string s)
+    {
+        SendRaw(ns, "text/plain; charset=utf-8", Encoding.UTF8.GetBytes(s));
+    }
+
+    static void SendRaw(System.Net.Sockets.NetworkStream ns, string ct, byte[] data)
+    {
+        try
+        {
+            string h = "HTTP/1.0 200 OK\r\nContent-Type: " + ct
+                + "\r\nContent-Length: " + data.Length
+                + "\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
+            byte[] hb = Encoding.ASCII.GetBytes(h);
+            ns.Write(hb, 0, hb.Length);
+            ns.Write(data, 0, data.Length);
+            ns.Flush();
+        }
+        catch { }
+    }
+
+    static void SendApk(System.Net.Sockets.NetworkStream ns)
+    {
+        byte[] all = null;
+        try
+        {
+            string p = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "道.apk");
+            if (File.Exists(p)) all = File.ReadAllBytes(p);
+        }
+        catch { }
+        if (all == null)
+        {
+            SendText(ns, "NOAPK");
+            return;
+        }
+        SendRaw(ns, "application/vnd.android.package-archive", all);
+    }
+
+    static string[] LoadLines(string f)
+    {
+        try
+        {
+            if (!File.Exists(f)) return new string[0];
+            return File.ReadAllLines(f, new UTF8Encoding(false));
+        }
+        catch { return new string[0]; }
+    }
+
+    static void AppendUnique(string f, List<string> add, int cap)
+    {
+        try
+        {
+            List<string> cur = new List<string>(LoadLines(f));
+            HashSet<string> have = new HashSet<string>();
+            foreach (string s in cur) have.Add(s.Trim());
+            foreach (string s in add)
+            {
+                string t = s.Trim();
+                if (t.Length == 0) continue;
+                if (have.Contains(t)) continue;
+                cur.Add(t);
+                have.Add(t);
+            }
+            while (cur.Count > cap) cur.RemoveAt(0);
+            File.WriteAllLines(f, cur.ToArray(), new UTF8Encoding(false));
+        }
+        catch { }
+    }
+
+    // 把电脑这边存的话术/知识/记忆整理成行文本，发给手机
+    static string Dump()
+    {
+        string d = DataDir();
+        StringBuilder sb = new StringBuilder();
+        foreach (string s in LoadLines(Path.Combine(d, "我说的话.txt")))
+            if (s.Trim().Length > 0) sb.Append("L|").Append(s.Trim()).Append("\n");
+        foreach (string s in LoadLines(Path.Combine(d, "知识库.txt")))
+            if (s.Trim().Length > 0) sb.Append("K|").Append(s.Trim()).Append("\n");
+        foreach (string s in LoadLines(Path.Combine(d, "记忆.txt")))
+            if (s.Trim().Length > 0) sb.Append("M|").Append(s.Trim()).Append("\n");
+        return sb.ToString();
+    }
+
+    // 收手机推上来的行文本，去重合并进电脑的文件
+    static int Merge(string body)
+    {
+        string d = DataDir();
+        List<string> ls = new List<string>();
+        List<string> ks = new List<string>();
+        List<string> ms = new List<string>();
+        string[] rows = body.Replace("\r", "").Split('\n');
+        foreach (string r in rows)
+        {
+            if (r.Length < 3) continue;
+            if (r[1] != '|') continue;
+            string tag = r.Substring(0, 1);
+            string val = r.Substring(2);
+            if (tag == "L") ls.Add(val);
+            else if (tag == "K") ks.Add(val);
+            else if (tag == "M") ms.Add(val);
+        }
+        AppendUnique(Path.Combine(d, "我说的话.txt"), ls, 300);
+        AppendUnique(Path.Combine(d, "知识库.txt"), ks, 200);
+        AppendUnique(Path.Combine(d, "记忆.txt"), ms, 200);
+        return ls.Count + ks.Count + ms.Count;
+    }
+}

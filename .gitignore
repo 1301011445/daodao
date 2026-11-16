@@ -57,3 +57,4 @@ tools/kill_powertaskbar.ps1
 tools/finish_tray.ps1
 tools/startup_tidy.ps1
 tools/tidy_startup_and_apps.ps1
+.mail_config

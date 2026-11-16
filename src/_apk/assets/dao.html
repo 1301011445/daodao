@@ -384,56 +384,71 @@ window.onerror = function (m, u, l) {
     redraw();
   }
 
+  // 2026-11-16 重写：表情只动眉毛、眼睛、嘴，不再往脸上盖半透明色块，
+  // 也不要十字怒纹、泪滴、汗滴这类贴上去的插画。桌面端同一套规则。
+  // 眉形定情绪基调，眼型定清醒度，嘴形定情绪落点。
   function face(y, fr, kind) {
-    if (fr < 3.5) return;
-    var eyeDx = fr * 0.40, eyeY = y - fr * 0.05, lw = Math.max(1.1, fr * 0.055);
-    var i;
+    if (fr < 3.5 || kind === 0) return;
+    var eyeDx = fr * 0.38, eyeY = y - fr * 0.08, lw = Math.max(1.1, fr * 0.045);
+    var browY = eyeY - fr * 0.33, mouthY = y + fr * 0.34;
+    var ink = 'rgba(58,52,60,0.66)', soft = 'rgba(58,52,60,0.42)';
+    var hw = fr * 0.20, hh = fr * 0.10;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
 
     if (kind === 1) {
-      ctx.fillStyle = 'rgba(255,138,152,0.17)';
-      ctx.beginPath(); ctx.ellipse(0, y + fr * 0.09, fr * 0.52, fr * 0.43, 0, 0, 6.284); ctx.fill();
-      ctx.fillStyle = 'rgba(255,146,160,0.38)';
-      ctx.beginPath(); ctx.ellipse(-eyeDx, y + fr * 0.31, fr * 0.21, fr * 0.13, 0, 0, 6.284); ctx.fill();
-      ctx.beginPath(); ctx.ellipse(eyeDx, y + fr * 0.31, fr * 0.21, fr * 0.13, 0, 0, 6.284); ctx.fill();
-      if (fr > 14) {
-        ctx.strokeStyle = 'rgba(224,92,112,0.65)';
-        ctx.lineWidth = lw; ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.ellipse(0, y + fr * 0.40, fr * 0.14, fr * 0.12, 0, 22 * Math.PI / 180, 158 * Math.PI / 180);
-        ctx.stroke();
-      }
-    } else if (kind === 2) {
-      ctx.fillStyle = 'rgba(246,96,96,0.16)';
-      ctx.beginPath(); ctx.ellipse(0, y + fr * 0.09, fr * 0.52, fr * 0.43, 0, 0, 6.284); ctx.fill();
-      ctx.fillStyle = 'rgba(238,96,96,0.29)';
-      ctx.beginPath(); ctx.ellipse(-eyeDx, y + fr * 0.31, fr * 0.21, fr * 0.13, 0, 0, 6.284); ctx.fill();
-      ctx.beginPath(); ctx.ellipse(eyeDx, y + fr * 0.31, fr * 0.21, fr * 0.13, 0, 0, 6.284); ctx.fill();
-      var ax = fr * 0.98, ay = y - fr * 0.62, s4 = fr * 0.10;
-      ctx.strokeStyle = 'rgba(222,72,72,0.92)';
-      ctx.lineWidth = lw * 1.05; ctx.lineCap = 'round';
+      ctx.strokeStyle = soft; ctx.lineWidth = lw;
       ctx.beginPath();
-      ctx.moveTo(ax - s4 * 1.4, ay - s4 * 0.35); ctx.lineTo(ax - s4 * 0.35, ay - s4 * 1.4);
-      ctx.moveTo(ax + s4 * 0.35, ay + s4 * 1.4); ctx.lineTo(ax + s4 * 1.4, ay + s4 * 0.35);
-      ctx.moveTo(ax - s4 * 1.4, ay + s4 * 0.35); ctx.lineTo(ax - s4 * 0.35, ay + s4 * 1.4);
-      ctx.moveTo(ax + s4 * 0.35, ay - s4 * 1.4); ctx.lineTo(ax + s4 * 1.4, ay - s4 * 0.35);
+      ctx.moveTo(-eyeDx - fr * 0.20, browY + fr * 0.03);
+      ctx.quadraticCurveTo(-eyeDx, browY - fr * 0.06, -eyeDx + fr * 0.17, browY - fr * 0.01);
+      ctx.moveTo(eyeDx + fr * 0.20, browY + fr * 0.03);
+      ctx.quadraticCurveTo(eyeDx, browY - fr * 0.06, eyeDx - fr * 0.17, browY - fr * 0.01);
+      ctx.stroke();
+      ctx.strokeStyle = ink; ctx.lineWidth = lw * 1.1;
+      ctx.beginPath();
+      ctx.moveTo(-hw, mouthY - fr * 0.02);
+      ctx.quadraticCurveTo(0, mouthY + hh * 1.6, hw, mouthY - fr * 0.02);
+      ctx.stroke();
+    } else if (kind === 2) {
+      ctx.strokeStyle = ink; ctx.lineWidth = lw * 1.15;
+      ctx.beginPath();
+      ctx.moveTo(-eyeDx - fr * 0.20, browY - fr * 0.02);
+      ctx.lineTo(-eyeDx + fr * 0.16, browY + fr * 0.13);
+      ctx.moveTo(eyeDx + fr * 0.20, browY - fr * 0.02);
+      ctx.lineTo(eyeDx - fr * 0.16, browY + fr * 0.13);
+      ctx.stroke();
+      ctx.strokeStyle = soft; ctx.lineWidth = lw * 0.9;
+      ctx.beginPath();
+      ctx.moveTo(-eyeDx - fr * 0.15, eyeY - fr * 0.10);
+      ctx.lineTo(-eyeDx + fr * 0.15, eyeY - fr * 0.06);
+      ctx.moveTo(eyeDx + fr * 0.15, eyeY - fr * 0.10);
+      ctx.lineTo(eyeDx - fr * 0.15, eyeY - fr * 0.06);
+      ctx.stroke();
+      ctx.strokeStyle = ink; ctx.lineWidth = lw * 1.05;
+      ctx.beginPath();
+      ctx.moveTo(-hw * 0.9, mouthY);
+      ctx.quadraticCurveTo(0, mouthY + hh * 0.5, hw * 0.9, mouthY);
       ctx.stroke();
     } else if (kind === 3) {
-      ctx.fillStyle = 'rgba(126,176,226,0.28)';
-      ctx.beginPath(); ctx.ellipse(-eyeDx, y - fr * 0.01, fr * 0.20, fr * 0.15, 0, 0, 6.284); ctx.fill();
-      ctx.beginPath(); ctx.ellipse(eyeDx, y - fr * 0.01, fr * 0.20, fr * 0.15, 0, 0, 6.284); ctx.fill();
-      tear(-eyeDx, eyeY + fr * 0.20, fr * 0.17);
-      tear(eyeDx * 0.82, eyeY + fr * 0.36, fr * 0.13);
-    } else if (kind === 4) {
-      ctx.strokeStyle = 'rgba(118,128,150,0.76)';
-      ctx.lineWidth = lw; ctx.lineCap = 'round';
+      ctx.strokeStyle = soft; ctx.lineWidth = lw;
       ctx.beginPath();
-      ctx.moveTo(fr * 0.52, y - fr * 0.62); ctx.lineTo(fr * 0.60, y - fr * 0.34);
-      ctx.moveTo(fr * 0.70, y - fr * 0.58); ctx.lineTo(fr * 0.76, y - fr * 0.30);
+      ctx.moveTo(-eyeDx - fr * 0.20, browY + fr * 0.11);
+      ctx.lineTo(-eyeDx + fr * 0.16, browY - fr * 0.02);
+      ctx.moveTo(eyeDx + fr * 0.20, browY + fr * 0.11);
+      ctx.lineTo(eyeDx - fr * 0.16, browY - fr * 0.02);
       ctx.stroke();
-      ctx.strokeStyle = 'rgba(208,120,60,0.67)';
-      ctx.beginPath(); ctx.ellipse(0, y + fr * 0.36, fr * 0.10, fr * 0.10, 0, 0, 6.284); ctx.stroke();
+      ctx.strokeStyle = soft; ctx.lineWidth = lw * 0.9;
+      ctx.beginPath();
+      ctx.moveTo(-eyeDx - fr * 0.14, eyeY + fr * 0.02);
+      ctx.lineTo(-eyeDx + fr * 0.14, eyeY + fr * 0.08);
+      ctx.moveTo(eyeDx + fr * 0.14, eyeY + fr * 0.02);
+      ctx.lineTo(eyeDx - fr * 0.14, eyeY + fr * 0.08);
+      ctx.stroke();
+      ctx.strokeStyle = ink; ctx.lineWidth = lw * 1.05;
+      ctx.beginPath();
+      ctx.moveTo(-hw * 0.85, mouthY + fr * 0.03);
+      ctx.quadraticCurveTo(0, mouthY - hh * 0.9, hw * 0.85, mouthY + fr * 0.03);
+      ctx.stroke();
     } else if (kind === 5 || kind === 6) {
-      // 光画眼皮弧没用，原图的黑眼珠还在底下，得先拿脸上的一块肤色把它盖掉
       var skim = imgs[species];
       if (skim && skim.naturalWidth) {
         var sxp = skim.naturalWidth * 0.36;
@@ -448,20 +463,19 @@ window.onerror = function (m, u, l) {
                       -eyeDx - fr * 0.62, eyeY - fr * 0.5, eyeDx * 2 + fr * 1.24, fr);
         ctx.restore();
       }
-      ctx.strokeStyle = 'rgba(66,70,84,0.92)';
-      ctx.lineWidth = lw; ctx.lineCap = 'round';
+      ctx.strokeStyle = ink; ctx.lineWidth = lw; ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.ellipse(-eyeDx, eyeY + fr * 0.02, fr * 0.17, fr * 0.11, 0, 20 * Math.PI / 180, 160 * Math.PI / 180);
+      ctx.ellipse(-eyeDx, eyeY + fr * 0.02, fr * 0.16, fr * 0.10, 0, 22 * Math.PI / 180, 158 * Math.PI / 180);
       ctx.stroke();
       ctx.beginPath();
-      ctx.ellipse(eyeDx, eyeY + fr * 0.02, fr * 0.17, fr * 0.11, 0, 20 * Math.PI / 180, 160 * Math.PI / 180);
+      ctx.ellipse(eyeDx, eyeY + fr * 0.02, fr * 0.16, fr * 0.10, 0, 22 * Math.PI / 180, 158 * Math.PI / 180);
       ctx.stroke();
-      ctx.strokeStyle = 'rgba(150,116,120,0.57)';
-      ctx.lineWidth = lw * 0.9;
-      ctx.beginPath(); ctx.ellipse(0, y + fr * 0.32, fr * 0.09, fr * 0.08, 0, 0, 6.284); ctx.stroke();
+      ctx.strokeStyle = soft; ctx.lineWidth = lw * 0.9;
+      ctx.beginPath();
+      ctx.ellipse(0, mouthY - fr * 0.02, fr * 0.075, fr * 0.05, 0, 0, 6.284);
+      ctx.stroke();
     }
   }
-
   function tear(x, y, r) {
     if (r < 1.2) return;
     ctx.fillStyle = 'rgba(108,172,236,0.85)';

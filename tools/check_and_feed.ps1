@@ -99,7 +99,22 @@ if ($apkVer -ne '未读' -and $ver -ne '?') {
 $conclusion = '正常'
 if ($issues.Count -gt 0) { $conclusion = '⚠ ' + ($issues -join '；') }
 
-$lineOut = "[$($now.ToString('yyyy-MM-dd HH:mm'))] $round | $procInfo v$ver | 体检：$feat | 话术 $say 知识 $know 记忆 $mem | 崩溃 $crash | 待装 $updInfo | 图标 $icoInfo | apk v$apkVer | 结论：$conclusion"
+# 九、把这一轮发到邮箱（没配授权码就静默跳过，不算故障）
+$mailInfo = '未配'
+$mailScript = Join-Path $root 'tools\send_mail.ps1'
+if (Test-Path -LiteralPath $mailScript) {
+    $html = "<h3>道 · $($now.ToString('yyyy-MM-dd HH:mm')) $round</h3><p><b>结论：</b>$conclusion</p><p>$procInfo，v$ver；体检：$feat；话术 $say 行 / 知识 $know 行 / 记忆 $mem 行；崩溃 $crash；待装 $updInfo；图标 $icoInfo；apk v$apkVer</p><p style='color:#999'>这条是程序自动发的，不用回。</p>"
+    $subj = "道 · $($now.ToString('yyyy-MM-dd')) $round · $conclusion"
+    $ps51m = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    & $ps51m -NoProfile -ExecutionPolicy Bypass -File $mailScript -Subject $subj -Body $html -Quiet 2>&1 | Out-Null
+    switch ($LASTEXITCODE) {
+        0 { $mailInfo = '已发' }
+        1 { $mailInfo = '失败'; [void]$issues.Add('邮件发送失败') }
+        default { $mailInfo = '未配' }
+    }
+}
+
+$lineOut = "[$($now.ToString('yyyy-MM-dd HH:mm'))] $round | $procInfo v$ver | 体检：$feat | 话术 $say 知识 $know 记忆 $mem | 崩溃 $crash | 待装 $updInfo | 图标 $icoInfo | apk v$apkVer | 邮件 $mailInfo | 结论：$conclusion"
 
 # 写反馈文件（UTF-8 BOM，CRLF），超过 800 行只留最近 800 行
 $enc = New-Object Text.UTF8Encoding($true)

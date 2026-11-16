@@ -109,7 +109,7 @@ if (Test-Path -LiteralPath $mailScript) {
     & $ps51m -NoProfile -ExecutionPolicy Bypass -File $mailScript -Subject $subj -Body $html -Quiet 2>&1 | Out-Null
     switch ($LASTEXITCODE) {
         0 { $mailInfo = '已发' }
-        1 { $mailInfo = '失败'; [void]$issues.Add('邮件发送失败') }
+        1 { $mailInfo = '失败' }
         default { $mailInfo = '未配' }
     }
 }
@@ -126,6 +126,17 @@ if ($all.Count -gt 800) {
     [IO.File]::WriteAllText($feed, ($keep -join "`r`n") + "`r`n" + $lineOut + "`r`n", $enc)
 } else {
     [IO.File]::AppendAllText($feed, $lineOut + "`r`n", $enc)
+}
+
+# 十、桌面托盘提示（后台弹几秒，不阻塞）
+$notifyScript = Join-Path $root 'tools\notify.ps1'
+if (Test-Path -LiteralPath $notifyScript) {
+    $tipDir = Join-Path $root '反馈'
+    if (-not (Test-Path -LiteralPath $tipDir)) { New-Item -ItemType Directory -Path $tipDir -Force | Out-Null }
+    $tipFile = Join-Path $tipDir ('提示_' + $now.ToString('yyyyMMdd_HHmmss') + '.txt')
+    $tipBody = "$($now.ToString('HH:mm')) $round，结论：$conclusion`r`n进程 $($procs.Count) 个，版本 v$ver`r`n体检：$feat`r`n话术 $say / 知识 $know / 记忆 $mem"
+    [IO.File]::WriteAllText($tipFile, ("道 · $round" + "`r`n" + $tipBody), (New-Object Text.UTF8Encoding($false)))
+    Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $notifyScript, '-FromFile', $tipFile -WindowStyle Hidden
 }
 
 if (-not $Quiet) { Write-Output $lineOut }

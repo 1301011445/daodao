@@ -7379,7 +7379,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 44;
+    public const int APP_VER = 48;
 
     public static void Start()
     {
@@ -7658,6 +7658,41 @@ static class SyncServer
                     else
                     {
                         SendText(ns, Dump());
+                    }
+                }
+                else if (path.StartsWith("/selfcheck"))
+                {
+                    string f = Path.Combine(DataDir(), "手机自检.txt");
+                    if (method == "POST")
+                    {
+                        try
+                        {
+                            string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "|" + body.Trim();
+                            File.AppendAllText(f, line + "\n", new UTF8Encoding(false));
+                            string[] rows = File.ReadAllLines(f, new UTF8Encoding(false));
+                            if (rows.Length > 300)
+                            {
+                                string[] keep = new string[300];
+                                Array.Copy(rows, rows.Length - 300, keep, 0, 300);
+                                File.WriteAllLines(f, keep, new UTF8Encoding(false));
+                            }
+                            SendText(ns, "OK|SC");
+                        }
+                        catch { SendText(ns, "ERR"); }
+                    }
+                    else
+                    {
+                        try
+                        {
+                            if (File.Exists(f))
+                            {
+                                string[] rows = File.ReadAllLines(f, new UTF8Encoding(false));
+                                int n = Math.Min(5, rows.Length);
+                                SendText(ns, string.Join("\n", rows, rows.Length - n, n));
+                            }
+                            else SendText(ns, "NONE");
+                        }
+                        catch { SendText(ns, "ERR"); }
                     }
                 }
                 else

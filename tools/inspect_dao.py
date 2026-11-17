@@ -236,7 +236,27 @@ def main():
             else:
                 checks['手机自检'] = '无异常'
             if hv and html_ver is not None and int(hv.group(1)) != html_ver:
-                problems.append('手机装的是旧包：自检版本 %s ≠ 当前 %s' % (hv.group(1), html_ver))
+                # 2026-11-17 修正：上报时间早于当前 apk 的构建时间，说明真机装的还是上一版，
+                # 这是"还没更新"而不是"装错了包"，不该判 FAIL；只有上报时间晚于当前包
+                # 却仍然对不上版本号，才是真问题。
+                apk_p2 = os.path.join(ROOT, '道.apk')
+                apk_mt = None
+                if os.path.exists(apk_p2):
+                    apk_mt = datetime.datetime.fromtimestamp(os.path.getmtime(apk_p2))
+                stale = False
+                if apk_mt is not None:
+                    try:
+                        rep_ts = datetime.datetime.strptime(tsx.strip(), '%Y-%m-%d %H:%M:%S')
+                        if rep_ts < apk_mt:
+                            stale = True
+                    except Exception:
+                        pass
+                if stale:
+                    checks['手机自检'] = '报告早于当前包，真机还没更新到 v%s' % html_ver
+                    problems.append('WARN 手机端最后一次上报是 v%s（%s），早于当前包 v%s 的构建时间，'
+                                    '真机装更新后才会有新数据' % (hv.group(1), tsx.strip(), html_ver))
+                else:
+                    problems.append('手机装的是旧包：自检版本 %s ≠ 当前 %s' % (hv.group(1), html_ver))
     else:
         checks['手机自检'] = '还没上报过'
         problems.append('WARN 手机端还没上报过自检（打开一次 App 会自动上报）')

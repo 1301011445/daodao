@@ -226,7 +226,48 @@ def render_wav(json_path, wav_path, rate=22050, gain=0.55):
     return seconds, os.path.getsize(wav_path)
 
 
+def cmd_list():
+    if not os.path.isdir(MIDI_DIR):
+        print('EMPTY')
+        return
+    rows = sorted(f for f in os.listdir(MIDI_DIR) if f.lower().endswith('.json'))
+    if not rows:
+        print('EMPTY')
+        return
+    for i, f in enumerate(rows):
+        try:
+            o = json.load(open(os.path.join(MIDI_DIR, f), encoding='utf-8'))
+            print('%d|%s|%s|%s|%s' % (i, f[:-5], o.get('bars', '?'), o.get('seconds', '?'), o.get('noteCount', '?')))
+        except Exception:
+            print('%d|%s|坏文件|0|0' % (i, f[:-5]))
+
+
+def cmd_render(json_path, wav_path=None):
+    if wav_path is None:
+        wav_path = os.path.splitext(json_path)[0] + '.wav'
+    if not os.path.exists(json_path):
+        print('MISS|' + json_path)
+        return
+    if os.path.exists(wav_path) and os.path.getsize(wav_path) > 4096:
+        print('OK|' + wav_path + '|cached')
+        return
+    sec, size = render_wav(json_path, wav_path)
+    print('OK|%s|%d|%.2f' % (wav_path, size, sec))
+
+
 def main():
+    if len(sys.argv) > 1:
+        cmd = sys.argv[1]
+        if cmd == 'list':
+            cmd_list()
+            return
+        if cmd == 'render':
+            cmd_render(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
+            return
+        if cmd == 'parse':
+            bpm, notes, ppq = parse_smf(sys.argv[2])
+            print(json.dumps(to_json('parse', bpm, notes, ppq), ensure_ascii=False)[:400])
+            return
     os.makedirs(MIDI_DIR, exist_ok=True)
     if len(sys.argv) > 1 and sys.argv[1] == 'parse':
         bpm, notes, ppq = parse_smf(sys.argv[2])

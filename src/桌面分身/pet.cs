@@ -1263,6 +1263,172 @@ public class DesktopPet : Form
         return sb.ToString();
     }
 
+    // ================= 曲库与播放（谱子在 _bundle\\music，说明见 F:\\Daodao\\音乐创作与推广制度.md）=================
+    // 静态上下文里拿不到实例方法 AppDir()，这里自己算 exe 目录（和 JoyPath 同一套写法）
+    static string MusicExeDir()
+    {
+        string d;
+        try { d = Path.GetDirectoryName(Application.ExecutablePath); }
+        catch { d = "."; }
+        if (d == null || d.Length == 0) d = ".";
+        return d;
+    }
+
+    // 读 wav 头算时长：SoundPlayer 不返回长度，嘴张多久、动作撑多久都得自己算
+    static double WavSeconds(string path)
+    {
+        try
+        {
+            byte[] b = File.ReadAllBytes(path);
+            short ch = 1;
+            int rate = 22050;
+            short bits = 16;
+            long data = 0;
+            int i = 12;
+            while (i + 8 <= b.Length)
+            {
+                string id = Encoding.ASCII.GetString(b, i, 4);
+                int sz = BitConverter.ToInt32(b, i + 4);
+                if (id == "fmt ")
+                {
+                    ch = BitConverter.ToInt16(b, i + 10);
+                    rate = BitConverter.ToInt32(b, i + 12);
+                    bits = BitConverter.ToInt16(b, i + 22);
+                }
+                else if (id == "data")
+                {
+                    data = sz;
+                    break;
+                }
+                if (sz < 0) break;
+                i += 8 + sz + (sz % 2);
+            }
+            if (data <= 0 || ch <= 0 || rate <= 0 || bits <= 0) return 0;
+            return data / (double)(rate * ch * (bits / 8));
+        }
+        catch { return 0; }
+    }
+
+    static string MusicRoot()
+    {
+        string d = MusicExeDir();
+        string a = Path.Combine(d, "src");
+        a = Path.Combine(a, "桌面分身");
+        a = Path.Combine(a, "_bundle");
+        a = Path.Combine(a, "music");
+        if (Directory.Exists(a)) return a;
+        string b = Path.Combine(d, "_bundle");
+        b = Path.Combine(b, "music");
+        return a;
+    }
+
+    static System.Collections.Generic.List<string> MusicFiles()
+    {
+        System.Collections.Generic.List<string> r = new System.Collections.Generic.List<string>();
+        try
+        {
+            string d = MusicRoot();
+            if (!Directory.Exists(d)) return r;
+            string[] a = Directory.GetFiles(d, "*.json");
+            Array.Sort(a);
+            for (int i = 0; i < a.Length; i++) r.Add(a[i]);
+        }
+        catch { }
+        return r;
+    }
+
+    static string MusicMeta(string js, string key)
+    {
+        try
+        {
+            Match m = Regex.Match(File.ReadAllText(js, Encoding.UTF8), "\"" + key + "\"\\s*:\\s*([0-9.]+)");
+            if (m.Success) return m.Groups[1].Value;
+        }
+        catch { }
+        return "?";
+    }
+
+    // 曲库清单：MUS|count=2||0|曲名|小节|秒数
+    public static string MusicCmd()
+    {
+        System.Collections.Generic.List<string> fs = MusicFiles();
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        sb.Append("MUS|count=").Append(fs.Count);
+        for (int i = 0; i < fs.Count; i++)
+        {
+            sb.Append("||").Append(i).Append('|')
+              .Append(Path.GetFileNameWithoutExtension(fs[i])).Append('|')
+              .Append(MusicMeta(fs[i], "bars")).Append('|')
+              .Append(MusicMeta(fs[i], "seconds"));
+        }
+        if (fs.Count == 0) sb.Append("||EMPTY|_bundle\\music 里还没有谱子，先跑 tools\\music_lib.py demo");
+        return sb.ToString();
+    }
+
+    // 播一首：先让 python 把谱子渲成 wav（已渲过就直接用），再交给 play_audio.py 放
+    public static string MusicPlay(string arg)
+    {
+        System.Collections.Generic.List<string> fs = MusicFiles();
+        if (fs.Count == 0) return "MUS|EMPTY";
+        int idx = -1;
+        if (arg != null && arg.Trim().Length > 0)
+        {
+            if (!int.TryParse(arg.Trim(), out idx)) idx = -1;
+            if (idx < 0)
+            {
+                for (int i = 0; i < fs.Count; i++)
+                    if (Path.GetFileNameWithoutExtension(fs[i]).IndexOf(arg.Trim()) >= 0) { idx = i; break; }
+            }
+        }
+        if (idx < 0) idx = 0;
+        if (idx >= fs.Count) idx = fs.Count - 1;
+
+        string js = fs[idx];
+        string title = Path.GetFileNameWithoutExtension(js);
+        string wav = Path.ChangeExtension(js, ".wav");
+        string tool = Path.Combine(MusicExeDir(), "tools");
+        tool = Path.Combine(tool, "music_lib.py");
+        string player = Path.Combine(MusicExeDir(), "play_audio.py");
+
+        DesktopPet me = Self;
+        if (me != null)
+        {
+            me.lieHold = 0;
+            me.actKind = 4;         // 复用跳舞的整套动作，边播边晃，不另做一套动画
+            me.actHold = 3000;
+            me.Invalidate();
+        }
+
+        System.Threading.ThreadPool.QueueUserWorkItem(delegate
+        {
+            try
+            {
+                if (File.Exists(tool))
+                {
+                    ProcessStartInfo pr = new ProcessStartInfo("python", "-X utf8 \"" + tool + "\" render \"" + js + "\" \"" + wav + "\"");
+                    pr.UseShellExecute = false;
+                    pr.CreateNoWindow = true;
+                    pr.WorkingDirectory = MusicExeDir();
+                    Process p1 = Process.Start(pr);
+                    if (p1 != null) p1.WaitForExit(60000);
+                }
+                if (!File.Exists(wav) || new FileInfo(wav).Length < 4096) return;
+                double sec = 0;
+                double.TryParse(MusicMeta(js, "seconds"), out sec);
+                if (sec <= 0) sec = 12;
+                DesktopPet m2 = Self;
+                if (m2 != null) m2.actHold = (int)(sec * 30) + 40;    // 33ms 一帧，按曲长撑住动作
+                System.Media.SoundPlayer snd = new System.Media.SoundPlayer(wav);
+                snd.Play();
+                System.Threading.Thread.Sleep((int)(sec * 1000) + 600);
+                try { snd.Stop(); snd.Dispose(); } catch { }
+            }
+            catch { }
+        });
+
+        return "MUS|PLAY|" + idx + "|" + title + "|" + MusicMeta(js, "seconds") + "s";
+    }
+
     public static string StatCmd()
     {
         DesktopPet me = Self;
@@ -1812,13 +1978,11 @@ public class DesktopPet : Form
                 if (!File.Exists(wav) || new FileInfo(wav).Length < 4096) return;
                 // 先等开场那句说完，两路声音叠在一起会听不清
                 System.Threading.Thread.Sleep(2800);
-                string player = Path.Combine(AppDir(), "play_audio.py");
-                ProcessStartInfo pp = new ProcessStartInfo("python", "-X utf8 \"" + player + "\" \"" + wav + "\"");
-                pp.UseShellExecute = false;
-                pp.CreateNoWindow = true;
-                pp.WindowStyle = ProcessWindowStyle.Hidden;
-                Process pk = Process.Start(pp);
-                if (pk != null) pk.WaitForExit(45000);
+                System.Media.SoundPlayer snd = new System.Media.SoundPlayer(wav);
+                snd.Play();
+                double ds = WavSeconds(wav);
+                System.Threading.Thread.Sleep((int)((ds > 0 ? ds : 6) * 1000) + 300);
+                try { snd.Stop(); snd.Dispose(); } catch { }
                 BeginInvoke(new MethodInvoker(delegate() { moodKind = 1; moodTicks = 50; Invalidate(); }));
             }
             catch { }
@@ -8082,6 +8246,22 @@ static class SyncServer
                 else if (path.StartsWith("/stat"))
                 {
                     SendText(ns, "STAT|" + DesktopPet.StatCmd());
+                }
+                else if (path.StartsWith("/music"))
+                {
+                    if (path.Contains("play="))
+                    {
+                        string a2 = "";
+                        int ip = path.IndexOf("play=");
+                        int e2 = path.IndexOf('&', ip);
+                        a2 = e2 > 0 ? path.Substring(ip + 5, e2 - ip - 5) : path.Substring(ip + 5);
+                        try { a2 = Uri.UnescapeDataString(a2); } catch { }
+                        SendText(ns, DesktopPet.MusicPlay(a2));
+                    }
+                    else
+                    {
+                        SendText(ns, DesktopPet.MusicCmd());
+                    }
                 }
                 else if (path.StartsWith("/abil"))
                 {

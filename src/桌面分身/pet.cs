@@ -4306,6 +4306,42 @@ public class DesktopPet : Form
     // 有姿势集时的画法：选一张最贴当前状态的姿势图贴上去，切换时做交叉淡化。
     // 走路、挥手、欢呼、坐下都是图里本来就有的四肢动作，不再靠整张图平移或切条
     // 八帧走路直接上画：一像素对一像素贴，手脚动作全靠这八张图画出来
+    // 2026-11-17：三次贝塞尔缓动，参数照搬 Flutter 实现
+    // 来源：flutter/flutter · packages/flutter/lib/src/animation/curves.dart
+    //   Curves.easeOutCubic = Cubic(0.215, 0.61, 0.355, 1.0)
+    //   Curves.easeOutQuint = Cubic(0.23, 1.0, 0.32, 1.0)
+    // 做法：按 x 反解 t（牛顿迭代），再取 y，和 Flutter Cubic.transform 同一套算法
+    static float BezierAxis(float t, float a, float b)
+    {
+        float u = 1f - t;
+        return 3f * u * u * t * a + 3f * u * t * t * b + t * t * t;
+    }
+    static float CubicEase(float x, float x1, float y1, float x2, float y2)
+    {
+        if (x <= 0f) return 0f;
+        if (x >= 1f) return 1f;
+        float t = x;
+        for (int i = 0; i < 8; i++)
+        {
+            float bx = BezierAxis(t, x1, x2) - x;
+            if (Math.Abs(bx) < 1e-4f) break;
+            float d = (BezierAxis(t + 1e-4f, x1, x2) - BezierAxis(t - 1e-4f, x1, x2)) / 2e-4f;
+            if (Math.Abs(d) < 1e-6f) break;
+            t -= bx / d;
+            if (t < 0f) t = 0f;
+            if (t > 1f) t = 1f;
+        }
+        return BezierAxis(t, y1, y2);
+    }
+    static float EaseOutCubic(float x)
+    {
+        return CubicEase(x, 0.215f, 0.61f, 0.355f, 1.0f);
+    }
+    static float EaseOutQuint(float x)
+    {
+        return CubicEase(x, 0.23f, 1.0f, 0.32f, 1.0f);
+    }
+
     void DrawWalkFrames(Graphics g, float cx, float cy, float breathe)
     {
         if (walkFrames == null || walkFrames.Length < 8) return;
@@ -4321,9 +4357,12 @@ public class DesktopPet : Form
         // 改成 easeOutSine：脚触地那一下变化最快，往上升时逐渐减速；
         // 触地那一小段再往下压 1 像素，落脚才有重量感。
         float rawBob = Math.Abs((float)Math.Sin(ph * (float)Math.PI / 4f));
-        float riseBob = (float)Math.Sin(rawBob * (float)Math.PI / 2f);
-        float bob = -2.8f * riseBob;
-        if (rawBob < 0.10f) bob += 1.0f;
+        // 2026-11-17 晚：上升段改用 Flutter 的 easeOutCubic（0.215,0.61,0.355,1.0），
+        // 起脚快、到顶慢；触地压缩从原来 rawBob<0.10 的硬加 1px（阶跃，落地会"啪"一下）
+        // 改成连续曲线 1.2px × easeOutCubic，压得越接近触地越深。
+        float riseBob = EaseOutCubic(rawBob);
+        float press = rawBob < 0.30f ? (1f - rawBob / 0.30f) : 0f;
+        float bob = -2.8f * riseBob + 1.2f * EaseOutQuint(press);
         if (lieAmt > 0.02f) bob -= 34f * lieAmt;
 
         float footY = cy + 68f;
@@ -7403,7 +7442,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 49;
+    public const int APP_VER = 50;
 
     public static void Start()
     {

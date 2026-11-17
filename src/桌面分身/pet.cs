@@ -632,9 +632,13 @@ public class DesktopPet : Form
             }
 
             // 表情整图：expr_{sp}_{key}.png，四张齐了才登记
+            // 2026-11-17：4/5/9/10 四只已经换成人形立绘，但 expr_{4,5,9,10}_*.png 还是旧 Q 版那套，
+            // 一换表情就把老脸贴回来、身体却还是新立绘，看着就是换了个头。
+            // 这四只先不登记表情整图，改走 DrawFaceExpr 兜底——脸永远是同一张新立绘，只动眉眼嘴。
             string[] exprKeys = new string[] { "happy", "sad", "angry", "sleep" };
             for (int sp3 = 0; UseExprArt && sp3 < 12; sp3++)
             {
+                if (sp3 == 4 || sp3 == 5 || sp3 == 9 || sp3 == 10) continue;
                 Bitmap[] ee = new Bitmap[exprKeys.Length];
                 bool eok = true;
                 for (int ei = 0; ei < exprKeys.Length; ei++)
@@ -4313,7 +4317,13 @@ public class DesktopPet : Form
         Bitmap pb = walkFrames[fi];
         if (pb == null) return;
         // 落地时沉一点、通过位弹一点，和这一帧的姿势对上，才不会像原地抽动
-        float bob = -2.8f * Math.Abs((float)Math.Sin(ph * (float)Math.PI / 4f));
+        // 2026-11-17：原来按正弦等速起伏，看着像机械振动。
+        // 改成 easeOutSine：脚触地那一下变化最快，往上升时逐渐减速；
+        // 触地那一小段再往下压 1 像素，落脚才有重量感。
+        float rawBob = Math.Abs((float)Math.Sin(ph * (float)Math.PI / 4f));
+        float riseBob = (float)Math.Sin(rawBob * (float)Math.PI / 2f);
+        float bob = -2.8f * riseBob;
+        if (rawBob < 0.10f) bob += 1.0f;
         if (lieAmt > 0.02f) bob -= 34f * lieAmt;
 
         float footY = cy + 68f;
@@ -6520,7 +6530,21 @@ public class DesktopPet : Form
         }
 
         // 说话：嘴巴开合按音节走，句子里有快有慢，偶尔收一下像换气
-        float rate = 5.4f;
+        // 2026-11-17：开合频率不再写死 5.4，改成跟 CurRate 的语速档联动——
+        // 兴奋 +16% 时嘴动得快、犯困 -7% 时拖一点，嘴型和声音才是一个节奏。
+        float mouthRate = 5.4f;
+        try
+        {
+            string cr = CurRate();
+            if (cr != null && cr.Length > 2 && cr[0] == '+')
+            {
+                int pct = 0;
+                if (int.TryParse(cr.Substring(1).TrimEnd('%'), out pct))
+                    mouthRate = 5.4f * (1.0f + pct / 100.0f);
+            }
+        }
+        catch { }
+        float rate = mouthRate;
         float ph = t * rate;
         float a1 = (float)Math.Abs(Math.Sin(ph * 1.0f));
         float a2 = (float)Math.Abs(Math.Sin(ph * 2.3f + 0.7f));
@@ -7379,7 +7403,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 48;
+    public const int APP_VER = 49;
 
     public static void Start()
     {

@@ -34,6 +34,97 @@ def png_info(p):
     w, h = struct.unpack('>II', head[16:24])
     return (w, h, head[25])
 
+MUSIC = os.path.join(ROOT, 'tools', '音乐')
+PY = sys.executable
+
+def _run_py(script_dir, script, timeout=120):
+    """跑一个音乐工具脚本，回 (returncode, 输出文本)"""
+    try:
+        r = subprocess.run([PY, script], cwd=os.path.join(MUSIC, script_dir),
+                           capture_output=True, timeout=timeout)
+        out = (r.stdout or b'').decode('utf-8', 'replace') + (r.stderr or b'').decode('utf-8', 'replace')
+        return r.returncode, out
+    except Exception as e:
+        return -1, 'EXC %s' % e
+
+def music_check(lines, problems):
+    """音乐这一摊的自动巡检：学习归档自检 + 词曲判据 + 两端曲库一致性。
+    只报事实，不改东西；发现问题进 problems，留给巡检报告与待改进.md。"""
+    lines.append('【音乐自检】')
+    if not os.path.isdir(MUSIC):
+        lines.append('  tools\\音乐 不存在，音乐巡检跳过')
+        problems.append('WARN 音乐工具目录缺失（tools\\音乐）')
+        lines.append('')
+        return
+
+    # 1) 学习归档自检：类别数 / 缺口数
+    code, out = _run_py('学习归档', '归档.py')
+    m = re.search(r'归档\s*(\d+)\s*类，缺口\s*(\d+)\s*处', out)
+    if m:
+        n_cls, n_gap = int(m.group(1)), int(m.group(2))
+        lines.append('  学习归档：%d 类，缺口 %d 处' % (n_cls, n_gap))
+        for g in re.findall(r'^\s*!\s*(.+)$', out, re.M):
+            lines.append('    ! ' + g.strip())
+            problems.append('WARN 学习归档缺口：' + g.strip())
+    else:
+        lines.append('  学习归档：跑不起来（%s）' % (out.strip().splitlines()[-1] if out.strip() else code))
+        problems.append('WARN 学习归档脚本跑不起来')
+
+    # 2) 词曲判据 L1-L4
+    code, out = _run_py('判据检查', '判据检查.py')
+    m2 = re.search(r'汇总：(.*)', out)
+    if m2:
+        summary = m2.group(1).strip()
+        lines.append('  词曲判据：' + summary)
+        if '不过' in summary or '×' in summary:
+            problems.append('WARN 词曲判据没全过：' + summary)
+    elif code == 0:
+        lines.append('  词曲判据：跑通了但没看到汇总行')
+    else:
+        lines.append('  词曲判据：跑不起来（exit=%d）' % code)
+        problems.append('WARN 判据检查脚本跑不起来')
+
+    # 3) 两端曲库一致性（电脑 _bundle\\music 与 手机 assets\\music 文件名必须同一套）
+    pc_mus = os.path.join(BUNDLE, 'music')
+    ph_mus = os.path.join(APKDIR, 'assets', 'music')
+
+    def _names(d):
+        """只比 wav（手机端只带 wav；json/mid 是谱源，电脑端独有，不该算不同步）。
+        名字规整：手机端为了打进 assets 用了 ASCII 名（demo_01.wav），电脑端是中文全名
+        （demo_01_五声主题.wav），所以去掉中文与空段后比前缀，同曲不同名不算缺。"""
+        try:
+            raw = [f for f in os.listdir(d) if f.lower().endswith('.wav')]
+        except OSError:
+            return set()
+        out = set()
+        for f in raw:
+            stem = os.path.splitext(f)[0]
+            ascii_part = re.match(r'^[A-Za-z0-9_\-]+', stem).group(0) if re.match(r'^[A-Za-z0-9_\-]+', stem) else stem
+            out.add(ascii_part.rstrip('_'))
+        return out
+    a, b = _names(pc_mus), _names(ph_mus)
+    if a or b:
+        lines.append('  曲库：电脑 %d 个 / 手机 %d 个' % (len(a), len(b)))
+        only_a = sorted(a - b)
+        only_b = sorted(b - a)
+        if only_a:
+            lines.append('    只在电脑端：' + '、'.join(only_a[:6]))
+            problems.append('WARN 曲库不同步（只在电脑端：%s）' % '、'.join(only_a[:6]))
+        if only_b:
+            lines.append('    只在手机端：' + '、'.join(only_b[:6]))
+            problems.append('WARN 曲库不同步（只在手机端：%s）' % '、'.join(only_b[:6]))
+    else:
+        lines.append('  曲库：两端都没有音乐文件')
+        problems.append('WARN 曲库为空，两端播歌功能等于没素材')
+
+    # 4) 未发布作品仓（只保存不发布的曲子必须有词/谱/母带三件齐全）
+    lib = os.path.join(ROOT, '曲库')
+    if os.path.isdir(lib):
+        wavs = [f for f in os.listdir(lib) if f.lower().endswith('.wav')]
+        words = [f for f in os.listdir(ROOT) if f.endswith('_词.md')]
+        lines.append('  未发布仓：曲库 %d 首母带，词本 %d 份' % (len(wavs), len(words)))
+    lines.append('')
+
 def main():
     ts = datetime.datetime.now()
     checks = {}
@@ -364,6 +455,7 @@ def main():
     if ab_stale:
         lines.append('  生锈记录 %d 条，最近一条：%s' % (ab_stale, ab_last_stale))
     lines.append('')
+    music_check(lines, problems)
     if problems:
         lines.append('【问题】')
         for p in problems:

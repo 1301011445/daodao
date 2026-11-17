@@ -125,6 +125,37 @@ def music_check(lines, problems):
         lines.append('  未发布仓：曲库 %d 首母带，词本 %d 份' % (len(wavs), len(words)))
     lines.append('')
 
+def joy_check(lines, problems):
+    """愉悦值与问题库（2026-11-18 新加的一节）。
+    跑 tools\\愉悦值检查.py：结算已解决问题该加的分、算停滞、体检两份 JSON。
+    只报事实，不判 FAIL；WARN 会落到问题区，留给人看。"""
+    lines.append('【愉悦与问题】')
+    script = os.path.join(ROOT, 'tools', '愉悦值检查.py')
+    if not os.path.exists(script):
+        lines.append('  tools\\愉悦值检查.py 不在，本节跳过')
+        problems.append('WARN 愉悦值检查脚本缺失')
+        lines.append('')
+        return
+    try:
+        r = subprocess.run([PY, script], capture_output=True, timeout=120)
+        out = (r.stdout or b'').decode('utf-8', 'replace') + (r.stderr or b'').decode('utf-8', 'replace')
+    except Exception as e:
+        lines.append('  跑不起来：%s' % e)
+        problems.append('WARN 愉悦值检查跑不起来')
+        lines.append('')
+        return
+    for l in out.splitlines():
+        s = l.strip()
+        if not s or s.startswith('【愉悦与问题】') or s.startswith('JOY_STATE='):
+            continue
+        lines.append(l)
+    if 'JOY_STATE=WARN' in out:
+        for l in out.splitlines():
+            s = l.strip()
+            if s.startswith('!'):
+                problems.append('WARN 愉悦值/问题库：' + s.lstrip('!').strip())
+    lines.append('')
+
 def main():
     ts = datetime.datetime.now()
     checks = {}
@@ -456,6 +487,7 @@ def main():
         lines.append('  生锈记录 %d 条，最近一条：%s' % (ab_stale, ab_last_stale))
     lines.append('')
     music_check(lines, problems)
+    joy_check(lines, problems)
     if problems:
         lines.append('【问题】')
         for p in problems:
@@ -463,7 +495,17 @@ def main():
     else:
         lines.append('【问题】无')
     lines.append('')
-    lines.append('【待改进】未解决 %d 项，已修复 %d 项（清单见 巡检报告\\待改进.md）' % (open_n, fixed_n))
+    # 2026-11-18：待改进.md 是旧账，新账以 自我状态\问题库.json 为准，这里把两份数一起报，避免看着像两套
+    lib_note = ''
+    try:
+        with open(os.path.join(ROOT, '自我状态', '问题库.json'), encoding='utf-8-sig') as f:
+            _it = json.load(f).get('问题', [])
+        _open = sum(1 for i in _it if i.get('状态') in ('open', 'wait'))
+        _done = sum(1 for i in _it if i.get('状态') == 'solved')
+        lib_note = '；问题库未解决 %d 项 / 已解决 %d 项（自我状态\\问题库.json）' % (_open, _done)
+    except Exception:
+        lib_note = '；问题库读不出来'
+    lines.append('【待改进】未解决 %d 项，已修复 %d 项（清单见 巡检报告\\待改进.md）%s' % (open_n, fixed_n, lib_note))
     lines.append('')
     lines.append('【结论】' + verdict)
     text = '\n'.join(lines) + '\n'

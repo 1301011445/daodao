@@ -8,6 +8,8 @@
 !*.cmd
 !*.cs
 !*.java
+!AndroidManifest.xml
+!*.xml
 !*.mid
 !*.wavs
 !*.js
@@ -20,6 +22,8 @@
 !*.svg
 !*.cs
 !*.java
+!AndroidManifest.xml
+!*.xml
 !*.mid
 !*.wav
 

@@ -1315,7 +1315,7 @@ window.onerror = function (m, u, l) {
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '51';
+  var HTML_VER = '52';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1348,7 +1348,8 @@ function daoSyncJoy() {
     else if (kind === 2) word = '愉快';
     else if (kind === 6) word = '低落';
     else if (kind === 3) word = '恹恹';
-    el.textContent = '愉悦 ' + v + ' · ' + word;
+    var a = raw.match(/abil=(\d+)/);
+    el.textContent = '愉悦 ' + v + (a ? ' · 能力 ' + parseInt(a[1], 10) : '') + ' · ' + word;
     el.className = (v >= 65) ? 'hi' : (v < 45 ? 'lo' : '');
   } catch (e) { el.textContent = '愉悦 --'; }
 }

@@ -323,6 +323,46 @@ def main():
     for i, (f, nm) in enumerate(zip(faces, names + [''] * n_faces)):
         info = png_info(os.path.join(BUNDLE, f))
         lines.append('  %2d  %-10s %s' % (i, nm, ('%dx%d' % (info[0], info[1])) if info else '?'))
+    # ---------- 能力台账（自省账本）----------
+    ab_line = None
+    try:
+        import urllib.request
+        with urllib.request.urlopen('http://127.0.0.1:8848/abil', timeout=5) as resp:
+            ab_line = resp.read().decode('utf-8', 'replace').strip()
+    except Exception:
+        ab_line = None
+    ab_vals = None
+    ab_stale = 0
+    ab_last_stale = ''
+    ab_txt = os.path.join(ROOT, '能力台账.txt')
+    if os.path.exists(ab_txt):
+        try:
+            with open(ab_txt, encoding='utf-8-sig') as f:
+                rows = [x.strip() for x in f.read().splitlines() if x.strip()]
+            if rows:
+                ab_vals = [int(float(x)) for x in rows[0].split()]
+            for r2 in rows[2:]:
+                if '生锈' in r2:
+                    ab_stale += 1
+                    ab_last_stale = r2
+        except Exception:
+            ab_vals = None
+    names7 = ['语言', '动作', '创作', '反应', '思考', '反思', '学习']
+    lines.append('【能力台账】')
+    if ab_line:
+        lines.append('  接口 ' + ab_line)
+    elif ab_vals:
+        lines.append('  文件 ' + ' '.join(str(x) for x in ab_vals))
+    else:
+        lines.append('  读不到（能力台账未建立，或道没在跑）')
+        problems.append('WARN 能力台账读不到，自省这块是盲的')
+    if ab_vals and len(ab_vals) >= 7:
+        low = min(range(7), key=lambda i: ab_vals[i])
+        lines.append('  短板 %s=%d（下一步优先补它）' % (names7[low], ab_vals[low]))
+        if ab_vals[low] < 30:
+            lines.append('  提醒：短板已低于 30，制度要求先补落地再做新东西')
+    if ab_stale:
+        lines.append('  生锈记录 %d 条，最近一条：%s' % (ab_stale, ab_last_stale))
     lines.append('')
     if problems:
         lines.append('【问题】')

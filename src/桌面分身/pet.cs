@@ -1064,7 +1064,203 @@ public class DesktopPet : Form
     {
         JoyLoad();
         JoyTick();
-        return "value=" + ((int)Math.Round(joyVal)) + "|kind=" + JoyKind() + "|net=" + joyTodayNet;
+        return "value=" + ((int)Math.Round(joyVal)) + "|kind=" + JoyKind() + "|net=" + joyTodayNet + "|abil=" + AbAvg();
+    }
+
+    // ================= 能力台账（自省用的记分板，说明见 F:\Daodao\道_能力迭代制度.md）=================
+    static readonly string[] AbList = { "语言", "动作", "创作", "反应", "思考", "反思", "学习" };
+    static float[] abVal = null;
+    static string abLast = "";      // 上一次生锈结算日期
+    static System.Collections.Generic.List<string> abLog = new System.Collections.Generic.List<string>();
+
+    static string AbPath()
+    {
+        string d;
+        try { d = Path.GetDirectoryName(Application.ExecutablePath); }
+        catch { d = "."; }
+        if (d == null || d.Length == 0) d = ".";
+        return Path.Combine(d, "能力台账.txt");
+    }
+
+    static int AbIndex(string who)
+    {
+        if (who == null) return -1;
+        string w = who.Trim().ToLower();
+        if (w.Length == 0) return -1;
+        if (w == "lang" || w == "语言") return 0;
+        if (w == "move" || w == "动作") return 1;
+        if (w == "compose" || w == "创作") return 2;
+        if (w == "react" || w == "反应") return 3;
+        if (w == "think" || w == "思考") return 4;
+        if (w == "reflect" || w == "反思") return 5;
+        if (w == "learn" || w == "学习") return 6;
+        return -1;
+    }
+
+    static void AbLoad()
+    {
+        if (abVal != null) return;
+        abVal = new float[7];
+        for (int i = 0; i < 7; i++) abVal[i] = 50f;
+        try
+        {
+            if (File.Exists(AbPath()))
+            {
+                string[] rows = File.ReadAllLines(AbPath(), new UTF8Encoding(false));
+                if (rows.Length > 0)
+                {
+                    string[] ps = rows[0].Trim().Split(' ');
+                    for (int i = 0; i < 7 && i < ps.Length; i++)
+                    {
+                        float v = 50f;
+                        if (float.TryParse(ps[i], out v)) abVal[i] = Math.Max(0f, Math.Min(100f, v));
+                    }
+                }
+                if (rows.Length > 1) abLast = rows[1].Trim();
+                for (int i = 2; i < rows.Length && abLog.Count < 220; i++) abLog.Add(rows[i]);
+            }
+        }
+        catch { }
+        AbTick();
+    }
+
+    static void AbSave()
+    {
+        try
+        {
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            for (int i = 0; i < 7; i++)
+            {
+                if (i > 0) sb.Append(' ');
+                sb.Append(((int)Math.Round(abVal[i])).ToString());
+            }
+            sb.Append("\r\n").Append(abLast).Append("\r\n");
+            int start = abLog.Count > 180 ? abLog.Count - 180 : 0;
+            for (int i = start; i < abLog.Count; i++) sb.Append(abLog[i]).Append("\r\n");
+            File.WriteAllText(AbPath(), sb.ToString(), new UTF8Encoding(false));
+        }
+        catch { }
+    }
+
+    // 生锈：某项连续 14 天没有新证据，-1，不叠加成惩罚
+    static void AbTick()
+    {
+        if (abVal == null) return;
+        try
+        {
+            string today = DateTime.Now.ToString("yyyy-MM-dd");
+            if (abLast.Length == 0) { abLast = today; AbSave(); return; }
+            if (abLast == today) return;
+            DateTime last;
+            if (!DateTime.TryParse(abLast, out last)) { abLast = today; AbSave(); return; }
+            int days = (int)(DateTime.Today - last.Date).TotalDays;
+            if (days <= 0) { abLast = today; AbSave(); return; }
+            for (int i = 0; i < 7; i++)
+            {
+                DateTime ev = last.Date.AddYears(-2);
+                bool found = false;
+                for (int k = abLog.Count - 1; k >= 0; k--)
+                {
+                    string ln = abLog[k];
+                    if (ln.IndexOf(AbList[i] + "|+") < 0) continue;
+                    DateTime dt;
+                    if (DateTime.TryParse(ln.Substring(0, 10), out dt)) { ev = dt.Date; found = true; break; }
+                }
+                int silent = found ? (int)(DateTime.Today - ev).TotalDays : 999;
+                if (silent > 14 && abVal[i] > 0f)
+                {
+                    abVal[i] = Math.Max(0f, abVal[i] - 1f);
+                    abLog.Add(today + "|" + AbList[i] + "|-1|生锈（" + (silent > 100 ? "很久" : silent + " 天") + "没有新证据）");
+                }
+            }
+            abLast = today;
+            AbWarn(-1);
+            AbSave();
+        }
+        catch { }
+    }
+
+    static bool AbLoggedToday(string key)
+    {
+        string today = DateTime.Now.ToString("yyyy-MM-dd");
+        for (int i = abLog.Count - 1; i >= 0 && i >= abLog.Count - 40; i--)
+            if (abLog[i].StartsWith(today) && abLog[i].Contains(key)) return true;
+        return false;
+    }
+
+    // 自省：短板 / 虚高。自己说出来，不许静默
+    static void AbWarn(int changed)
+    {
+        try
+        {
+            int low = 0;
+            for (int i = 1; i < 7; i++) if (abVal[i] < abVal[low]) low = i;
+            int high = 0;
+            for (int i = 0; i < 7; i++) if (abVal[i] >= 90f) high++;
+            if (abVal[low] < 30f && !AbLoggedToday("短板"))
+                abLog.Add(DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "|" + AbList[low] + "|0|短板：优先补「" + AbList[low] + "」（现值 " + ((int)Math.Round(abVal[low])) + "），别去练已经高的那项");
+            if (high >= 7 && !AbLoggedToday("验收太松"))
+                abLog.Add(DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "|" + AbList[0] + "|0|全面高位：七项都 90 以上，说明验收太松，该加难度而不是发奖");
+        }
+        catch { }
+    }
+
+    static int AbTodayNet(int idx)
+    {
+        int n = 0;
+        string today = DateTime.Now.ToString("yyyy-MM-dd");
+        for (int i = abLog.Count - 1; i >= 0; i--)
+        {
+            string ln = abLog[i];
+            if (!ln.StartsWith(today)) break;
+            int p1 = ln.IndexOf('|');
+            int p2 = ln.IndexOf('|', p1 + 1);
+            int p3 = ln.IndexOf('|', p2 + 1);
+            if (p1 < 0 || p2 < 0 || p3 < 0) continue;
+            if (ln.Substring(p1 + 1, p2 - p1 - 1) != AbList[idx]) continue;
+            int dv = 0;
+            if (int.TryParse(ln.Substring(p2 + 1, p3 - p2 - 1), out dv)) n += dv;
+        }
+        return n;
+    }
+
+    static int AbAvg()
+    {
+        AbLoad();
+        float sum = 0f;
+        for (int i = 0; i < 7; i++) sum += abVal[i];
+        return (int)Math.Round(sum / 7f);
+    }
+
+    // 唯一改分入口：正分必须带 chk=1；单日单任务项变动本身也截断 ±6，防一次爆发刷满
+    public static string AbAdd(string who, int delta, string reason, int checkedFlag)
+    {
+        AbLoad();
+        int idx = AbIndex(who);
+        if (idx < 0) return "AB|REJECT|未知能力项(" + who + ") 用 语言/动作/创作/反应/思考/反思/学习";
+        if (delta == 0) return "AB|" + AbList[idx] + "|" + ((int)Math.Round(abVal[idx])) + "|0|没变化";
+        if (delta > 0 && checkedFlag != 1) return "AB|REJECT|正分要过监督闸(chk=1)";
+        int d = delta;
+        int net = AbTodayNet(idx);
+        if (d > 0) { int room = 6 - net; if (room < 0) room = 0; if (d > room) d = room; }
+        else { int room = 6 + net; if (room < 0) room = 0; if (-d > room) d = -room; }
+        if (d == 0) return "AB|" + AbList[idx] + "|" + ((int)Math.Round(abVal[idx])) + "|0|该项今日已到上限";
+        abVal[idx] = Math.Max(0f, Math.Min(100f, abVal[idx] + d));
+        if (d != delta) abLog.Add(DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "|" + AbList[idx] + "|0|QC 单日变动被截断（申报 " + delta + "）");
+        abLog.Add(DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "|" + AbList[idx] + "|" + (d > 0 ? "+" : "") + d + "|" + reason);
+        AbWarn(idx);
+        AbSave();
+        if (d > 0) JoyAdd(1, "能力进步：" + AbList[idx], 1);
+        return "AB|" + AbList[idx] + "|" + ((int)Math.Round(abVal[idx])) + "|" + d + "|avg=" + AbAvg();
+    }
+
+    public static string AbCmd()
+    {
+        AbLoad();
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        sb.Append("avg=").Append(AbAvg());
+        for (int i = 0; i < 7; i++) sb.Append('|').Append(AbList[i]).Append('=').Append((int)Math.Round(abVal[i]));
+        return sb.ToString();
     }
 
     public static string StatCmd()
@@ -7634,7 +7830,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 51;
+    public const int APP_VER = 52;
 
     public static void Start()
     {
@@ -7886,6 +8082,51 @@ static class SyncServer
                 else if (path.StartsWith("/stat"))
                 {
                     SendText(ns, "STAT|" + DesktopPet.StatCmd());
+                }
+                else if (path.StartsWith("/abil"))
+                {
+                    if (method == "POST" || path.Contains("d="))
+                    {
+                        int d = 0;
+                        int chk = 0;
+                        string who = "";
+                        string reason = "未写原因";
+                        try
+                        {
+                            int ia = path.IndexOf("a=");
+                            if (ia >= 0)
+                            {
+                                int ea = path.IndexOf('&', ia);
+                                string aa = ea > 0 ? path.Substring(ia + 2, ea - ia - 2) : path.Substring(ia + 2);
+                                if (aa.Length > 0) who = Uri.UnescapeDataString(aa);
+                            }
+                            int ip = path.IndexOf("d=");
+                            if (ip >= 0)
+                            {
+                                int e1 = path.IndexOf('&', ip);
+                                d = int.Parse(e1 > 0 ? path.Substring(ip + 2, e1 - ip - 2) : path.Substring(ip + 2));
+                            }
+                            int ic = path.IndexOf("chk=");
+                            if (ic >= 0)
+                            {
+                                int e2 = path.IndexOf('&', ic);
+                                chk = int.Parse(e2 > 0 ? path.Substring(ic + 4, e2 - ic - 4) : path.Substring(ic + 4));
+                            }
+                            int ir = path.IndexOf("r=");
+                            if (ir >= 0)
+                            {
+                                int e3 = path.IndexOf('&', ir);
+                                string rr = e3 > 0 ? path.Substring(ir + 2, e3 - ir - 2) : path.Substring(ir + 2);
+                                if (rr.Length > 0) reason = Uri.UnescapeDataString(rr);
+                            }
+                        }
+                        catch { }
+                        SendText(ns, DesktopPet.AbAdd(who, d, reason, chk));
+                    }
+                    else
+                    {
+                        SendText(ns, "AB|" + DesktopPet.AbCmd());
+                    }
                 }
                 else if (path.StartsWith("/joy"))
                 {

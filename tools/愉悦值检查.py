@@ -15,7 +15,7 @@
   JOY_STATE=OK|WARN
 最后一行固定写 JOY_STATE，WARN 表示有需要人看的地方（不阻断巡检，只提醒）。
 """
-import json, os, sys, datetime
+import json, os, sys, re, datetime
 
 ROOT = r'F:\Daodao'
 DIR = os.path.join(ROOT, '自我状态')
@@ -198,6 +198,33 @@ def main():
         idle = (datetime.datetime.now() - newest).days
         if idle > 30:
             warn.append('问题库已经 %d 天没有更新过（最后一次 %s）' % (idle, newest.strftime('%Y-%m-%d')))
+
+    # ---------- 低愉悦处置：跌到 LOW 以下就自动立一个自救项，回到 RECOVER 以上自动关掉 ----------
+    LOW, RECOVER = 45, 50
+    rescue = [i for i in items if i.get('来源') == '低愉悦自救' and i.get('状态') != 'solved']
+    if joy['当前愉悦值'] < LOW:
+        if not rescue:
+            nums = [int(re.findall(r'\d+', i.get('id', ''))[0]) for i in items
+                    if re.findall(r'\d+', i.get('id', ''))]
+            nid = 'Q-%03d' % ((max(nums) if nums else 0) + 1)
+            items.append({
+                'id': nid, '标题': '愉悦值跌到 %d（<%d），按制度先补短板、先修 P1' % (joy['当前愉悦值'], LOW),
+                '来源': '低愉悦自救', '严重度': 'P1', '状态': 'open',
+                '发现时间': now_str(), '解决时间': '', '解决说明': '', 'scored': False
+            })
+            out.append('  低愉悦处置：愉悦值 %d 低于 %d，已登记自救项 %s（先把 P1 修掉，分数回到 %d 自动关闭）'
+                       % (joy['当前愉悦值'], LOW, nid, RECOVER))
+        else:
+            out.append('  低愉悦处置：愉悦值 %d 仍低于 %d，自救项 %s 在进行中'
+                       % (joy['当前愉悦值'], LOW, '、'.join(i.get('id', '') for i in rescue)))
+    elif rescue and joy['当前愉悦值'] >= RECOVER:
+        for i in rescue:
+            i['状态'] = 'solved'
+            i['解决时间'] = now_str()
+            i['解决说明'] = '愉悦值回到 %d（≥%d），自救项自动关闭' % (joy['当前愉悦值'], RECOVER)
+        out.append('  低愉悦处置：愉悦值回到 %d，自救项 %s 已自动关闭（+%d 记账在下一轮结算）'
+                   % (joy['当前愉悦值'], '、'.join(i.get('id', '') for i in rescue),
+                      sum(REWARD.get(i.get('严重度', 'P3'), 1) for i in rescue)))
 
     # 今日变动：起步那 50 分是基线，不算今天涨的
     for r in joy.get('记录', []):

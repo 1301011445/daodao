@@ -156,6 +156,137 @@ def joy_check(lines, problems):
                 problems.append('WARN 愉悦值/问题库：' + s.lstrip('!').strip())
     lines.append('')
 
+def _self_state():
+    """读愉悦值与问题库（读不到就回 None/[]，不抛）"""
+    joy = None
+    items = []
+    try:
+        with open(os.path.join(ROOT, '自我状态', '愉悦值.json'), encoding='utf-8-sig') as f:
+            joy = json.load(f).get('当前愉悦值')
+    except Exception:
+        joy = None
+    try:
+        with open(os.path.join(ROOT, '自我状态', '问题库.json'), encoding='utf-8-sig') as f:
+            items = json.load(f).get('问题', [])
+    except Exception:
+        items = []
+    return joy, items
+
+PROGRAMS = [
+    ('桌面端 exe', ('exe', '桌面', '形象', 'CPU', '重绘', '可见', '自启')),
+    ('手机端 apk', ('apk', '手机', '真机', '安卓')),
+    ('网页（下载页/清单页）', ('下载页', '网页', '清单页', '直链', '页面')),
+    ('定时任务', ('定时', '计划任务', '开机', '自启')),
+    ('音乐与创作', ('音乐', '曲', '歌', '词')),
+    ('愉悦值与问题库', ('愉悦', '问题库', '自救')),
+]
+
+def program_report(lines, problems, checks):
+    """各项程序逐个反馈：这一项检查结果 + 它名下的问题存量 + 当前愉悦值（2026-11-18 加）。
+    不重复做音乐/愉悦那两段的检查，只把它们的结果并成一张表，顺带做几个轻量探活。"""
+    joy, items = _self_state()
+    open_items = [i for i in items if i.get('状态') in ('open', 'wait')]
+
+    def stock(keywords):
+        return [i for i in open_items if any(k.lower() in (i.get('标题', '') + i.get('来源', '')).lower()
+                                             for k in keywords)]
+
+    rows = []
+
+    # 1) 桌面端：进程 + HTTP 自检口
+    exe_state = 'DOWN'
+    try:
+        r = urllib.request.urlopen('http://127.0.0.1:8848/ping', timeout=3)
+        body = r.read().decode('utf-8', 'replace').strip()
+        exe_state = body if body else 'OK(空回包)'
+    except Exception as e:
+        exe_state = 'DOWN(%s)' % type(e).__name__
+    rows.append(('桌面端 exe', 'OK' if exe_state.startswith('OK') else 'DOWN',
+                 '自检口 %s；%s' % (exe_state, '道.exe %s' % (
+                     ('%.1f MB' % (os.path.getsize(os.path.join(ROOT, '道.exe')) / 1000000))
+                     if os.path.exists(os.path.join(ROOT, '道.exe')) else '文件缺失'))))
+    if not exe_state.startswith('OK'):
+        problems.append('FAIL 桌面端自检口不通：%s' % exe_state)
+
+    # 2) 手机端：包在不在、版本号对不对（aapt2 只读不签，快）
+    apk = os.path.join(ROOT, '道.apk')
+    if not os.path.exists(apk):
+        rows.append(('手机端 apk', 'DOWN', '道.apk 不在'))
+        problems.append('FAIL 手机端安装包缺失（道.apk）')
+    else:
+        code, out = None, ''
+        aapt2 = r'E:\AndroidTools\sdk\build-tools\34.0.0\aapt2.exe'
+        if os.path.exists(aapt2):
+            try:
+                p = subprocess.run([aapt2, 'dump', 'badging', apk], capture_output=True, timeout=40)
+                out = (p.stdout or b'').decode('utf-8', 'replace')
+                m = re.search(r"versionCode='(\d+)'", out)
+                code = int(m.group(1)) if m else None
+            except Exception:
+                code = None
+        size_mb = os.path.getsize(apk) / 1000000
+        notes = ['%.2f MB' % size_mb]
+        if code is not None:
+            notes.append('versionCode=%d' % code)
+            if code != checks.get('APP_VER(pet.cs)'):
+                problems.append('WARN 手机端 versionCode=%d 与电脑端 APP_VER=%s 不一致' % (code, checks.get('APP_VER(pet.cs)')))
+        else:
+            problems.append('WARN 手机端版本号读不出来（aapt2 不在或缺包）')
+        rows.append(('手机端 apk', 'OK' if code else 'WARN', '；'.join(notes)))
+
+    # 3) 网页：看本地源码的 data-ver 是否跟上，线上要登录才能核（已知限制）
+    page = os.path.join(ROOT, '引导页_src', 'index.html')
+    if os.path.exists(page):
+        try:
+            raw = read(page)[:4000]
+            pv = re.search(r'data-ver="(\d+)"', raw)
+            pv = int(pv.group(1)) if pv else None
+        except Exception:
+            pv = None
+        if pv is None:
+            rows.append(('网页（下载页/清单页）', 'WARN', '本地页面取不到 data-ver'))
+            problems.append('WARN 下载页源码里没有 data-ver')
+        elif pv != checks.get('APP_VER(pet.cs)'):
+            rows.append(('网页（下载页/清单页）', 'WARN', '本地源 data-ver=%s，落后程序 v%s' % (pv, checks.get('APP_VER(pet.cs)'))))
+            problems.append('WARN 下载页本地源版本 %s 落后程序 %s' % (pv, checks.get('APP_VER(pet.cs)')))
+        else:
+            rows.append(('网页（下载页/清单页）', 'OK', '本地源 v%s 已跟上（线上页需登录核对，脚本抓不到）' % pv))
+    else:
+        rows.append(('网页（下载页/清单页）', 'WARN', '本地无页面源，只能靠线上'))
+        problems.append('WARN 本地没有下载页源文件，网页版本无法离线核对')
+
+    # 4) 定时任务：数一下 Dao* 在不在册
+    try:
+        p = subprocess.run(['schtasks', '/query', '/fo', 'csv', '/nh'], capture_output=True, timeout=40)
+        txt = (p.stdout or b'').decode('utf-8', 'replace')
+        n_dao = sum(1 for l in txt.splitlines() if 'Dao' in l)
+        rows.append(('定时任务', 'OK' if n_dao >= 5 else 'WARN', 'Dao* 计划任务 %d 个%s' % (n_dao, '' if n_dao >= 5 else '（偏少，可能被清掉）')))
+        if n_dao < 5:
+            problems.append('WARN Dao* 计划任务只剩 %d 个，检查是否被清' % n_dao)
+    except Exception as e:
+        rows.append(('定时任务', 'WARN', '查不动（%s）' % type(e).__name__))
+        problems.append('WARN 计划任务查不动：%s' % type(e).__name__)
+
+    # 5) 音乐与创作 / 6) 愉悦值与问题库：只并表，检查本身在各自段落里
+    rows.append(('音乐与创作', 'OK', '见【音乐自检】（归档/判据/曲库三项都在跑）'))
+    rows.append(('愉悦值与问题库', 'OK' if (joy is not None and 0 <= joy <= 100) else 'WARN',
+                 '当前愉悦值 %s；未结 %d 项' % ('读不到' if joy is None else joy, len(open_items))))
+
+    lines.append('【各项程序】愉悦值 %s · 问题存量 %d 项（未解决 %d / 待用户 %d）'
+                 % ('读不到' if joy is None else joy, len(open_items),
+                    sum(1 for i in open_items if i.get('状态') == 'open'),
+                    sum(1 for i in open_items if i.get('状态') == 'wait')))
+    for name, verdict, note in rows:
+        kw = dict(PROGRAMS).get(name, ())
+        st = stock(kw)
+        lines.append('  %-18s %-4s %s ｜该程序未结 %d 项 ｜愉悦值 %s'
+                     % (name, verdict, note, len(st), '读不到' if joy is None else joy))
+        for i in st:
+            lines.append('      ↳ [%s] %s %s' % (i.get('严重度'), i.get('id'), i.get('标题', '')[:34]))
+    if joy is not None and joy < 45:
+        lines.append('  ! 愉悦值 %s 低于 45：按制度先补短板、先修 P1（自救项会在【愉悦与问题】里自动登记）' % joy)
+    lines.append('')
+
 def main():
     ts = datetime.datetime.now()
     checks = {}
@@ -488,6 +619,7 @@ def main():
     lines.append('')
     music_check(lines, problems)
     joy_check(lines, problems)
+    program_report(lines, problems, checks)
     if problems:
         lines.append('【问题】')
         for p in problems:

@@ -1335,7 +1335,7 @@ window.onerror = function (m, u, l) {
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '53';
+  var HTML_VER = '54';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1433,7 +1433,7 @@ setInterval(daoSyncJoy, 60000);
 })();
 
   // ===== 曲库：谱子渲好的 wav 打进 apk 的 assets/music，手机不连电脑也能放 =====
-  var DAO_MUSIC = [{ id: 'demo_01', name: 'demo_01_五声主题', sec: 19.2 }];
+  var DAO_MUSIC = [{ id: 'demo_01', name: 'demo_01_五声主题', sec: 19.2 }, { id: 'song_01', name: 'song_01_寄一封', sec: 91.43 }];
   var daoAudio = null;
   var daoMIdx = -1;
   function daoMusicMark() {

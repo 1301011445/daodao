@@ -287,6 +287,36 @@ def program_report(lines, problems, checks):
         lines.append('  ! 愉悦值 %s 低于 45：按制度先补短板、先修 P1（自救项会在【愉悦与问题】里自动登记）' % joy)
     lines.append('')
 
+def cap_check(lines, problems):
+    """各项能力的激励/惩罚结算（2026-11-18 加）：跑 tools\\能力激励.py，
+    十项能力各自的分、证据、奖惩状态并进来；低于 30 的进补短板提醒。"""
+    lines.append('【能力激励】')
+    script = os.path.join(ROOT, 'tools', '能力激励.py')
+    if not os.path.exists(script):
+        lines.append('  tools\\能力激励.py 不在，本节跳过')
+        problems.append('WARN 能力激励脚本缺失')
+        lines.append('')
+        return
+    try:
+        r = subprocess.run([PY, script], capture_output=True, timeout=180)
+        out = (r.stdout or b'').decode('utf-8', 'replace') + (r.stderr or b'').decode('utf-8', 'replace')
+    except Exception as e:
+        lines.append('  跑不起来：%s' % e)
+        problems.append('WARN 能力激励跑不起来')
+        lines.append('')
+        return
+    for l in out.splitlines():
+        s = l.strip()
+        if not s or s.startswith('【能力激励】') or s.startswith('CAP_STATE='):
+            continue
+        lines.append(l)
+    if 'CAP_STATE=WARN' in out:
+        for l in out.splitlines():
+            s = l.strip()
+            if s.startswith('!'):
+                problems.append('WARN 能力激励：' + s.lstrip('!').strip())
+    lines.append('')
+
 def main():
     ts = datetime.datetime.now()
     checks = {}
@@ -619,6 +649,7 @@ def main():
     lines.append('')
     music_check(lines, problems)
     joy_check(lines, problems)
+    cap_check(lines, problems)
     program_report(lines, problems, checks)
     if problems:
         lines.append('【问题】')

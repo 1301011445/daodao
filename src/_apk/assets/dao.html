@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -119,6 +119,15 @@
   }
   #whoTag .dotc { width: 6px; height: 6px; border-radius: 50%; background: #7ea6ff; }
   #whoTag .tw { opacity: .55; font-size: 10.5px; }
+  #joyTag {
+    position: absolute; left: 10px; top: 70px; z-index: 25;
+    padding: 4px 9px; border-radius: 999px; font-size: 11.5px; letter-spacing: .2px;
+    color: #ffe6c9; background: rgba(20,30,55,.66);
+    border: 1px solid rgba(240,190,120,.34); user-select: none;
+    backdrop-filter: blur(6px); transition: color .3s, border-color .3s;
+  }
+  #joyTag.hi { color: #ffd9a3; border-color: rgba(255,205,130,.7); }
+  #joyTag.lo { color: #a9b6cf; border-color: rgba(120,140,180,.34); }
   #askClose {
     width: 40px; margin: 0; padding: 11px 0; border-radius: 12px; flex: none;
     background: rgba(255,255,255,.10); border: 1px solid rgba(130,170,255,.28);
@@ -145,6 +154,7 @@
     <div id="hint">戳我一下，我就理你</div>
     <div id="verTag">v40</div>
     <div id="whoTag"><span class="dotc"></span><span id="whoName">银发剑客</span><span class="tw">· 手办风</span></div>
+    <div id="joyTag">愉悦 --</div>
     <div id="pcBtn">电脑</div>
     <div id="pcPanel">
       <button id="pcSync">同步记忆</button>
@@ -1305,7 +1315,7 @@ window.onerror = function (m, u, l) {
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '50';
+  var HTML_VER = '51';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1320,7 +1330,29 @@ window.onerror = function (m, u, l) {
   })();
 
   // ---- 自己查自己：每次打开跑一遍，发现问题不打断使用，只记下来往上报 ----
-  function daoSelfCheck() {
+  // 愉悦值：只显示，不在这里改。数字由电脑端的 /joy 决定，两端必须是同一个数
+function daoSyncJoy() {
+  var el = document.getElementById('joyTag');
+  if (!el) return;
+  if (!window.DaoNative || !DaoNative.getJoy) { el.textContent = '愉悦 --'; return; }
+  try {
+    var raw = DaoNative.getJoy();
+    if (!raw) { el.textContent = '愉悦 --'; el.className = ''; return; }
+    var m = raw.match(/value=(\d+)/);
+    var k = raw.match(/kind=(\d+)/);
+    if (!m) { el.textContent = '愉悦 --'; return; }
+    var v = parseInt(m[1], 10);
+    var kind = k ? parseInt(k[1], 10) : 1;
+    var word = '平稳';
+    if (kind === 4) word = '兴奋';
+    else if (kind === 2) word = '愉快';
+    else if (kind === 6) word = '低落';
+    else if (kind === 3) word = '恹恹';
+    el.textContent = '愉悦 ' + v + ' · ' + word;
+    el.className = (v >= 65) ? 'hi' : (v < 45 ? 'lo' : '');
+  } catch (e) { el.textContent = '愉悦 --'; }
+}
+function daoSelfCheck() {
     var bad = [];
     try {
       var n = (typeof FACES !== 'undefined' && FACES) ? FACES.length : 0;
@@ -1373,6 +1405,8 @@ window.onerror = function (m, u, l) {
 
   // 页面起来 3 秒后自检一次：图都解完了，结果才准
   setTimeout(daoSelfCheck, 3000);
+setTimeout(daoSyncJoy, 600);
+setInterval(daoSyncJoy, 60000);
 
   resize();
 })();

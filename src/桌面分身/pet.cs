@@ -878,6 +878,195 @@ public class DesktopPet : Form
     }
 
     // 自检用：把当前的姿势/情绪状态原样吐出来
+    // ================= 愉悦值（激励惩罚制度，说明见 F:\Daodao\愉悦值制度.md）=================
+    static float joyVal = -1f;          // 0..100，-1 表示还没从文件加载
+    static string joyDecay = "";        // 最近一次自然回落的日期
+    static int joyTodayNet = 0;         // 本次进程内的当日净值，用于 ±10 截断
+    static System.Collections.Generic.List<string> joyLog = new System.Collections.Generic.List<string>();
+
+    static string JoyPath()
+    {
+        // 不能用 DataDir()，那是另一个类的成员；这里直接取 exe 所在目录，和它同一套逻辑
+        string d;
+        try { d = Path.GetDirectoryName(Application.ExecutablePath); }
+        catch { d = "."; }
+        if (d == null || d.Length == 0) d = ".";
+        return Path.Combine(d, "愉悦值.txt");
+    }
+
+    static void JoyLoad()
+    {
+        if (joyVal >= 0f) return;
+        joyVal = 50f;
+        try
+        {
+            if (File.Exists(JoyPath()))
+            {
+                string[] rows = File.ReadAllLines(JoyPath(), new UTF8Encoding(false));
+                if (rows.Length > 0)
+                {
+                    float v = 50f;
+                    if (float.TryParse(rows[0].Trim(), out v)) joyVal = Math.Max(0f, Math.Min(100f, v));
+                }
+                if (rows.Length > 1) joyDecay = rows[1].Trim();
+                for (int i = 2; i < rows.Length && joyLog.Count < 130; i++) joyLog.Add(rows[i]);
+            }
+        }
+        catch { }
+        JoyTick();
+    }
+
+    static void JoySave()
+    {
+        try
+        {
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            sb.Append(((int)Math.Round(joyVal)).ToString()).Append("\r\n");
+            sb.Append(joyDecay).Append("\r\n");
+            int start = joyLog.Count > 120 ? joyLog.Count - 120 : 0;
+            for (int i = start; i < joyLog.Count; i++) sb.Append(joyLog[i]).Append("\r\n");
+            File.WriteAllText(JoyPath(), sb.ToString(), new UTF8Encoding(false));
+        }
+        catch { }
+    }
+
+    // 自然回落：每天 -1；中间漏掉的日期补扣，单次最多扣 3
+    static void JoyTick()
+    {
+        if (joyVal < 0f) return;
+        try
+        {
+            string today = DateTime.Now.ToString("yyyy-MM-dd");
+            if (joyDecay.Length == 0) { joyDecay = today; return; }
+            if (joyDecay == today) return;
+            DateTime last;
+            if (!DateTime.TryParse(joyDecay, out last)) { joyDecay = today; return; }
+            int days = (int)(DateTime.Today - last.Date).TotalDays;
+            if (days <= 0) { joyDecay = today; return; }
+            int cut = days > 3 ? 3 : days;
+            joyVal = Math.Max(0f, joyVal - cut);
+            joyLog.Add(DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "|-" + cut + "|自然回落 " + days + " 天没动");
+            joyDecay = today;
+            joyTodayNet -= cut;
+            joyLog.Add(today + "|0|每日快照 " + ((int)Math.Round(joyVal)));
+            JoyWarn();
+            JoySave();
+        }
+        catch { }
+    }
+
+    // 制度里给自己上的三条刹车，触发就记一条，不许静默略过
+    static void JoyWarn()
+    {
+        try
+        {
+            // 取最近三条每日快照（倒序）
+            System.Collections.Generic.List<int> sv = new System.Collections.Generic.List<int>();
+            for (int i = joyLog.Count - 1; i >= 0 && sv.Count < 3; i--)
+            {
+                string ln = joyLog[i];
+                int p = ln.IndexOf("|0|每日快照 ");
+                if (p < 0) continue;
+                int v = 0;
+                if (int.TryParse(ln.Substring(p + 8).Trim(), out v)) sv.Add(v);
+            }
+            if (sv.Count >= 3 && sv[0] >= 90 && sv[1] >= 90 && sv[2] >= 90)
+            {
+                joyVal = Math.Max(0f, joyVal - 3f);
+                joyLog.Add(DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "|-3|过度亢奋，主动下调（连续 3 天 90 以上，说明学的东西太容易）");
+            }
+            else if (sv.Count >= 3 && sv[0] < 20 && sv[1] < 20 && sv[2] < 20)
+            {
+                joyLog.Add(DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "|0|长期低落：安排一次能落地的小改进，不许再安排看书");
+            }
+
+            // 连续 7 天只涨不跌 -> 疑似刷分
+            System.Collections.Generic.Dictionary<string, int> day = new System.Collections.Generic.Dictionary<string, int>();
+            for (int i = 0; i < joyLog.Count; i++)
+            {
+                string ln = joyLog[i];
+                if (ln.Length < 12) continue;
+                if (ln.IndexOf("|0|每日快照") >= 0) continue;
+                int p1 = ln.IndexOf('|');
+                int p2 = ln.IndexOf('|', p1 + 1);
+                if (p1 < 0 || p2 < 0) continue;
+                int dv = 0;
+                if (!int.TryParse(ln.Substring(p1 + 1, p2 - p1 - 1), out dv)) continue;
+                string ds = ln.Substring(0, 10);
+                if (!day.ContainsKey(ds)) day[ds] = 0;
+                day[ds] += dv;
+            }
+            if (day.Count >= 7)
+            {
+                System.Collections.Generic.List<string> keys = new System.Collections.Generic.List<string>(day.Keys);
+                keys.Sort();
+                int up = 0;
+                int from = keys.Count - 7;
+                for (int i = from; i < keys.Count; i++) if (day[keys[i]] > 0) up++;
+                if (up >= 7) joyLog.Add(DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "|0|疑似刷分：连续 7 天只涨不跌，复核最近加分有没有来源");
+            }
+        }
+        catch { }
+    }
+
+    // 愉悦值 -> moodKind：4 兴奋 / 2 愉快 / 1 平稳 / 6 低落 / 3 很蔫
+    // 这里只是复用现成的语速音高联动，不另做一套动画
+    static int JoyKind()
+    {
+        JoyLoad();
+        if (joyVal >= 85f) return 4;
+        if (joyVal >= 65f) return 2;
+        if (joyVal >= 45f) return 1;
+        if (joyVal >= 25f) return 6;
+        return 3;
+    }
+
+    static void JoyApply()
+    {
+        try
+        {
+            DesktopPet me = Self;
+            if (me == null) return;
+            me.moodKind = JoyKind();
+            if (me.moodTicks < 120) me.moodTicks = 120;
+        }
+        catch { }
+    }
+
+    // 唯一改分入口。正分必须带 chk=1（过了三道监督闸），否则直接拒——这是制度里唯一不讲情面的地方
+    public static string JoyAdd(int delta, string reason, int checkedFlag)
+    {
+        JoyLoad();
+        JoyTick();
+        int d = delta;
+        if (d > 0 && checkedFlag != 1) return "JOY|REJECT|正分要过监督闸(chk=1)";
+        if (d > 0)
+        {
+            int room = 10 - joyTodayNet; if (room < 0) room = 0;
+            if (d > room) d = room;
+        }
+        else if (d < 0)
+        {
+            int room = 10 + joyTodayNet; if (room < 0) room = 0;
+            if (-d > room) d = -room;
+        }
+        if (d == 0) return "JOY|" + ((int)Math.Round(joyVal)) + "|0|今日已到上限";
+        joyVal = Math.Max(0f, Math.Min(100f, joyVal + d));
+        joyTodayNet += d;
+        if (d != delta) joyLog.Add(DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "|0|QC 单日变动被截断（申报 " + delta + "）");
+        joyLog.Add(DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "|" + (d > 0 ? "+" : "") + d + "|" + reason);
+        JoySave();
+        JoyApply();
+        return "JOY|" + ((int)Math.Round(joyVal)) + "|" + d + "|" + JoyKind();
+    }
+
+    public static string JoyCmd()
+    {
+        JoyLoad();
+        JoyTick();
+        return "value=" + ((int)Math.Round(joyVal)) + "|kind=" + JoyKind() + "|net=" + joyTodayNet;
+    }
+
     public static string StatCmd()
     {
         DesktopPet me = Self;
@@ -4045,7 +4234,10 @@ public class DesktopPet : Form
             if (moodWait <= 0)
             {
                 moodWait = 170 + rnd.Next(260);
-                moodKind = 1 + rnd.Next(7);
+                // v51：手办自己也有心情了。愉悦值高就更容易高兴，低就容易蔫
+                int jk = JoyKind();
+                if (rnd.Next(100) < 60) moodKind = jk;
+                else moodKind = 1 + rnd.Next(7);
                 // 难过的时候给足时间，让它真的哭一会儿，别三秒就停
                 moodTicks = moodKind == 3 ? 120 : 74;
             }
@@ -7442,7 +7634,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 50;
+    public const int APP_VER = 51;
 
     public static void Start()
     {
@@ -7694,6 +7886,43 @@ static class SyncServer
                 else if (path.StartsWith("/stat"))
                 {
                     SendText(ns, "STAT|" + DesktopPet.StatCmd());
+                }
+                else if (path.StartsWith("/joy"))
+                {
+                    if (method == "POST" || path.Contains("d="))
+                    {
+                        int d = 0;
+                        int chk = 0;
+                        string reason = "未写原因";
+                        try
+                        {
+                            int ip = path.IndexOf("d=");
+                            if (ip >= 0)
+                            {
+                                int e1 = path.IndexOf('&', ip);
+                                d = int.Parse(e1 > 0 ? path.Substring(ip + 2, e1 - ip - 2) : path.Substring(ip + 2));
+                            }
+                            int ic = path.IndexOf("chk=");
+                            if (ic >= 0)
+                            {
+                                int e2 = path.IndexOf('&', ic);
+                                chk = int.Parse(e2 > 0 ? path.Substring(ic + 4, e2 - ic - 4) : path.Substring(ic + 4));
+                            }
+                            int ir = path.IndexOf("r=");
+                            if (ir >= 0)
+                            {
+                                int e3 = path.IndexOf('&', ir);
+                                string rr = e3 > 0 ? path.Substring(ir + 2, e3 - ir - 2) : path.Substring(ir + 2);
+                                if (rr.Length > 0) reason = Uri.UnescapeDataString(rr);
+                            }
+                        }
+                        catch { }
+                        SendText(ns, DesktopPet.JoyAdd(d, reason, chk));
+                    }
+                    else
+                    {
+                        SendText(ns, "JOY|" + DesktopPet.JoyCmd());
+                    }
                 }
                 else if (path.StartsWith("/ping"))
                 {

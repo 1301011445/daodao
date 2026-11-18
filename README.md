@@ -5,7 +5,7 @@ It walks, speaks, learns, and — the unusual part — **keeps a ledger on itsel
 self-audit once a day, then fixes what scores low.
 
 Built for personal use, shipped as-is: Windows 10/11 executable (no installer) and an Android APK.
-Current release **v55** — 12.9 MB (Windows) / 4.9 MB (Android).
+Current release **v58** — 12.5 MB (Windows) / 4.9 MB (Android).
 
 ---
 

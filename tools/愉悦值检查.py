@@ -200,6 +200,45 @@ def main():
             it['停滞扣分'] = want
             out.append('  停滞扣分：%s 放着 %d 天没动，-%d' % (it.get('id', ''), days, d))
 
+    # ---------- 防重复刷分：同一件事只加一次；同类加分按制度有日上限（2026-11-18 加） ----------
+    # 目的是让分数反映真实的进步，而不是靠反复跑脚本、反复登记同一件事把分堆上去。
+    CAP_DAY = {'用户赞许': 9, '作品点赞': 5, '学到好东西': 3, '巡检通过': 1, '能力激励': 5}
+    seen_fp = {}
+    kept = {}
+    dropped = 0
+    capped = 0
+    drop_val = 0
+    for r in joy.get('记录', []):
+        try:
+            d = int(r.get('分值', 0))
+        except Exception:
+            d = 0
+        if d <= 0 or not str(r.get('时间', '')).startswith(today):
+            continue
+        fp = '%s|%s' % (r.get('类型', ''), r.get('关联问题') or str(r.get('理由', ''))[:24])
+        if fp in seen_fp:
+            r['分值'] = 0
+            r['重复跳过'] = True
+            dropped += 1
+            drop_val += d
+            continue
+        seen_fp[fp] = True
+        cap = CAP_DAY.get(r.get('类型', ''))
+        if cap is not None:
+            used = kept.get(r.get('类型', ''), 0)
+            if used + d > cap:
+                allow = max(0, cap - used)
+                r['分值'] = allow
+                r['超上限裁剪'] = True
+                capped += 1
+                drop_val += d - allow
+                d = allow
+            kept[r.get('类型', '')] = used + d
+    if dropped or capped:
+        out.append('  防刷分：同事件跳过 %d 条、超日上限裁剪 %d 条，共拦下 %d 分' % (dropped, capped, drop_val))
+    if dropped:
+        warn.append('今天有 %d 条重复加分被拦下（同一件事只加一次，别刷）' % dropped)
+
     # ---------- 体检 ----------
     total = sum(int(r.get('分值', 0)) for r in joy.get('记录', []))
     lo, hi = joy.get('区间', [0, 100])

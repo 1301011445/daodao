@@ -243,9 +243,12 @@ def evidence():
     ev['说话'] = (clamp(50 * pct(voices / 20.0) + 25 * (pct(names / float(voices)) if voices else 0) + 25 * pct(corpus / 60.0)),
                   '音色%d/20(50)·名字%d/音色%d(25)·语料%d行/60(25)' % (voices, names, voices, corpus))
 
-    # 创作：合格成品 50（170-200 秒，目标 3 首）/ 词本 25（目标 2 份）/ 乐理支撑 25（目标 5 类）
-    ev['创作'] = (clamp(50 * pct(qualified / 3.0) + 25 * pct(words / 2.0) + 25 * pct(lessons / 5.0)),
-                  '合格成品%d首/3(50，母带%.1f秒)·词本%d/2(25)·乐理%d类/5(25)' % (qualified, msec, words, lessons))
+    # 创作：合格成品 45（170-200 秒，目标 3 首）/ 半成品 20（有母带但时长不合口径，1 首即满）/ 词本 20（目标 2 份）/ 词曲配对 15（词本对着曲子，1 对即满）
+    # 注意：乐理不再算进创作，避免和「学习」一鱼两吃（同一个文件不许给两项能力加分）
+    semi = 1 if (wav and not (170 <= msec <= 200)) else 0
+    pair = min(words, wav)
+    ev['创作'] = (clamp(45 * pct(qualified / 3.0) + 20 * semi + 20 * pct(words / 2.0) + 15 * pct(pair / 1.0)),
+                  '合格成品%d首/3(45，母带%.1f秒)·半成品%d(20)·词本%d/2(20)·词曲配对%d(15)' % (qualified, msec, semi, words, pair))
 
     # 协调：三端版本一致 40 / 近 7 天报告 30 / P1 清零 30
     ev['协调'] = (clamp(40 * (1 if agree else 0) + 30 * pct(n_recent / 3.0) + 30 * (1 if iss['p1'] == 0 else 0)),

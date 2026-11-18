@@ -26,6 +26,32 @@
           "证据": "两次发布 status=finished、线上 data-ver=55"
         }
       ]
+    },
+    "56": {
+      "立项": "2026-11-18",
+      "目标": 3,
+      "项": [
+        {
+          "项": "两端 v56 安装包与版本号",
+          "验证": "2026-11-18",
+          "证据": "csc BUILD_OK 12.93MB；aapt2 versionCode=56/versionName=56.0；APP_VER=56 HTML_VER=56"
+        },
+        {
+          "项": "脸上零贴图（笑/哭/泪/泡泡/招手手绘全删）",
+          "验证": "2026-11-18",
+          "证据": "pet.cs 残留 DrawFaceExpr/DrawTear/DrawFaceBubble 全 0；apk 内 assets/dao.html 正文 face(/tear( 全 0"
+        },
+        {
+          "项": "下载页 app_17hnj8acgs2 与清单页 app_17hpue26uuw v56 线上",
+          "验证": "2026-11-18",
+          "证据": "两次 +deploy 均 status=finished；data-ver=56，exe/apk 走新 CDN 直链"
+        },
+        {
+          "项": "桌面端 v56 真在跑",
+          "验证": "2026-11-18",
+          "证据": "道.exe 进程 9:14 启动，工作集 96.6MB"
+        }
+      ]
     }
   }
 }

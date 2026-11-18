@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -441,110 +441,9 @@ window.onerror = function (m, u, l) {
     redraw();
   }
 
-  // 2026-11-16 重写：表情只动眉毛、眼睛、嘴，不再往脸上盖半透明色块，
-  // 也不要十字怒纹、泪滴、汗滴这类贴上去的插画。桌面端同一套规则。
-  // 眉形定情绪基调，眼型定清醒度，嘴形定情绪落点。
-  function face(y, fr, kind) {
-    if (fr < 3.5 || kind === 0) return;
-    var eyeDx = fr * 0.38, eyeY = y - fr * 0.08, lw = Math.max(1.1, fr * 0.045);
-    var browY = eyeY - fr * 0.33, mouthY = y + fr * 0.34;
-    var ink = 'rgba(58,52,60,0.66)', soft = 'rgba(58,52,60,0.42)';
-    var hw = fr * 0.20, hh = fr * 0.10;
-    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-
-    if (kind === 1) {
-      ctx.strokeStyle = soft; ctx.lineWidth = lw;
-      ctx.beginPath();
-      ctx.moveTo(-eyeDx - fr * 0.20, browY + fr * 0.03);
-      ctx.quadraticCurveTo(-eyeDx, browY - fr * 0.06, -eyeDx + fr * 0.17, browY - fr * 0.01);
-      ctx.moveTo(eyeDx + fr * 0.20, browY + fr * 0.03);
-      ctx.quadraticCurveTo(eyeDx, browY - fr * 0.06, eyeDx - fr * 0.17, browY - fr * 0.01);
-      ctx.stroke();
-      ctx.strokeStyle = ink; ctx.lineWidth = lw * 1.1;
-      ctx.beginPath();
-      ctx.moveTo(-hw, mouthY - fr * 0.02);
-      ctx.quadraticCurveTo(0, mouthY + hh * 1.6, hw, mouthY - fr * 0.02);
-      ctx.stroke();
-    } else if (kind === 2) {
-      ctx.strokeStyle = ink; ctx.lineWidth = lw * 1.15;
-      ctx.beginPath();
-      ctx.moveTo(-eyeDx - fr * 0.20, browY - fr * 0.02);
-      ctx.lineTo(-eyeDx + fr * 0.16, browY + fr * 0.13);
-      ctx.moveTo(eyeDx + fr * 0.20, browY - fr * 0.02);
-      ctx.lineTo(eyeDx - fr * 0.16, browY + fr * 0.13);
-      ctx.stroke();
-      ctx.strokeStyle = soft; ctx.lineWidth = lw * 0.9;
-      ctx.beginPath();
-      ctx.moveTo(-eyeDx - fr * 0.15, eyeY - fr * 0.10);
-      ctx.lineTo(-eyeDx + fr * 0.15, eyeY - fr * 0.06);
-      ctx.moveTo(eyeDx + fr * 0.15, eyeY - fr * 0.10);
-      ctx.lineTo(eyeDx - fr * 0.15, eyeY - fr * 0.06);
-      ctx.stroke();
-      ctx.strokeStyle = ink; ctx.lineWidth = lw * 1.05;
-      ctx.beginPath();
-      ctx.moveTo(-hw * 0.9, mouthY);
-      ctx.quadraticCurveTo(0, mouthY + hh * 0.5, hw * 0.9, mouthY);
-      ctx.stroke();
-    } else if (kind === 3) {
-      ctx.strokeStyle = soft; ctx.lineWidth = lw;
-      ctx.beginPath();
-      ctx.moveTo(-eyeDx - fr * 0.20, browY + fr * 0.11);
-      ctx.lineTo(-eyeDx + fr * 0.16, browY - fr * 0.02);
-      ctx.moveTo(eyeDx + fr * 0.20, browY + fr * 0.11);
-      ctx.lineTo(eyeDx - fr * 0.16, browY - fr * 0.02);
-      ctx.stroke();
-      ctx.strokeStyle = soft; ctx.lineWidth = lw * 0.9;
-      ctx.beginPath();
-      ctx.moveTo(-eyeDx - fr * 0.14, eyeY + fr * 0.02);
-      ctx.lineTo(-eyeDx + fr * 0.14, eyeY + fr * 0.08);
-      ctx.moveTo(eyeDx + fr * 0.14, eyeY + fr * 0.02);
-      ctx.lineTo(eyeDx - fr * 0.14, eyeY + fr * 0.08);
-      ctx.stroke();
-      ctx.strokeStyle = ink; ctx.lineWidth = lw * 1.05;
-      ctx.beginPath();
-      ctx.moveTo(-hw * 0.85, mouthY + fr * 0.03);
-      ctx.quadraticCurveTo(0, mouthY - hh * 0.9, hw * 0.85, mouthY + fr * 0.03);
-      ctx.stroke();
-    } else if (kind === 5 || kind === 6) {
-      var skim = imgs[species];
-      if (skim && skim.naturalWidth) {
-        var sxp = skim.naturalWidth * 0.36;
-        var syp2 = skim.naturalHeight * ((FY[species] || 0.36) + 0.20);
-        var sww = skim.naturalWidth * 0.28;
-        var shh = skim.naturalHeight * 0.075;
-        ctx.save();
-        ctx.beginPath();
-        ctx.ellipse(0, eyeY, eyeDx + fr * 0.52, fr * 0.46, 0, 0, 6.284);
-        ctx.clip();
-        ctx.drawImage(skim, sxp, syp2, sww, shh,
-                      -eyeDx - fr * 0.62, eyeY - fr * 0.5, eyeDx * 2 + fr * 1.24, fr);
-        ctx.restore();
-      }
-      ctx.strokeStyle = ink; ctx.lineWidth = lw; ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.ellipse(-eyeDx, eyeY + fr * 0.02, fr * 0.16, fr * 0.10, 0, 22 * Math.PI / 180, 158 * Math.PI / 180);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.ellipse(eyeDx, eyeY + fr * 0.02, fr * 0.16, fr * 0.10, 0, 22 * Math.PI / 180, 158 * Math.PI / 180);
-      ctx.stroke();
-      ctx.strokeStyle = soft; ctx.lineWidth = lw * 0.9;
-      ctx.beginPath();
-      ctx.ellipse(0, mouthY - fr * 0.02, fr * 0.075, fr * 0.05, 0, 0, 6.284);
-      ctx.stroke();
-    }
-  }
-  function tear(x, y, r) {
-    if (r < 1.2) return;
-    ctx.fillStyle = 'rgba(108,172,236,0.85)';
-    ctx.beginPath(); ctx.ellipse(x, y + r * 0.625, r * 0.50, r * 0.625, 0, 0, 6.284); ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(x, y - r * 1.05);
-    ctx.lineTo(x - r * 0.42, y + r * 0.30);
-    ctx.lineTo(x + r * 0.42, y + r * 0.30);
-    ctx.closePath(); ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.60)';
-    ctx.beginPath(); ctx.ellipse(x, y + r * 0.35, r * 0.15, r * 0.17, 0, 0, 6.284); ctx.fill();
-  }
+  // 2026-11-18：程序画眉眼嘴的 face() 和 tear() 已经整段删掉——那层线稿贴在立绘脸上就是
+  // 「插上去的笑脸哭脸」。表情一律走形象本身（整张表情图与肢体动作），脸上不叠任何线稿。
+  // 桌面端 pet.cs 同步删了 DrawFaceExpr。
 
   // 铺场景：整屏用 CSS 背景铺，人画在上面那层透明画布上
   var bgEl = document.getElementById('bg');
@@ -834,7 +733,7 @@ window.onerror = function (m, u, l) {
         return;
       }
     }
-    // 表情不再整张换：全身表情图已经删掉，表情只走脸上的器官（腮红、眼睛、嘴角）
+    // 表情不再整张换：全身表情图已经删掉；脸上也不画任何东西，情绪只靠肢体动作与表情图本身
     if (poseP >= 0 && curPose && curPose[poseP] && curPose[poseP].complete && curPose[poseP].naturalWidth) {
       var pim2 = curPose[poseP];
       var pwid = TARGET_H * (pim2.naturalWidth / pim2.naturalHeight);
@@ -869,11 +768,8 @@ window.onerror = function (m, u, l) {
     var fyp = FY[species] || 0.36, fwp = FW[species] || 0.55;
     var fOff = amp * boneSway(fyp, ph0);
     if (waveLeft > 0 && fyp < 0.68) fOff += 12 * (0.68 - fyp) * Math.sin(t * 13);
-    var kind = 0;
-    if (mood > 0) kind = mood;
     ctx.save();
     ctx.translate(fOff, 0);
-    face(-TARGET_H + fyp * TARGET_H, baseW * fwp / 2, kind);
     ctx.restore();
 
     // 被子：浅蓝圆角，被头压在脖子以下，不糊住脸。近不透明，免得透出底色发脏
@@ -1335,7 +1231,7 @@ window.onerror = function (m, u, l) {
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '55';
+  var HTML_VER = '56';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;

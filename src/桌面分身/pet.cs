@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -373,7 +373,7 @@ public class DesktopPet : Form
     // 2026-11-16 晚：重新打开整张表情立绘。旧表情图的两个毛病都从素材根源上解决了 ——
     // 一是画布不一致：新表情图按原立绘逐像素对齐（差分验证全身轮廓重合），换表情身体不跳；
     // 二是图里带十字怒纹、泪滴、腮红贴纸：新图全部只有脸上的眉毛/眼睛/嘴在变，没有一个外挂符号。
-    // 表情图缺的形象仍由 DrawFaceExpr 画眉眼嘴兜底（和手机端 face() 同一套比例）。
+    // 2026-11-18：程序画眉眼嘴的兜底（DrawFaceExpr）与手机端 face() 一起删了——那层线稿贴上去就是"插上去的笑脸哭脸"。缺表情图的形象保持原画的脸，表情只靠姿势与动作。
     static readonly bool UseExprArt = true;
 
     // v18：披风先撤掉。程序画的那块红布（贴图 + 程序画两版）在桌面尺寸下太假，
@@ -635,7 +635,7 @@ public class DesktopPet : Form
             // 表情整图：expr_{sp}_{key}.png，四张齐了才登记
             // 2026-11-17：4/5/9/10 四只已经换成人形立绘，但 expr_{4,5,9,10}_*.png 还是旧 Q 版那套，
             // 一换表情就把老脸贴回来、身体却还是新立绘，看着就是换了个头。
-            // 这四只先不登记表情整图，改走 DrawFaceExpr 兜底——脸永远是同一张新立绘，只动眉眼嘴。
+            // 这四只不登记表情整图，也不再用程序画脸（v56 起删除），保持原画的脸，靠姿势和动作表达。
             string[] exprKeys = new string[] { "happy", "sad", "angry", "sleep" };
             for (int sp3 = 0; UseExprArt && sp3 < 12; sp3++)
             {
@@ -5435,7 +5435,6 @@ public class DesktopPet : Form
             g.TranslateTransform(-faceX0, -faceY0);
         }
         // 已经是真表情图了，就别再往上叠腮红弧线
-        if (!useExpr) DrawFaceExpr(g, faceX0, faceY0, baseW * fwp / 2f, bmp, fxp, fyp);
 
         // 躺着睡着：不论情绪分支有没有生效，都直接在脸上补一层闭着的眼，
         // 不然位图上原来睁着的大眼珠会一直瞪着
@@ -7048,202 +7047,14 @@ public class DesktopPet : Form
         catch { return fallback; }
     }
 
-    // 2026-11-16 改写：情绪不再整张换表情立绘 —— 换图会连身体一起跳，
-    // 图里还带十字怒纹、泪滴这类贴上去的插画。改成只动眉眼嘴三处：
-    // 眉形定基调，眼型定清醒度，嘴形定情绪落点。手机端 dao.html 的 face() 用同一套比例。
-    void DrawFaceExpr(Graphics g, float x, float y, float fr, Bitmap src, float nfx, float nfy)
-    {
-        if (fr < 13f) return;
-        int kind = 0;
-        if (cryHold > 0) kind = 3;
-        else if (sleepy || lieHold > 0) kind = 6;
-        else if (moodTicks > 0 && moodKind > 0) kind = moodKind;
-
-        float eyeDx = fr * 0.38f;
-        float eyeY = y - fr * 0.08f;
-        float browY = eyeY - fr * 0.33f;
-        float mouthY = y + fr * 0.34f;
-        float lw = Math.Max(1.1f, fr * 0.045f);
-        float hw = fr * 0.20f, hh = fr * 0.10f;
-        Color ink = Color.FromArgb(174, 56, 50, 58);
-        Color softC = Color.FromArgb(110, 56, 50, 58);
-
-        int nowMs = Environment.TickCount;
-        bool talking = speaking && nowMs >= speakMouthStart && nowMs <= speakMouthUntil;
-
-        if (kind == 1)
-        {
-            using (Pen p = new Pen(softC, lw))
-            {
-                p.StartCap = LineCap.Round; p.EndCap = LineCap.Round;
-                g.DrawBezier(p, x - eyeDx - fr * 0.20f, browY + fr * 0.03f, x - eyeDx - fr * 0.09f, browY - fr * 0.07f,
-                             x - eyeDx + fr * 0.08f, browY - fr * 0.06f, x - eyeDx + fr * 0.17f, browY - fr * 0.01f);
-                g.DrawBezier(p, x + eyeDx + fr * 0.20f, browY + fr * 0.03f, x + eyeDx + fr * 0.09f, browY - fr * 0.07f,
-                             x + eyeDx - fr * 0.08f, browY - fr * 0.06f, x + eyeDx - fr * 0.17f, browY - fr * 0.01f);
-            }
-        }
-        else if (kind == 2)
-        {
-            using (Pen p = new Pen(ink, lw * 1.1f))
-            {
-                p.StartCap = LineCap.Round; p.EndCap = LineCap.Round;
-                g.DrawLine(p, x - eyeDx - fr * 0.20f, browY - fr * 0.02f, x - eyeDx + fr * 0.16f, browY + fr * 0.13f);
-                g.DrawLine(p, x + eyeDx + fr * 0.20f, browY - fr * 0.02f, x + eyeDx - fr * 0.16f, browY + fr * 0.13f);
-            }
-            using (Pen p = new Pen(softC, lw * 0.9f))
-            {
-                p.StartCap = LineCap.Round; p.EndCap = LineCap.Round;
-                g.DrawLine(p, x - eyeDx - fr * 0.15f, eyeY - fr * 0.10f, x - eyeDx + fr * 0.15f, eyeY - fr * 0.06f);
-                g.DrawLine(p, x + eyeDx + fr * 0.15f, eyeY - fr * 0.10f, x + eyeDx - fr * 0.15f, eyeY - fr * 0.06f);
-            }
-        }
-        else if (kind == 3)
-        {
-            using (Pen p = new Pen(softC, lw))
-            {
-                p.StartCap = LineCap.Round; p.EndCap = LineCap.Round;
-                g.DrawLine(p, x - eyeDx - fr * 0.20f, browY + fr * 0.11f, x - eyeDx + fr * 0.16f, browY - fr * 0.02f);
-                g.DrawLine(p, x + eyeDx + fr * 0.20f, browY + fr * 0.11f, x + eyeDx - fr * 0.16f, browY - fr * 0.02f);
-                g.DrawLine(p, x - eyeDx - fr * 0.14f, eyeY + fr * 0.02f, x - eyeDx + fr * 0.14f, eyeY + fr * 0.08f);
-                g.DrawLine(p, x + eyeDx + fr * 0.14f, eyeY + fr * 0.02f, x + eyeDx - fr * 0.14f, eyeY + fr * 0.08f);
-            }
-        }
-
-        if (!talking)
-        {
-            if (kind == 1 || kind == 2 || kind == 3)
-            {
-                using (Pen p = new Pen(ink, lw * 1.05f))
-                {
-                    p.StartCap = LineCap.Round; p.EndCap = LineCap.Round;
-                    if (kind == 1)
-                    {
-                        g.DrawBezier(p, x - hw, mouthY - fr * 0.02f, x - hw * 0.4f, mouthY + hh * 1.6f,
-                                     x + hw * 0.4f, mouthY + hh * 1.6f, x + hw, mouthY - fr * 0.02f);
-                    }
-                    else if (kind == 2)
-                    {
-                        g.DrawBezier(p, x - hw * 0.9f, mouthY, x - hw * 0.3f, mouthY + hh * 0.5f,
-                                     x + hw * 0.3f, mouthY + hh * 0.5f, x + hw * 0.9f, mouthY);
-                    }
-                    else
-                    {
-                        g.DrawBezier(p, x - hw * 0.85f, mouthY + fr * 0.03f, x - hw * 0.3f, mouthY - hh * 0.9f,
-                                     x + hw * 0.3f, mouthY - hh * 0.9f, x + hw * 0.85f, mouthY + fr * 0.03f);
-                    }
-                }
-            }
-            return;
-        }
-
-        // 说话：嘴巴开合按音节走，句子里有快有慢，偶尔收一下像换气
-        // 2026-11-17：开合频率不再写死 5.4，改成跟 CurRate 的语速档联动——
-        // 兴奋 +16% 时嘴动得快、犯困 -7% 时拖一点，嘴型和声音才是一个节奏。
-        float mouthRate = 5.4f;
-        try
-        {
-            string cr = CurRate();
-            if (cr != null && cr.Length > 2 && cr[0] == '+')
-            {
-                int pct = 0;
-                if (int.TryParse(cr.Substring(1).TrimEnd('%'), out pct))
-                    mouthRate = 5.4f * (1.0f + pct / 100.0f);
-            }
-        }
-        catch { }
-        float rate = mouthRate;
-        float ph = t * rate;
-        float a1 = (float)Math.Abs(Math.Sin(ph * 1.0f));
-        float a2 = (float)Math.Abs(Math.Sin(ph * 2.3f + 0.7f));
-        float a3 = (float)Math.Abs(Math.Sin(ph * 0.5f + 1.9f));
-        float open = 0.22f + 0.78f * (a1 * 0.45f + a2 * 0.35f + a3 * 0.20f);
-        float breath = (float)((t * 0.40) % 1.0);
-        if (breath > 0.86f && breath < 0.99f) open *= 0.35f;
-        int leftMs = speakMouthUntil - nowMs;
-        float tail = 1.0f;
-        if (leftMs < 500)
-        {
-            float k = Math.Max(0.0f, leftMs / 500.0f);
-            tail = 0.35f + 0.65f * (float)Math.Pow(k, 0.62);
-            if (leftMs < 120) tail *= 0.5f;
-        }
-        open *= tail;
-
-        float dyK = 0.44f;
-        if (speakMouthDY.Length > 0)
-        {
-            int si = species % speakMouthDY.Length;
-            if (si < 0) si = 0;
-            dyK = speakMouthDY[si];
-        }
-
-        // 上下唇合成一个闭合的嘴，不再是一个红椭圆块：小尺寸下椭圆像贴了个圆斑
-        float mw = fr * 0.42f;
-        float mh = fr * 0.035f + fr * 0.20f * open;
-        float my = y + fr * dyK;
-        float lx = x - mw * 0.5f, rx2 = x + mw * 0.5f;
-        float lipY = my + mh * 0.35f;
-        using (var gp = new System.Drawing.Drawing2D.GraphicsPath())
-        {
-            gp.AddBezier(lx, lipY, x - mw * 0.14f, lipY - mh * 0.95f, x + mw * 0.14f, lipY - mh * 0.95f, rx2, lipY);
-            gp.AddBezier(rx2, lipY, x + mw * 0.16f, lipY + mh * 1.15f, x - mw * 0.16f, lipY + mh * 1.15f, lx, lipY);
-            gp.CloseFigure();
-            using (SolidBrush mb = new SolidBrush(Color.FromArgb(190, 112, 56, 62)))
-            {
-                g.FillPath(mb, gp);
-            }
-            using (Pen lip = new Pen(Color.FromArgb(150, 184, 110, 110), Math.Max(0.9f, lw * 0.7f)))
-            {
-                lip.StartCap = LineCap.Round; lip.EndCap = LineCap.Round;
-                g.DrawPath(lip, gp);
-            }
-        }
-    }
-    // 一滴眼泪：上头尖、下头圆、带一点高光
-    void DrawTear(Graphics g, float x, float y, float r)
-    {
-        if (r < 1.2f) return;
-        using (SolidBrush tb = new SolidBrush(Color.FromArgb(216, 108, 172, 236)))
-        {
-            g.FillEllipse(tb, x - r * 0.5f, y, r, r * 1.25f);
-            PointF[] pts = new PointF[]
-            {
-                new PointF(x, y - r * 1.05f),
-                new PointF(x - r * 0.42f, y + r * 0.30f),
-                new PointF(x + r * 0.42f, y + r * 0.30f)
-            };
-            g.FillPolygon(tb, pts);
-        }
-        using (SolidBrush hb = new SolidBrush(Color.FromArgb(155, 255, 255, 255)))
-        {
-            g.FillEllipse(hb, x - r * 0.24f, y + r * 0.18f, r * 0.30f, r * 0.34f);
-        }
-    }
+    // 2026-11-18：头顶只留 z Z（犯困）、音符（说话）、问号（思考）三个文字符号。
+    // 程序画的笑脸/哭脸、泪滴、圆泡简笔表情、招手画的手，连同 DrawFaceExpr / DrawTear / DrawFaceBubble
+    // 和手机端 face()/tear() 一起删掉——表情只走整张表情立绘与姿势动作，脸上不贴任何线稿。
 
     void DrawMoodIcon(Graphics g, float x, float y)
     {
         float bob = 3.4f * (float)Math.Sin(t * 3.6);
 
-        // 招手打招呼：画手臂 + 手掌，靠着头侧，来回摆
-        if (waveTicks > 0)
-        {
-            float sw = (float)Math.Sin(t * 13.0);
-            float hx = x - 4f + sw * 4.5f;
-            float hy = y + 2f + bob;
-            using (Pen pa = new Pen(Color.FromArgb(245, 88, 118, 178), 3.6f))
-            {
-                pa.StartCap = LineCap.Round;
-                pa.EndCap = LineCap.Round;
-                g.DrawArc(pa, hx - 17f, hy - 4f, 30f, 26f, 170, 105);
-            }
-            using (SolidBrush hb = new SolidBrush(Color.FromArgb(245, 252, 236, 228)))
-            using (Pen hp = new Pen(Color.FromArgb(245, 88, 118, 178), 1.6f))
-            {
-                g.FillEllipse(hb, hx + 8f, hy - 12f, 10f, 10f);
-                g.DrawEllipse(hp, hx + 8f, hy - 12f, 10f, 10f);
-            }
-            return;
-        }
 
         // 犯困眯眼：头顶冒 z Z
         if (sleepy)
@@ -7281,82 +7092,6 @@ public class DesktopPet : Form
         }
     }
 
-    // 头顶的小圆泡里画一张简笔表情：开心/生气/难过/惊讶/犯困
-    void DrawFaceBubble(Graphics g, float x, float y, int kind)
-    {
-        float r = 15f;
-        float bx = x + r * 0.95f;
-        float by = y - r * 1.25f;
-
-        Color fill, edge;
-        if (kind == 2) { fill = Color.FromArgb(255, 255, 236, 214); edge = Color.FromArgb(235, 208, 92, 38); }
-        else if (kind == 3) { fill = Color.FromArgb(255, 232, 240, 250); edge = Color.FromArgb(235, 78, 118, 176); }
-        else if (kind == 4) { fill = Color.FromArgb(255, 255, 246, 210); edge = Color.FromArgb(235, 196, 156, 40); }
-        else if (kind == 5) { fill = Color.FromArgb(255, 236, 238, 244); edge = Color.FromArgb(235, 120, 126, 146); }
-        else { fill = Color.FromArgb(255, 255, 234, 238); edge = Color.FromArgb(235, 214, 96, 120); }
-
-        using (SolidBrush fb = new SolidBrush(fill))
-        using (Pen ep = new Pen(edge, 1.5f))
-        {
-            g.FillEllipse(fb, bx - r, by - r, r * 2, r * 2);
-            g.DrawEllipse(ep, bx - r, by - r, r * 2, r * 2);
-        }
-
-        float ey = by - r * 0.18f;
-        float ex = r * 0.44f;
-        using (SolidBrush eb = new SolidBrush(Color.FromArgb(255, 44, 46, 54)))
-        using (Pen ep2 = new Pen(Color.FromArgb(255, 44, 46, 54), 1.5f))
-        {
-            if (kind == 1)
-            {
-                g.DrawArc(ep2, bx - ex - 3.4f, ey - 3.0f, 6.8f, 6.2f, 205, 130);
-                g.DrawArc(ep2, bx + ex - 3.4f, ey - 3.0f, 6.8f, 6.2f, 205, 130);
-            }
-            else if (kind == 2)
-            {
-                g.FillEllipse(eb, bx - ex - 2.3f, ey - 1.5f, 4.6f, 4.6f);
-                g.FillEllipse(eb, bx + ex - 2.3f, ey - 1.5f, 4.6f, 4.6f);
-                g.DrawLine(ep2, bx - ex - 3.6f, ey - 6.0f, bx - ex + 3.4f, ey - 3.4f);
-                g.DrawLine(ep2, bx + ex + 3.6f, ey - 6.0f, bx + ex - 3.4f, ey - 3.4f);
-            }
-            else if (kind == 3)
-            {
-                g.DrawArc(ep2, bx - ex - 3.4f, ey - 1.6f, 6.8f, 4.4f, 20, 140);
-                g.DrawArc(ep2, bx + ex - 3.4f, ey - 1.6f, 6.8f, 4.4f, 20, 140);
-                using (SolidBrush tb = new SolidBrush(Color.FromArgb(215, 92, 158, 226)))
-                {
-                    g.FillEllipse(tb, bx + ex + 1.6f, ey + 2.4f, 3.4f, 5.4f);
-                }
-            }
-            else if (kind == 4)
-            {
-                g.FillEllipse(eb, bx - ex - 1.6f, ey - 3.4f, 5.8f, 5.8f);
-                g.FillEllipse(eb, bx + ex - 1.6f, ey - 3.4f, 5.8f, 5.8f);
-                using (SolidBrush wb = new SolidBrush(Color.White))
-                {
-                    g.FillEllipse(wb, bx - ex + 0.3f, ey - 1.9f, 2.1f, 2.1f);
-                    g.FillEllipse(wb, bx + ex + 0.3f, ey - 1.9f, 2.1f, 2.1f);
-                }
-            }
-            else
-            {
-                g.DrawLine(ep2, bx - ex - 3.2f, ey, bx - ex + 3.2f, ey);
-                g.DrawLine(ep2, bx + ex - 3.2f, ey, bx + ex + 3.2f, ey);
-            }
-
-            float my = by + r * 0.30f;
-            if (kind == 1)
-                g.DrawArc(ep2, bx - 5.6f, my - 3.4f, 11.2f, 8.4f, 40, 100);
-            else if (kind == 2)
-                g.DrawArc(ep2, bx - 4.6f, my + 1.0f, 9.2f, 5.6f, 210, 120);
-            else if (kind == 3)
-                g.DrawArc(ep2, bx - 4.2f, my + 0.9f, 8.4f, 5.6f, 220, 100);
-            else if (kind == 4)
-                g.DrawEllipse(ep2, bx - 2.5f, my - 2.0f, 5.0f, 5.4f);
-            else
-                g.DrawLine(ep2, bx - 2.8f, my + 0.3f, bx + 2.8f, my + 0.3f);
-        }
-    }
 
 
     Color Darken(Color c, float k) { return Color.FromArgb(c.A, (int)(c.R * k), (int)(c.G * k), (int)(c.B * k)); }
@@ -8010,7 +7745,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 55;
+    public const int APP_VER = 56;
 
     public static void Start()
     {

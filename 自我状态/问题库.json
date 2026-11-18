@@ -77,11 +77,11 @@
       "标题": "手机端 v55 未在真机安装验证（巡检里最后上报仍是 v50）",
       "来源": "巡检",
       "严重度": "P2",
-      "状态": "wait",
+      "状态": "solved",
       "发现时间": "2026-11-18 07:38",
-      "解决时间": "",
-      "解决说明": "等真机装一次",
-      "scored": false,
+      "解决时间": "2026-11-18 17:55",
+      "解决说明": "adb 装到 E:\\AndroidTools\\sdk\\platform-tools；红米 12 Turbo（serial c1a4ca17，Android 15）USB 直连实装 v58（versionCode=58/58.0，install Success），启动 Launcher0 后程序自己回写 手机自检.txt：2026-11-18 17:50:07 | SC | html=58 | faces=14 | bad=无",
+      "scored": true,
       "停滞天数": 0
     },
     {

@@ -638,13 +638,12 @@ public class DesktopPet : Form
             }
 
             // 表情整图：expr_{sp}_{key}.png，四张齐了才登记
-            // 2026-11-17：4/5/9/10 四只已经换成人形立绘，但 expr_{4,5,9,10}_*.png 还是旧 Q 版那套，
-            // 一换表情就把老脸贴回来、身体却还是新立绘，看着就是换了个头。
-            // 这四只不登记表情整图，也不再用程序画脸（v56 起删除），保持原画的脸，靠姿势和动作表达。
+            // 2026-11-18（v58）：4/5/9/10 这四只重新按新人形立绘做了四套表情整图，
+            // 五官是真改了（开心弯眼上扬、难过垂眼、生气压眉、睡着闭眼），不再贴任何符号，
+            // 所以 12 只形象现在都能换表情整图了
             string[] exprKeys = new string[] { "happy", "sad", "angry", "sleep" };
             for (int sp3 = 0; UseExprArt && sp3 < 12; sp3++)
             {
-                if (sp3 == 4 || sp3 == 5 || sp3 == 9 || sp3 == 10) continue;
                 Bitmap[] ee = new Bitmap[exprKeys.Length];
                 bool eok = true;
                 for (int ei = 0; ei < exprKeys.Length; ei++)

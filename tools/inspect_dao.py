@@ -331,6 +331,59 @@ AB_ACTIONS = {
 }
 
 
+def _num(pat, text, default=0):
+    m = re.search(pat, text or '')
+    return int(m.group(1)) if m else default
+
+
+def gap_advice(name, score, ev, fallback):
+    """按证据原文算出"到 80 分还差多少、要补什么数量"，比固定文案表更实。"""
+    def short(need, cur, unit):
+        d = need - cur
+        return '现有 %s%s，到 80 分要 %s%s → 还差 %d%s' % (cur, unit, need, unit, d, unit) if d > 0 \
+            else '现有 %s%s 已够，别再加，改去补别的短板' % (cur, unit)
+
+    if name == '动作':
+        cur = _num(r'表情(\d+)帧', ev) + _num(r'姿态(\d+)', ev) + _num(r'走路(\d+)', ev)
+        return '补帧：' + short(134, cur, ' 帧') + '（每帧 0.6 分，100 分封顶）'
+    if name == '说话':
+        cur = _num(r'音色表(\d+)条', ev)
+        return '补音色：' + short(20, cur, ' 条') + '（每条 4 分）'
+    if name == '创作':
+        wav, words, les = _num(r'曲库(\d+)首', ev), _num(r'词本(\d+)份', ev), _num(r'学习(\d+)类', ev)
+        need = 5 if les >= 5 else 6
+        return '出成品：曲库+词本 %s（15 分/份，学习满 5 类再加 10）%s' % (
+            short(need, wav + words, ' 份'), '' if les >= 5 else '；学习还差 %d 类' % (5 - les))
+    if name == '协调':
+        miss = []
+        if '两端' in ev and not re.search(r'两端v(\d+)/v\1/v\1', ev):
+            miss.append('两端版本不一致（对齐能拿 40 分）')
+        if _num(r'近7天报告(\d+)份', ev) < 3:
+            miss.append('近 7 天报告 %d 份 < 3 份（每份 10 分，封顶 30）' % _num(r'近7天报告(\d+)份', ev))
+        if _num(r'P1未修(\d+)', ev) > 0:
+            miss.append('还有 %d 个 P1 没修（清完 +20）' % _num(r'P1未修(\d+)', ev))
+        return '对齐：' + ('；'.join(miss) if miss else '三项已满，只有 90 分上限，剩下靠别的能力')
+    if name == '学习':
+        les, arch = _num(r'学习文档(\d+)类', ev), ('归档清单在' in ev)
+        return '学习归档：%s%s' % (short(8, les, ' 类'), '' if arch else '；归档清单还缺（+20）')
+    if name == '反馈':
+        cur = _num(r'巡检报告(\d+)份', ev)
+        return '反馈闭环：' + short(20, cur, ' 份') + '（每份 3 分，封顶 60）'
+    if name == '改正':
+        cur = _num(r'已解决(\d+)项', ev)
+        return '清问题：' + short(6, cur, ' 项') + '（每项 12 分）'
+    if name == '反应':
+        ms = _num(r'自检口 (\d+) ms', ev, 999)
+        return '压耗时：自检口现 %d ms，到 80 分要 ≤100 ms（每 5 ms 1 分）%s' % (ms, '；已经达标，别再抠' if ms <= 100 else '')
+    if name == '思考':
+        cur = _num(r'文档(\d+)份', ev)
+        return '沉淀制度：' + short(6, cur, ' 份') + '（每份 15 分）'
+    if name == '反思':
+        cur = _num(r'台账(\d+)笔', ev)
+        return '记台账：' + short(30, cur, ' 笔') + '（每笔 2 分）'
+    return fallback
+
+
 def weekly_plan(lines, problems, checks):
     """每周优化清单：十项能力 + 六项程序，各自写清"下一步具体做什么"，落到 自我状态\\每周优化清单.md"""
     caps = {}
@@ -355,8 +408,9 @@ def weekly_plan(lines, problems, checks):
     for name, act in AB_ACTIONS.items():
         c = caps.get(name, {})
         sc = int(c.get('分', 0))
+        ev = c.get('证据', '')
         st = '补短板' if sc < 30 else ('奖励档' if sc >= 80 else '平稳')
-        rows.append((sc, name, c.get('证据', ''), st, act))
+        rows.append((sc, name, ev, st, gap_advice(name, sc, ev, act)))
     rows.sort()
     prows = []
     for pname, kw in PROG:
@@ -666,7 +720,7 @@ def main():
     with open(os.path.join(ROOT, '巡检报告', '待改进.md'), 'w', encoding='utf-8-sig') as f:
         f.write('\n'.join(md) + '\n')
 
-    # ---------- 10b. 重复出现的 WARN：同一句连续 3 次就升级成问题库条目（不然它会一直"只是 WARN"） ----------
+    # ---------- 10b. 重复出现的 WARN：14 天内出现 3 次就升级成问题库条目（不要求连续，"隔几天犯一次"也算） ----------
     warnf = os.path.join(ROOT, '巡检报告', 'warn_频次.json')
     wf = {}
     if os.path.exists(warnf):
@@ -674,29 +728,48 @@ def main():
             wf = json.loads(read(warnf, 'utf-8'))
         except Exception:
             wf = {}
+    d0 = ts.date()
+
+    def _days_since(s):
+        try:
+            return abs((d0 - datetime.datetime.strptime(s[:10], '%Y-%m-%d').date()).days)
+        except Exception:
+            return 999
+
+    def _in14(s):
+        return _days_since(s) <= 14
+
     warns_now = [p_ for p_ in problems if p_.startswith('WARN')]
     for w_ in warns_now:
         k = re.sub(r'\d+', '#', w_)[:120]
-        rec_ = wf.setdefault(k, {'text': w_, 'count': 0, 'first': today, 'last': today, 'escalated': False})
+        rec_ = wf.setdefault(k, {'text': w_, 'count': 0, 'runs': [], 'first': today, 'last': today, 'escalated': False})
+        rec_.setdefault('runs', [])
         rec_['count'] += 1
         rec_['last'] = today
         rec_['text'] = w_
-        if rec_['count'] >= 3 and not rec_['escalated']:
+        if today[:10] not in [x[:10] for x in rec_['runs']]:
+            rec_['runs'].append(today)
+        rec_['runs'] = rec_['runs'][-30:]
+        recent = [x for x in rec_['runs'] if _in14(x)]
+        if len(recent) >= 3 and not rec_['escalated']:
             try:
                 import importlib.util
                 spec = importlib.util.spec_from_file_location('problem_lib', os.path.join(os.path.dirname(os.path.abspath(__file__)), '问题库.py'))
                 m = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(m)
                 r = m.register('巡检反复报同一个 WARN：%s' % w_.replace('WARN ', '')[:40], 来源='重复WARN', 严重度='P2',
-                               说明='连续 %d 次巡检都是这句（首见 %s）' % (rec_['count'], rec_['first']))
+                               说明='14 天内出现 %d 次（首见 %s）' % (len(recent), rec_['first']),
+                               key='warn:%s' % k[:40])
                 rec_['escalated'] = True
                 rec_['问题号'] = r['id']
-                problems.append('! WARN 反复 %d 次已升级成问题 %s，别再当噪音' % (rec_['count'], r['id']))
+                problems.append('WARN 同一句 %d 天内出现 %d 次，已升级成问题 %s，当正式问题处理' % (14, len(recent), r['id']))
             except Exception as e:
-                problems.append('! WARN 升级失败：%s' % e)
+                problems.append('WARN 升级失败：%s' % e)
+    # 60 天没再出现的旧 WARN 记账，清掉，别让文件无限长
+    for k in [k for k, v in wf.items() if _days_since(v.get('last', '')) > 60]:
+        wf.pop(k, None)
     with open(warnf, 'w', encoding='utf-8') as f:
         json.dump(wf, f, ensure_ascii=False, indent=1)
-    esc = [(k, v) for k, v in wf.items() if v.get('count', 1) >= 3]
 
     # ---------- 11. 报告 ----------
     has_fail = any(not p.startswith('WARN') for p in problems)

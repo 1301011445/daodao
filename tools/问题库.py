@@ -54,6 +54,38 @@ def _bigrams(s):
     return set(s[i:i + 2] for i in range(len(s) - 1))
 
 
+DOMAINS = {
+    'exe': ['exe', '桌面', '渲染', '窗口', '进程', '自检口'],
+    'apk': ['apk', '手机', '安装包', 'versioncode', '安卓', '真机'],
+    'page': ['页面', '下载页', '清单页', '网页', '线上', 'dataver'],
+    'cron': ['定时', '计划任务', '自启', '开机', '任务'],
+    'music': ['母带', '曲库', '歌', '词本', '音乐', '时长', '秒', '乐谱', '音色'],
+    'joy': ['愉悦', '台账', '激励', '能力', '分值', '巡检'],
+    'memory': ['内存', '豆包', 'cpu', '卡顿', '占用'],
+    'style': ['形象', '表情', '姿态', '走路', '帧', '骨骼'],
+}
+
+# 模板词：比对前先剔除，避免"只有/不合/已/还是"这类词把两件不同的事拉近
+STOP = ['只有', '不合', '还是', '已经', '没有', '不到', '需要', '应该', '无法', '不能',
+        '一下', '一次', '问题', '情况', '地方', '时候', '真的', '可能']
+
+
+def tags(t):
+    n = norm(t).lower()
+    out = set()
+    for k, kws in DOMAINS.items():
+        if any(w in n for w in kws):
+            out.add(k)
+    return out
+
+
+def core(t):
+    n = norm(t).lower()
+    for w in STOP:
+        n = n.replace(w, '')
+    return n
+
+
 def similar(a, b):
     a, b = norm(a), norm(b)
     if not a or not b:
@@ -71,6 +103,12 @@ def similar(a, b):
         return True
     if len(inter) >= 6 and difflib.SequenceMatcher(None, a, b).ratio() >= 0.45:
         return True
+    # 领域标签 + 去模板词后的关键词重合：措辞完全改写也能认（例如两个都在讲"母带时长口径"）
+    ta, tb = tags(a), tags(b)
+    if ta & tb:
+        ca, cb = _bigrams(core(a)), _bigrams(core(b))
+        if ca and cb and len(ca & cb) / float(min(len(ca), len(cb))) >= 0.4:
+            return True
     # 长短差很多但核心是同一件事：短串在长串里滑窗比
     short, long_ = (a, b) if len(a) <= len(b) else (b, a)
     if len(short) < 6:
@@ -82,11 +120,17 @@ def similar(a, b):
     return best >= 0.8
 
 
-def register(title, 来源='', 严重度='P2', 说明=''):
+def register(title, 来源='', 严重度='P2', 说明='', key=''):
     """登记一个问题；重复的走复发/重复登记，不新建。"""
     d = load()
     its = d['问题']
     hit = None
+    # 结构化键优先：同一个检查点用同一个 key，措辞怎么改都不会认错（比模糊匹配可靠）
+    if key:
+        for i in its:
+            if i.get('键') == key:
+                hit = i
+                break
     for i in its:
         if i.get('状态') == 'solved':
             # 已解决的只看标题像不像，像就是复发
@@ -105,7 +149,7 @@ def register(title, 来源='', 严重度='P2', 说明=''):
         its.append({
             'id': nid, '标题': title, '来源': 来源, '严重度': 严重度, '状态': 'open',
             '发现时间': _now(), '解决时间': '', '解决说明': 说明, 'scored': False,
-            '复发次数': 0, '重复登记次数': 0
+            '复发次数': 0, '重复登记次数': 0, '键': key
         })
         save(d)
         return {'id': nid, '新建': True, '复发': 0, '说明': '新登记'}

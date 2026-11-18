@@ -103,9 +103,9 @@ def _lib():
     return m
 
 
-def _issue_register(title, 来源='', 严重度='P2', 说明=''):
+def _issue_register(title, 来源='', 严重度='P2', 说明='', key=''):
     try:
-        return _lib().register(title, 来源=来源, 严重度=严重度, 说明=说明)
+        return _lib().register(title, 来源=来源, 严重度=严重度, 说明=说明, key=key)
     except Exception:
         # 兜底：老办法直接塞一条，保证不丢
         return {'id': 'Q-???', '新建': True, '复发': 0, '说明': '问题库.py 调不动，按新条登记'}
@@ -246,7 +246,7 @@ def main():
     if joy['当前愉悦值'] < LOW:
         if not rescue:
             r = _issue_register('愉悦值跌到 %d（<%d），按制度先补短板、先修 P1' % (joy['当前愉悦值'], LOW),
-                                来源='低愉悦自救', 严重度='P1')
+                                来源='低愉悦自救', 严重度='P1', key='joy:low')
             items = _issue_load()
             out.append('  低愉悦处置：愉悦值 %d 低于 %d，已登记自救项 %s（%s；分数回到 %d 自动关闭）'
                        % (joy['当前愉悦值'], LOW, r['id'], r['说明'], RECOVER))

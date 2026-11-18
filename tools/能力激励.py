@@ -269,9 +269,20 @@ def main():
         nums = [int(re.findall(r'\d+', i.get('id', ''))[0]) for i in its if re.findall(r'\d+', i.get('id', ''))]
         nxt = max(nums) if nums else 0
         for n, score in low_now:
-            hit = [i for i in its if i.get('来源') == '低能力自救'
-                   and n in i.get('标题', '') and i.get('状态') != 'solved']
+            # 同一个能力用同一个键：分数反复低，沿用原条并累计复发，不新开条
+            hit = [i for i in its if i.get('键') == 'ability:%s' % n]
             if hit:
+                old = hit[0]
+                if old.get('状态') == 'solved':
+                    old['状态'] = 'open'
+                    old['复发次数'] = int(old.get('复发次数', 0)) + 1
+                    old['复发时间'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+                    old['解决时间'] = ''
+                    old['scored'] = False
+                    out.append('  低能力自救：%s 又掉回 %d 分，%s 重新打开（第 %d 次复发，按复发档扣分）'
+                               % (n, score, old.get('id'), old['复发次数']))
+                else:
+                    out.append('  低能力自救：%s 仍是 %d 分，%s 在册不重复开条' % (n, score, old.get('id')))
                 continue
             nxt += 1
             its.append({
@@ -279,7 +290,8 @@ def main():
                 '标题': '能力「%s」只有 %d 分（低于 45），按制度单点补一格' % (n, score),
                 '来源': '低能力自救', '严重度': 'P2', '状态': 'open',
                 '发现时间': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
-                '解决时间': '', '解决说明': '', 'scored': False
+                '解决时间': '', '解决说明': '', 'scored': False,
+                '键': 'ability:%s' % n, '复发次数': 0, '重复登记次数': 0
             })
             out.append('  低能力自救：已登记 %s（%d 分，%s）' % (n, score, 'Q-%03d' % nxt))
         for i in [x for x in its if x.get('来源') == '低能力自救' and x.get('状态') != 'solved']:

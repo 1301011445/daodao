@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """「道」两端自动巡检：版本、名单、图片、包内、进程、发布一致性。
 用法：python inspect_dao.py
 输出：F:\\Daodao\\巡检报告\\巡检_YYYYMMDD_HHMM.txt，末行 PASS / FAIL
@@ -125,6 +125,33 @@ def music_check(lines, problems):
         lines.append('  未发布仓：曲库 %d 首母带，词本 %d 份' % (len(wavs), len(words)))
     lines.append('')
 
+def version_check(lines, problems):
+    """版本更新检测 + 版本内容真实使用 的奖惩结算（2026-11-18 加）。
+    跑 tools\版本奖惩.py：五处版本号对齐、各端落后天数、两端真用证据、版本内容真验项。
+    只报事实与本该加的减的分；真正的总额仍由 愉悦值检查.py 重算。"""
+    lines.append('【版本奖惩】')
+    script = os.path.join(ROOT, 'tools', '版本奖惩.py')
+    if not os.path.exists(script):
+        lines.append('  tools\版本奖惩.py 不在，本节跳过')
+        problems.append('WARN 版本奖惩脚本缺失')
+        lines.append('')
+        return
+    try:
+        r = subprocess.run([PY, script], capture_output=True, timeout=90)
+        out = (r.stdout or b'').decode('utf-8', 'replace') + (r.stderr or b'').decode('utf-8', 'replace')
+    except Exception as e:
+        lines.append('  跑不起来：%s' % e)
+        problems.append('WARN 版本奖惩跑不起来')
+        lines.append('')
+        return
+    for l in out.splitlines():
+        s = l.strip()
+        if not s or s.startswith('【版本奖惩】') or s.startswith('VSTATE='):
+            continue
+        lines.append(l)
+    if 'VSTATE=LAG' in out:
+        problems.append('WARN 版本奖惩扣分了（落后/停滞/内容没真验，详见【版本奖惩】）')
+    lines.append('')
 def joy_check(lines, problems):
     """愉悦值与问题库（2026-11-18 新加的一节）。
     跑 tools\\愉悦值检查.py：结算已解决问题该加的分、算停滞、体检两份 JSON。
@@ -831,6 +858,7 @@ def main():
         lines.append('  生锈记录 %d 条，最近一条：%s' % (ab_stale, ab_last_stale))
     lines.append('')
     music_check(lines, problems)
+    version_check(lines, problems)
     joy_check(lines, problems)
     cap_check(lines, problems)
     program_report(lines, problems, checks)

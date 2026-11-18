@@ -64,7 +64,9 @@ public class DesktopPet : Form
     {
         try
         {
-            if (IsProcessDPIAware()) return 1f;
+            // 以前 DPI 感知时直接返回 1，结果在 150% 缩放的机器上窗口只有 380×205 物理像素，
+            // 比系统其它字都小一圈，形象在桌面上就成了一小坨。改成不管是否 DPI 感知，
+            // 都按系统应用 DPI 换算：1920×1080@150% 上画布变成 570×307，人物跟上界面比例
             RegistryKey k = Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop\WindowMetrics");
             if (k != null)
             {
@@ -4498,6 +4500,7 @@ public class DesktopPet : Form
     }
 
     int showTries = 0;
+    int showKeep = 0;
 
     void OnTick(object s, EventArgs e)
     {
@@ -4512,6 +4515,23 @@ public class DesktopPet : Form
                 TopMost = true;
             }
             catch { }
+        }
+        else
+        {
+            // 开机自启/重编译后重启时，偶尔窗口建出来还在、屏幕上一片空白：
+            // 前 40 跳没顶上来就再兜一次底，之后每 ~4 秒检查一次，丢了就重新显示
+            showKeep++;
+            if (showKeep % 90 == 0 && !Visible)
+            {
+                try
+                {
+                    ShowWindow(this.Handle, SW_SHOWNOACTIVATE);
+                    SetWindowPos(this.Handle, HWND_TOPMOST, Location.X, Location.Y, 0, 0, SWP_NOSIZE);
+                    SetLayeredWindowAttributes(this.Handle, ColorTranslator.ToWin32(TransparencyKey), 255, LWA_COLORKEY);
+                    TopMost = true;
+                }
+                catch { }
+            }
         }
         // 动作时间按真实经过的时间走，不再假设每一跳都准是 45 毫秒：
         // 定时器被系统拖慢时以前会整只变慢、步子忽快忽慢，现在不会了
@@ -5260,9 +5280,10 @@ public class DesktopPet : Form
         if (watching) sideDir = 1f;
         if (travel || watching) sx *= 0.78f;
 
-        // 人物在窗口里的块头：152 显得人小、脸上细节糊成一片，
-        // 提到 162 让人站稳、看得出神情，脚底和地面横带的距离也刚好
-        float targetH = 162f;
+        // 人物在窗口里的块头：152 显得人小、脸上细节糊成一片，162 还是偏小——
+        // 画布高 205、脚底压在 cy+68=195，162 只占到 43..195，上下都空着一截。
+        // v57 提到 188：贴住地面、头顶留 7 像素，整只占满画布，桌面上看得清脸
+        float targetH = 188f;
         float ratio = bmp.Width / (float)bmp.Height;
         float baseW = targetH * ratio;
         float footY = cy + 68f;
@@ -7745,7 +7766,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 56;
+    public const int APP_VER = 57;
 
     public static void Start()
     {

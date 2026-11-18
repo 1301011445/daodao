@@ -324,7 +324,10 @@ public class DesktopPet : Form
         Bitmap bmp = null;
         using (Bitmap src = new Bitmap(s))
         {
-            int th = 256;
+            // 缩略高度 = 实际绘制高度（188）：加载时缩一次，之后一像素对一像素贴。
+            // 原来缩到 256、绘制时再缩到 188，等于每帧二次重采样，一模一样的表情
+            // 在 150% 缩放的屏幕上就是糊的，眼睫毛、嘴角这些一两像素的细线最先丢
+            int th = 188;
             int tw = Math.Max(1, (int)(src.Width * (th / (float)src.Height)));
             bmp = new Bitmap(tw, th, PixelFormat.Format32bppArgb);
             using (Graphics gg = Graphics.FromImage(bmp))
@@ -650,7 +653,7 @@ public class DesktopPet : Form
                     try
                     {
                         Stream es = ResStream("expr_" + sp3 + "_" + exprKeys[ei] + ".png");
-                        if (es != null) { using (Stream s5 = es) { eb = new Bitmap(s5); } }
+                        if (es != null) { using (Stream s5 = es) { eb = MakeThumb(s5); } }
                         else
                         {
                             string ep = Path.Combine(AppDir(), "_expr", exprKeys[ei] + "_" + sp3 + ".png");
@@ -658,7 +661,7 @@ public class DesktopPet : Form
                             {
                                 using (Stream s6 = new FileStream(ep, FileMode.Open, FileAccess.Read))
                                 {
-                                    eb = new Bitmap(s6);
+                                    eb = MakeThumb(s6);
                                 }
                             }
                         }
@@ -683,7 +686,7 @@ public class DesktopPet : Form
                     try
                     {
                         Stream ls = ResStream("expr_" + sp4 + "_laugh" + (li + 1) + ".png");
-                        if (ls != null) { using (Stream s7 = ls) { lb = new Bitmap(s7); } }
+                        if (ls != null) { using (Stream s7 = ls) { lb = MakeThumb(s7); } }
                         else
                         {
                             string lp = Path.Combine(AppDir(), "_expr", "laugh" + (li + 1) + "_" + sp4 + ".png");
@@ -691,7 +694,7 @@ public class DesktopPet : Form
                             {
                                 using (Stream s8 = new FileStream(lp, FileMode.Open, FileAccess.Read))
                                 {
-                                    lb = new Bitmap(s8);
+                                    lb = MakeThumb(s8);
                                 }
                             }
                         }
@@ -7766,7 +7769,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 57;
+    public const int APP_VER = 58;
 
     public static void Start()
     {

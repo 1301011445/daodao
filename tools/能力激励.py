@@ -124,10 +124,16 @@ def master_seconds():
 
 
 def corpus_lines():
-    for name in ('我说的话.txt', '语料.txt', '台词.txt'):
-        p = os.path.join(BUNDLE, name)
-        if os.path.exists(p):
-            return len([l for l in read_text(p).splitlines() if l.strip()])
+    """台词语料条数。以前只扫素材包 _bundle 里那 3 行占位记录，
+    而程序运行时真正读写的是根目录的「我说的话.txt」（道自己攒的台词），
+    于是「说话」这一项一直按 3/60 算分，白白少 20 多分。改成根目录优先。"""
+    for base in (ROOT, BUNDLE):
+        for name in ('我说的话.txt', '语料.txt', '台词.txt'):
+            p = os.path.join(base, name)
+            if os.path.exists(p):
+                n = len([l for l in read_text(p).splitlines() if l.strip()])
+                if n:
+                    return n
     return 0
 
 

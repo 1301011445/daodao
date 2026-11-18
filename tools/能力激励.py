@@ -15,7 +15,7 @@
     本次合计：愉悦值 +2（上限 ±5/天）
   CAP_STATE=OK|WARN
 """
-import json, os, re, sys, time, urllib.request, datetime
+import json, os, re, sys, time, wave, urllib.request, datetime
 
 ROOT = r'F:\Daodao'
 DIR = os.path.join(ROOT, '自我状态')
@@ -98,59 +98,185 @@ def ping_ms():
         return -1
 
 
+def _mtime_days(p):
+    try:
+        return (datetime.datetime.now() - datetime.datetime.fromtimestamp(os.path.getmtime(p))).days
+    except Exception:
+        return 9999
+
+
+def master_seconds():
+    """曲库最长母带时长（秒）；读不出来记 0"""
+    d = os.path.join(ROOT, '曲库')
+    best = 0.0
+    try:
+        for f in os.listdir(d):
+            if not f.lower().endswith('.wav'):
+                continue
+            try:
+                with wave.open(os.path.join(d, f), 'rb') as w:
+                    best = max(best, w.getnframes() / float(w.getframerate() or 1))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return round(best, 1)
+
+
+def corpus_lines():
+    for name in ('我说的话.txt', '语料.txt', '台词.txt'):
+        p = os.path.join(BUNDLE, name)
+        if os.path.exists(p):
+            return len([l for l in read_text(p).splitlines() if l.strip()])
+    return 0
+
+
+def report_days(days=14):
+    """近 N 天里有几天真跑过巡检（不是跑了几份）"""
+    d = os.path.join(ROOT, '巡检报告')
+    if not os.path.isdir(d):
+        return 0
+    ds = set()
+    for f in os.listdir(d):
+        if not (f.startswith('巡检_') and f.endswith('.txt')):
+            continue
+        t = datetime.datetime.fromtimestamp(os.path.getmtime(os.path.join(d, f)))
+        if (datetime.datetime.now() - t).days <= days:
+            ds.add(t.strftime('%Y-%m-%d'))
+    return len(ds)
+
+
+def fresh_study(days=7):
+    try:
+        for f in os.listdir(ROOT):
+            if re.match(r'^乐谱学习_第\d+类', f):
+                if _mtime_days(os.path.join(ROOT, f)) <= days:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def issue_stats():
+    """问题库的体检：解决数、P1、停滞、复发率、根因说明率"""
+    st = {'solved': 0, 'p1': 0, 'stale': 0, 'total': 0, 'recur': 0, 'root_ratio': 0.0}
+    try:
+        its = json.load(open(ISSUES, encoding='utf-8-sig')).get('问题', [])
+    except Exception:
+        return st
+    st['total'] = len(its)
+    good = 0
+    for i in its:
+        stt = i.get('状态')
+        if stt == 'solved':
+            st['solved'] += 1
+            note = i.get('解决说明', '') or ''
+            if any(w in note for w in ('根因', '因为', '原因是', '为什么', '漏了', '误')):
+                good += 1
+        elif stt == 'open' and i.get('严重度') in ('P0', 'P1'):
+            st['p1'] += 1
+        if stt in ('open', 'wait'):
+            try:
+                days = (datetime.datetime.now() - datetime.datetime.strptime(i.get('发现时间', '')[:16], '%Y-%m-%d %H:%M')).days
+                if days > 14:
+                    st['stale'] += 1
+            except Exception:
+                pass
+        st['recur'] += int(i.get('复发次数', 0))
+    st['root_ratio'] = (good / float(st['solved'])) if st['solved'] else 0.0
+    return st
+
+
+def joy_stats():
+    try:
+        j = json.load(open(JOY, encoding='utf-8-sig'))
+    except Exception:
+        return {'n': 0, 'fresh': False, 'detail_ratio': 0.0, 'score': 50}
+    recs = j.get('记录', [])
+    fresh = any((datetime.datetime.now() - datetime.datetime.strptime(r.get('时间', '')[:16], '%Y-%m-%d %H:%M')).days <= 7
+                for r in recs if r.get('时间'))
+    detailed = sum(1 for r in recs if re.search(r'\d', r.get('理由', '') or ''))
+    return {'n': len(recs), 'fresh': fresh,
+            'detail_ratio': (detailed / float(len(recs))) if recs else 0.0,
+            'score': int(j.get('当前愉悦值', 50))}
 def evidence():
-    """每项能力的证据分（0-100）与证据摘要。全部可重算，不写主观感受。"""
+    """能力指标 v3（2026-11-18）：每项拆成 2-3 个子项，各按"证据量/覆盖率/新鲜度"打分，全部可重算。
+    权重是有意设得比现状高的：能拿满分说明真的做到位了，不是拿数量凑分。"""
     expr = count(r'expr_\d+_\w+\.png$', BUNDLE)
     pose = count(r'pose_\d+_\w+\.png$', BUNDLE)
     walk = count(r'walk8_\d+_\d+\.png$', BUNDLE)
     faces = count(r'face_\d+\.png$', BUNDLE)
+    frames = expr + pose + walk
 
     voices = len([l for l in read_text(os.path.join(BUNDLE, 'voices.txt')).splitlines() if l.strip()])
     names = len([l for l in read_text(os.path.join(BUNDLE, 'names.txt')).splitlines() if l.strip()])
+    corpus = corpus_lines()
 
     wav = count_files(os.path.join(ROOT, '曲库'), '.wav')
+    msec = master_seconds()
+    qualified = wav if 170 <= msec <= 200 else 0        # 合格的成品：170-200 秒
     words = count_files(ROOT, '.md', r'_词\.md$')
     lessons = count_files(ROOT, '.md', r'^乐谱学习_第\d+类')
     archive = os.path.exists(os.path.join(ROOT, '学习归档', '归档清单.json'))
 
     n_rep, n_recent, has_table = reports_info()
-    try:
-        solved = sum(1 for i in json.load(open(ISSUES, encoding='utf-8-sig')).get('问题', [])
-                     if i.get('状态') == 'solved')
-        open_p1 = sum(1 for i in json.load(open(ISSUES, encoding='utf-8-sig')).get('问题', [])
-                      if i.get('状态') == 'open' and i.get('严重度') in ('P0', 'P1'))
-    except Exception:
-        solved, open_p1 = 0, 0
-
+    days14 = report_days(14)
+    iss = issue_stats()
     agree, vtxt = versions_agree()
     ms = ping_ms()
-
+    js = joy_stats()
+    opt_fresh = _mtime_days(os.path.join(DIR, '每周优化清单.md')) <= 7
     docs = count_files(DIR, '.md') + count_files(ROOT, '.md', r'^(学习总纲|音乐判据总表|词曲协同规则|音乐制度增补).*\.md$')
-    joy = None
-    try:
-        j = json.load(open(JOY, encoding='utf-8-sig'))
-        joy = (j.get('当前愉悦值'), len(j.get('记录', [])))
-    except Exception:
-        pass
+
+    def pct(x):
+        return max(0.0, min(1.0, x))
 
     ev = {}
-    ev['动作'] = (clamp((expr + pose + walk) * 0.6), '表情%d帧/姿态%d/走路%d（形象%d个）' % (expr, pose, walk, faces))
-    ev['说话'] = (clamp(voices * 4), '音色表%d条/名字%d条' % (voices, names))
-    ev['创作'] = (clamp(wav * 15 + words * 15 + (10 if lessons >= 5 else 0)),
-                  '曲库%d首/词本%d份/学习%d类' % (wav, words, lessons))
-    ev['协调'] = (clamp(40 * (1 if agree else 0) + min(30, n_recent * 10) + (20 if open_p1 == 0 else 0)),
-                  '两端%s/近7天报告%d份/P1未修%d' % (vtxt, n_recent, open_p1))
-    ev['学习'] = (clamp(lessons * 8 + (20 if archive else 0)),
-                  '学习文档%d类/归档清单%s' % (lessons, '在' if archive else '缺'))
-    ev['反馈'] = (clamp(min(60, n_rep * 3) + (20 if has_table else 0) + 10),
-                  '巡检报告%d份/各项程序表%s' % (n_rep, '有' if has_table else '无'))
-    ev['改正'] = (clamp(solved * 12 + 10), '问题库已解决%d项/P1未修%d项' % (solved, open_p1))
-    ev['反应'] = (clamp(100 - ms / 5), '自检口 %d ms' % ms) if ms >= 0 else (0, '自检口不通')
-    ev['思考'] = (clamp(docs * 15), '制度/总纲类文档%d份' % docs)
-    if joy:
-        ev['反思'] = (clamp(joy[1] * 2 + 20), '愉悦值台账%d笔（当前%d分）' % (joy[1], joy[0] if isinstance(joy[0], int) else 50))
-    else:
-        ev['反思'] = (20, '愉悦值台账读不到')
+
+    # 动作：帧量 45（目标 134 帧）/ 单形象帧数覆盖 30 / 四类素材齐全 25
+    cover = pct((frames / float(faces)) / 6.0) if faces else 0
+    complete = 25 if (expr and pose and walk and faces) else 0
+    ev['动作'] = (clamp(45 * pct(frames / 134.0) + 30 * cover + complete),
+                  '帧量%d/134(45)·覆盖%.0f%%(30)·齐全%d(25)' % (frames, cover * 100, complete))
+
+    # 说话：音色 50（目标 20 条）/ 名字对齐 25 / 台词语料 25（目标 60 行）
+    ev['说话'] = (clamp(50 * pct(voices / 20.0) + 25 * (pct(names / float(voices)) if voices else 0) + 25 * pct(corpus / 60.0)),
+                  '音色%d/20(50)·名字%d/音色%d(25)·语料%d行/60(25)' % (voices, names, voices, corpus))
+
+    # 创作：合格成品 50（170-200 秒，目标 3 首）/ 词本 25（目标 2 份）/ 乐理支撑 25（目标 5 类）
+    ev['创作'] = (clamp(50 * pct(qualified / 3.0) + 25 * pct(words / 2.0) + 25 * pct(lessons / 5.0)),
+                  '合格成品%d首/3(50，母带%.1f秒)·词本%d/2(25)·乐理%d类/5(25)' % (qualified, msec, words, lessons))
+
+    # 协调：三端版本一致 40 / 近 7 天报告 30 / P1 清零 30
+    ev['协调'] = (clamp(40 * (1 if agree else 0) + 30 * pct(n_recent / 3.0) + 30 * (1 if iss['p1'] == 0 else 0)),
+                  '版本%s(40)·近7天报告%d/3(30)·P1未修%d(30)' % (vtxt, n_recent, iss['p1']))
+
+    # 学习：类数 40（目标 10 类）/ 归档 20 / 近 7 天有新学 40
+    ev['学习'] = (clamp(40 * pct(lessons / 10.0) + 20 * (1 if archive else 0) + 40 * (1 if fresh_study() else 0)),
+                  '类数%d/10(40)·归档%s(20)·近7天新学%s(40)' % (lessons, '在' if archive else '缺', '有' if fresh_study() else '无'))
+
+    # 反馈：覆盖天数 50（近 14 天至少 10 天跑过）/ 各项程序表 20 / 问题库新鲜 30
+    issue_fresh = _mtime_days(ISSUES) <= 7
+    ev['反馈'] = (clamp(50 * pct(days14 / 10.0) + 20 * (1 if has_table else 0) + 30 * (1 if issue_fresh else 0)),
+                  '近14天跑过%d/10天(50)·程序表%s(20)·问题库近7天更新%s(30)' % (days14, '有' if has_table else '无', '有' if issue_fresh else '无'))
+
+    # 改正：解决数 45（目标 8 项）/ 复发率 30 / 无停滞 25
+    recur_ratio = (iss['recur'] / float(iss['total'])) if iss['total'] else 0
+    ev['改正'] = (clamp(45 * pct(iss['solved'] / 8.0) + 30 * (1 - pct(recur_ratio)) + 25 * (1 if iss['stale'] == 0 else 0)),
+                  '已解决%d/8(45)·复发率%.0f%%(30)·停滞%d项(25)' % (iss['solved'], recur_ratio * 100, iss['stale']))
+
+    # 反应：接口响应 50（≤50ms 满分，200ms 归零）/ 字段完整 25 / 稳定（近 7 天有报告即算）25
+    resp = pct((200 - ms) / 150.0) if ms > 0 else 0
+    ev['反应'] = (clamp(50 * resp + 25 * (1 if ms > 0 else 0) + 25 * (1 if n_recent > 0 else 0)),
+                  '响应%dms(50)·通%s(25)·近7天在线%s(25)' % (ms, '是' if ms > 0 else '否', '是' if n_recent > 0 else '否'))
+
+    # 思考：制度文档 45（目标 10 份）/ 每周清单新鲜 25 / 解决说明带根因 30
+    ev['思考'] = (clamp(45 * pct(docs / 10.0) + 25 * (1 if opt_fresh else 0) + 30 * iss['root_ratio']),
+                  '制度%d/10份(45)·优化清单新鲜%s(25)·根因说明%.0f%%(30)' % (docs, '是' if opt_fresh else '否', iss['root_ratio'] * 100))
+
+    # 反思：台账笔数 45（目标 30 笔）/ 近 7 天在记 25 / 记录带数据 30
+    ev['反思'] = (clamp(45 * pct(js['n'] / 30.0) + 25 * (1 if js['fresh'] else 0) + 30 * js['detail_ratio']),
+                  '台账%d/30笔(45)·近7天记账%s(25)·带数据%.0f%%(30)' % (js['n'], '是' if js['fresh'] else '否', js['detail_ratio'] * 100))
     return ev
 
 

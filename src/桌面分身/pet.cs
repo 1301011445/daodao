@@ -1065,11 +1065,67 @@ public class DesktopPet : Form
         return "JOY|" + ((int)Math.Round(joyVal)) + "|" + d + "|" + JoyKind();
     }
 
+    // v59：分数只认一本账。程序自己不再攒分，只把 自我状态\愉悦值.json / 能力激励.json
+    // 里的数读出来显示，手机端问过来时也给同一个数——两端不会再有第二个数。
+    static string LedgerDir()
+    {
+        string d;
+        try { d = Path.GetDirectoryName(Application.ExecutablePath); }
+        catch { d = "."; }
+        if (d == null || d.Length == 0) d = ".";
+        return Path.Combine(d, "自我状态");
+    }
+
+    static int LedgerNum(string file, string key, string fallbackKey)
+    {
+        try
+        {
+            string p = Path.Combine(LedgerDir(), file);
+            if (!File.Exists(p)) return -1;
+            string s = File.ReadAllText(p, new UTF8Encoding(false));
+            System.Text.RegularExpressions.Match m =
+                System.Text.RegularExpressions.Regex.Match(s, "\"" + key + "\"\\s*:\\s*(\\d+)");
+            if (!m.Success && fallbackKey != null)
+                m = System.Text.RegularExpressions.Regex.Match(s, "\"" + fallbackKey + "\"\\s*:\\s*(\\d+)");
+            if (!m.Success) return -1;
+            int v;
+            if (!int.TryParse(m.Groups[1].Value, out v)) return -1;
+            return v;
+        }
+        catch { return -1; }
+    }
+
+    // 能力平均：账本里 10 项「分」的平均；账本不在才退回老台账
+    static int LedgerAbAvg()
+    {
+        try
+        {
+            string p = Path.Combine(LedgerDir(), "能力激励.json");
+            if (!File.Exists(p)) return -1;
+            string s = File.ReadAllText(p, new UTF8Encoding(false));
+            System.Text.RegularExpressions.MatchCollection ms =
+                System.Text.RegularExpressions.Regex.Matches(s, "\"分\"\\s*:\\s*(\\d+)");
+            if (ms.Count == 0) return -1;
+            int sum = 0;
+            for (int i = 0; i < ms.Count; i++)
+            {
+                int v;
+                if (int.TryParse(ms[i].Groups[1].Value, out v)) sum += v;
+            }
+            return (int)Math.Round((double)sum / ms.Count);
+        }
+        catch { return -1; }
+    }
+
     public static string JoyCmd()
     {
         JoyLoad();
         JoyTick();
-        return "value=" + ((int)Math.Round(joyVal)) + "|kind=" + JoyKind() + "|net=" + joyTodayNet + "|abil=" + AbAvg();
+        int lv = LedgerNum("愉悦值.json", "当前愉悦值", "score");
+        if (lv >= 0) joyVal = (float)Math.Max(0, Math.Min(100, lv));
+        int ab = LedgerAbAvg();
+        if (ab < 0) ab = AbAvg();
+        return "value=" + ((int)Math.Round(joyVal)) + "|kind=" + JoyKind() + "|net=" + joyTodayNet + "|abil=" + ab;
     }
 
     // ================= 能力台账（自省用的记分板，说明见 F:\Daodao\道_能力迭代制度.md）=================
@@ -7768,7 +7824,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 58;
+    public const int APP_VER = 59;
 
     public static void Start()
     {

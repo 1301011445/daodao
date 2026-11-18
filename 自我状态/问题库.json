@@ -132,17 +132,17 @@
       "解决时间": "2026-11-18 09:17",
       "解决说明": "桌面 pet.cs 删 DrawFaceExpr/调用/DrawTear/DrawFaceBubble/招手手绘（8542→8285 行）；手机 dao.html 删 face()/tear() 与调用（1489→1384 行）；两端升 v56 重打包，apk 内 assets/dao.html 正文已无 face(/tear(，表情只走形象原画与肢体动作",
       "scored": true
-    }
-  ],
-  "items": [
+    },
     {
-      "id": "Q-013",
-      "title": "「说话」能力长期按素材包 3 行占位语料算分",
-      "status": "solved",
-      "scored": true,
-      "found_at": "2026-11-18 09:56",
-      "detail": "能力激励.py 的 corpus_lines() 只扫 _bundle\\我说的话.txt（3 行），而运行时真正读写的是 F:\\Daodao\\我说的话.txt（62 行）。改成根目录优先，说话证据从 语料3行/60 变为 语料62行/60。",
-      "fix": "tools\\能力激励.py corpus_lines() 先扫 ROOT 再扫 BUNDLE"
+      "id": "Q-020",
+      "标题": "手机端没有表情图，也换不了表情",
+      "来源": "自检",
+      "严重度": "P2",
+      "状态": "open",
+      "发现时间": "2026-11-18 16:50",
+      "说明": "apk 的 dao.html 里只有 14 张立绘（FACES）与姿势图（POSES），没有 48 张表情整图，也没有情绪状态变量；桌面端 v58 已是 12 只 × 4 态。修法：表情图压成移动尺寸内嵌 dao.html，再接情绪触发（被夸/失败/被冒犯/长时间无交互）。",
+      "scored": false,
+      "停滞天数": 0
     }
   ]
 }

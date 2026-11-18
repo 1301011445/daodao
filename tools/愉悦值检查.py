@@ -93,6 +93,31 @@ def save(path, obj):
     os.replace(tmp, path)
 
 
+def _lib():
+    """把 tools\\问题库.py 当模块用（同目录），统一登记/去重/复发计数"""
+    import importlib.util
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), '问题库.py')
+    spec = importlib.util.spec_from_file_location('problem_lib', p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _issue_register(title, 来源='', 严重度='P2', 说明=''):
+    try:
+        return _lib().register(title, 来源=来源, 严重度=严重度, 说明=说明)
+    except Exception:
+        # 兜底：老办法直接塞一条，保证不丢
+        return {'id': 'Q-???', '新建': True, '复发': 0, '说明': '问题库.py 调不动，按新条登记'}
+
+
+def _issue_load():
+    try:
+        return _lib().load().get('问题', [])
+    except Exception:
+        return []
+
+
 def parse_time(s):
     for fmt in ('%Y-%m-%d %H:%M', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
         try:
@@ -131,6 +156,22 @@ def main():
             if not it.get('解决时间'):
                 it['解决时间'] = now_str()
             out.append('  结算：%s %s 已解决，+%d' % (it.get('id', ''), it.get('标题', '')[:28], d))
+
+    # ---------- 复发：同一个问题又出现 → 越复发扣得越狠（1 次 -1、2 次 -3、3 次 -5、之后每次 -6 封顶） ----------
+    for it in items:
+        n = int(it.get('复发次数', 0))
+        paid = int(it.get('复发扣分', 0))
+        if n > paid:
+            for k in range(paid + 1, n + 1):
+                d = min(6, 1 + 2 * (k - 1))
+                joy.setdefault('记录', []).append({
+                    '时间': now_str(), '类型': '问题复发', '分值': -d,
+                    '理由': '%s 第 %d 次复发：%s' % (it.get('id', ''), k, it.get('标题', '')[:28]),
+                    '关联问题': it.get('id', '')
+                })
+                out.append('  复发扣分：%s 第 %d 次复发，-%d' % (it.get('id', ''), k, d))
+            it['复发扣分'] = n
+            it['最近复发'] = it.get('复发时间', '') or now_str()
 
     # ---------- 停滞：open/wait 超过 STALE_DAYS 天没动 → 按制度扣分（单个问题最多 -5） ----------
     stale = []
@@ -204,16 +245,11 @@ def main():
     rescue = [i for i in items if i.get('来源') == '低愉悦自救' and i.get('状态') != 'solved']
     if joy['当前愉悦值'] < LOW:
         if not rescue:
-            nums = [int(re.findall(r'\d+', i.get('id', ''))[0]) for i in items
-                    if re.findall(r'\d+', i.get('id', ''))]
-            nid = 'Q-%03d' % ((max(nums) if nums else 0) + 1)
-            items.append({
-                'id': nid, '标题': '愉悦值跌到 %d（<%d），按制度先补短板、先修 P1' % (joy['当前愉悦值'], LOW),
-                '来源': '低愉悦自救', '严重度': 'P1', '状态': 'open',
-                '发现时间': now_str(), '解决时间': '', '解决说明': '', 'scored': False
-            })
-            out.append('  低愉悦处置：愉悦值 %d 低于 %d，已登记自救项 %s（先把 P1 修掉，分数回到 %d 自动关闭）'
-                       % (joy['当前愉悦值'], LOW, nid, RECOVER))
+            r = _issue_register('愉悦值跌到 %d（<%d），按制度先补短板、先修 P1' % (joy['当前愉悦值'], LOW),
+                                来源='低愉悦自救', 严重度='P1')
+            items = _issue_load()
+            out.append('  低愉悦处置：愉悦值 %d 低于 %d，已登记自救项 %s（%s；分数回到 %d 自动关闭）'
+                       % (joy['当前愉悦值'], LOW, r['id'], r['说明'], RECOVER))
         else:
             out.append('  低愉悦处置：愉悦值 %d 仍低于 %d，自救项 %s 在进行中'
                        % (joy['当前愉悦值'], LOW, '、'.join(i.get('id', '') for i in rescue)))
@@ -237,8 +273,20 @@ def main():
              ('，停滞 %d' % len(stale)) if stale else ''))
     for it in sorted(items, key=lambda x: (x.get('状态') != 'open', x.get('id', ''))):
         if it.get('状态') in ('open', 'wait'):
-            out.append('    · [%s] %s %s（%s）' % (it.get('严重度'), it.get('id'), it.get('标题', '')[:34],
-                       '待用户' if it.get('状态') == 'wait' else '未解决'))
+            tag = '待用户' if it.get('状态') == 'wait' else '未解决'
+            rep = int(it.get('复发次数', 0))
+            if rep:
+                tag += '·已复发 %d 次' % rep
+            out.append('    · [%s] %s %s（%s）' % (it.get('严重度'), it.get('id'), it.get('标题', '')[:34], tag))
+
+    # 复发的东西不能拖：每次都要在报告里点名字提醒，复发次数越多越靠前
+    rep_open = [i for i in items if int(i.get('复发次数', 0)) > 0 and i.get('状态') != 'solved']
+    if rep_open:
+        rep_open.sort(key=lambda x: -int(x.get('复发次数', 0)))
+        for i in rep_open:
+            out.append('  提醒：%s「%s」已复发 %d 次，今天就处理，别再放着'
+                       % (i.get('id', ''), i.get('标题', '')[:28], int(i.get('复发次数', 0))))
+            warn.append('%s 复发 %d 次未处理' % (i.get('id', ''), int(i.get('复发次数', 0))))
     # 今日已经加的分列出来，方便核对有没有乱加
     wins = [r for r in joy.get('记录', []) if r.get('时间', '').startswith(today)
             and int(r.get('分值', 0)) > 0 and r.get('类型') != '起步']

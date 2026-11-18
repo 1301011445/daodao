@@ -317,6 +317,81 @@ def cap_check(lines, problems):
                 problems.append('WARN 能力激励：' + s.lstrip('!').strip())
     lines.append('')
 
+AB_ACTIONS = {
+    '动作': '补帧：给分数最低的形象编号各补 4 帧待机/走路，重跑一次 bundle 统计确认帧数真的涨',
+    '说话': '补音色：新增 2 条音色（如童声/旁白）并登记进音色表，条数涨了分才涨',
+    '创作': '出成品：把手里最短那首补到 170–200 秒（前奏/间奏/尾奏补长，不拉长句子），曲库 +1 首',
+    '协调': '对齐版本：apk 的 versionCode 与电脑端同号，手机上装一次并让自检上报',
+    '学习': '学习归档：把最近学的音乐知识整理成 1 份文档并挂进归档清单',
+    '反馈': '反馈闭环：巡检结论写回待改进清单，并对用户提的要点逐条回执',
+    '改正': '清问题：先把严重度最高的未解决项修掉一条，解决时间填实',
+    '反应': '压耗时：自检口目标 <100ms，用一次剖析找瓶颈（别靠感觉）',
+    '思考': '沉淀制度：本轮新规则写进对应制度文档，不留只在脑子里',
+    '反思': '记台账：每天把判断和后果记一笔（愉悦值/问题库都算账）',
+}
+
+
+def weekly_plan(lines, problems, checks):
+    """每周优化清单：十项能力 + 六项程序，各自写清"下一步具体做什么"，落到 自我状态\\每周优化清单.md"""
+    caps = {}
+    try:
+        with open(os.path.join(ROOT, '自我状态', '能力激励.json'), encoding='utf-8-sig') as f:
+            caps = json.load(f).get('能力', {})
+    except Exception:
+        caps = {}
+    its = []
+    try:
+        with open(os.path.join(ROOT, '自我状态', '问题库.json'), encoding='utf-8-sig') as f:
+            its = json.load(f).get('问题', [])
+    except Exception:
+        pass
+    PROG = [('桌面端 exe', ['exe', '桌面', '渲染', '形象在桌面']),
+            ('手机端 apk', ['手机', 'apk', 'versionCode']),
+            ('网页', ['页面', '下载页', '清单页']),
+            ('定时任务', ['定时', '计划任务']),
+            ('音乐与创作', ['母带', '曲库', '音乐', '词本']),
+            ('愉悦值与问题库', ['愉悦', '问题库'])]
+    rows = []
+    for name, act in AB_ACTIONS.items():
+        c = caps.get(name, {})
+        sc = int(c.get('分', 0))
+        st = '补短板' if sc < 30 else ('奖励档' if sc >= 80 else '平稳')
+        rows.append((sc, name, c.get('证据', ''), st, act))
+    rows.sort()
+    prows = []
+    for pname, kw in PROG:
+        n = [i for i in its if i.get('状态') in ('open', 'wait')
+             and any(k in (i.get('标题', '') + i.get('来源', '')) for k in kw)]
+        prows.append((len(n), pname, n))
+    prows.sort(reverse=True)
+
+    md = ['# 道 · 每周优化清单', '', '自动生成，最后更新：%s' % ts_fmt(),
+          '', '规则：每周至少把"分数最低那一项"往前推一步，推完证据分必须真的涨（涨不动说明动作白做）。', '']
+    md.append('## 十项能力（分数低的排前面）')
+    for sc, name, ev, st, act in rows:
+        md.append('- **%s %d**（%s）%s' % (name, sc, st, ev))
+        md.append('      → %s' % (act if sc < 80 else '保持现状，可作为推广素材来源'))
+    md.append('')
+    md.append('## 六项程序（未结问题多的排前面）')
+    for n, pname, lst in prows:
+        md.append('- **%s** 未结 %d 项：%s' % (pname, n,
+                 '、'.join('%s %s' % (i.get('id', ''), i.get('标题', '')[:24]) for i in lst) if lst else '无'))
+    md.append('')
+    md.append('## 本周最该动的三件')
+    for sc, name, ev, st, act in rows[:3]:
+        md.append('- %s（%d 分）：%s' % (name, sc, act))
+    with open(os.path.join(ROOT, '自我状态', '每周优化清单.md'), 'w', encoding='utf-8-sig') as f:
+        f.write('\n'.join(md) + '\n')
+
+    lines.append('【本周优化】能力最低三项：' + '、'.join('%s %d' % (n2, s2) for s2, n2, _, _, _ in rows[:3]))
+    lines.append('          程序未结最多：' + '、'.join('%s %d 项' % (p2, n3) for n3, p2, _ in prows[:2]))
+    lines.append('          清单：自我状态\\每周优化清单.md（每周照着补最低那项）')
+
+
+def ts_fmt():
+    return datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+
+
 def main():
     ts = datetime.datetime.now()
     checks = {}
@@ -460,7 +535,7 @@ def main():
         ping = urllib.request.urlopen('http://127.0.0.1:8848/ping', timeout=6).read().decode('utf-8', 'replace')
         checks['接口 ping'] = ping.strip()
     except Exception as e:
-        checks['接口 ping'] = '无响应(%s)' % type(e).__name__
+        checks['接口 ping'] = '无响应(%s: %s)' % (type(e).__name__, e)
     if ping and app_ver is not None and ('|%s|' % app_ver) not in ping:
         problems.append('运行中的实例版本不是 %s：%s' % (app_ver, ping))
 
@@ -496,7 +571,7 @@ def main():
         if lv and app_ver is not None and int(lv[0]) != app_ver:
             problems.append('线上下载页 data-ver=%s ≠ 本地版本 %s，线上没跟上' % (lv[0], app_ver))
     except Exception as e:
-        checks['线上页 data-ver'] = '取不到(%s)' % type(e).__name__
+        checks['线上页 data-ver'] = '取不到(%s: %s)' % (type(e).__name__, e)
         problems.append('WARN 线上页面取不到，本次未核对线上版本')
 
     # ---------- 9. 手机端自检结果 ----------
@@ -591,6 +666,38 @@ def main():
     with open(os.path.join(ROOT, '巡检报告', '待改进.md'), 'w', encoding='utf-8-sig') as f:
         f.write('\n'.join(md) + '\n')
 
+    # ---------- 10b. 重复出现的 WARN：同一句连续 3 次就升级成问题库条目（不然它会一直"只是 WARN"） ----------
+    warnf = os.path.join(ROOT, '巡检报告', 'warn_频次.json')
+    wf = {}
+    if os.path.exists(warnf):
+        try:
+            wf = json.loads(read(warnf, 'utf-8'))
+        except Exception:
+            wf = {}
+    warns_now = [p_ for p_ in problems if p_.startswith('WARN')]
+    for w_ in warns_now:
+        k = re.sub(r'\d+', '#', w_)[:120]
+        rec_ = wf.setdefault(k, {'text': w_, 'count': 0, 'first': today, 'last': today, 'escalated': False})
+        rec_['count'] += 1
+        rec_['last'] = today
+        rec_['text'] = w_
+        if rec_['count'] >= 3 and not rec_['escalated']:
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location('problem_lib', os.path.join(os.path.dirname(os.path.abspath(__file__)), '问题库.py'))
+                m = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(m)
+                r = m.register('巡检反复报同一个 WARN：%s' % w_.replace('WARN ', '')[:40], 来源='重复WARN', 严重度='P2',
+                               说明='连续 %d 次巡检都是这句（首见 %s）' % (rec_['count'], rec_['first']))
+                rec_['escalated'] = True
+                rec_['问题号'] = r['id']
+                problems.append('! WARN 反复 %d 次已升级成问题 %s，别再当噪音' % (rec_['count'], r['id']))
+            except Exception as e:
+                problems.append('! WARN 升级失败：%s' % e)
+    with open(warnf, 'w', encoding='utf-8') as f:
+        json.dump(wf, f, ensure_ascii=False, indent=1)
+    esc = [(k, v) for k, v in wf.items() if v.get('count', 1) >= 3]
+
     # ---------- 11. 报告 ----------
     has_fail = any(not p.startswith('WARN') for p in problems)
     verdict = 'FAIL' if has_fail else 'PASS'
@@ -609,7 +716,6 @@ def main():
     # ---------- 能力台账（自省账本）----------
     ab_line = None
     try:
-        import urllib.request
         with urllib.request.urlopen('http://127.0.0.1:8848/abil', timeout=5) as resp:
             ab_line = resp.read().decode('utf-8', 'replace').strip()
     except Exception:
@@ -651,6 +757,7 @@ def main():
     joy_check(lines, problems)
     cap_check(lines, problems)
     program_report(lines, problems, checks)
+    weekly_plan(lines, problems, checks)
     if problems:
         lines.append('【问题】')
         for p in problems:

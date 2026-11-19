@@ -24,7 +24,7 @@ JOY = os.path.join(DIR, '愉悦值.json')
 ISSUES = os.path.join(DIR, '问题库.json')
 BUNDLE = os.path.join(ROOT, 'src', '桌面分身', '_bundle')
 
-CAPS = ['动作', '说话', '创作', '协调', '学习', '反馈', '改正', '反应', '思考', '反思']
+CAPS = ['动作', '说话', '创作', '协调', '学习', '反馈', '改正', '反应', '思考', '反思', '回忆']
 
 MAX_JOY_PER_DAY = 5   # 能力激励一天最多给愉悦值 ±5
 LOW_LINE = 30         # 低于这条线进“补短板”
@@ -205,6 +205,19 @@ def joy_stats():
     return {'n': len(recs), 'fresh': fresh,
             'detail_ratio': (detailed / float(len(recs))) if recs else 0.0,
             'score': int(j.get('当前愉悦值', 50))}
+def lesson_classes():
+    """乐谱学习类数（2026-11-19 修）：以前只数根目录，文档落在 tools\\音乐、tools\\表情第10类 里就被漏掉（7 vs 实际9）。
+    改成全盘递归 + 按类号去重：同一类只算一次，避免一个类多份文件重复加分。"""
+    pat = re.compile(r'乐谱学习_第(\d+)类')
+    seen = set()
+    for dirpath, _, files in os.walk(ROOT):
+        for f in files:
+            m = pat.search(f)
+            if m and f.endswith('.md'):
+                seen.add(int(m.group(1)))
+    return len(seen)
+
+
 def evidence():
     """能力指标 v3（2026-11-18）：每项拆成 2-3 个子项，各按"证据量/覆盖率/新鲜度"打分，全部可重算。
     权重是有意设得比现状高的：能拿满分说明真的做到位了，不是拿数量凑分。"""
@@ -222,7 +235,7 @@ def evidence():
     msec = master_seconds()
     qualified = wav if 170 <= msec <= 200 else 0        # 合格的成品：170-200 秒
     words = count_files(ROOT, '.md', r'_词\.md$')
-    lessons = count_files(ROOT, '.md', r'^乐谱学习_第\d+类')
+    lessons = lesson_classes()
     archive = os.path.exists(os.path.join(ROOT, '学习归档', '归档清单.json'))
 
     n_rep, n_recent, has_table = reports_info()
@@ -286,6 +299,37 @@ def evidence():
     # 反思：台账笔数 45（目标 30 笔）/ 近 7 天在记 25 / 记录带数据 30
     ev['反思'] = (clamp(45 * pct(js['n'] / 30.0) + 25 * (1 if js['fresh'] else 0) + 30 * js['detail_ratio']),
                   '台账%d/30笔(45)·近7天记账%s(25)·带数据%.0f%%(30)' % (js['n'], '是' if js['fresh'] else '否', js['detail_ratio'] * 100))
+
+    # 回忆（2026-11-19 加）：可复查索引 40（问题库/愉悦值/版本账本/归档清单 各 10，30 天内更新算在账）
+    #                   命中台账 35（近 7 天"命中"≥5 条满分）/ 沉淀条目 25（问题+学习类+版本记录，目标 30 条）
+    _books = [os.path.join(DIR, '问题库.json'), JOY,
+              os.path.join(DIR, '版本账本.json'),
+              os.path.join(ROOT, '学习归档', '归档清单.json')]
+    idx = sum(10 for p in _books if os.path.exists(p) and _mtime_days(p) <= 30)
+    hits7, n_rec = 0, 0
+    try:
+        with open(os.path.join(DIR, '回忆台账.json'), encoding='utf-8-sig') as f:
+            _rj = json.load(f)
+        _recs = _rj.get('记录', [])
+        n_rec = len(_recs)
+        for _r in _recs:
+            try:
+                if _r.get('结果') == '命中' and (datetime.date.today() -
+                                                 datetime.date.fromisoformat(str(_r.get('日期', '')))).days <= 7:
+                    hits7 += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+    sunk = iss['total'] + lessons
+    try:
+        with open(os.path.join(DIR, '版本账本.json'), encoding='utf-8-sig') as f:
+            sunk += len(json.load(f).get('记录', []))
+    except Exception:
+        pass
+    ev['回忆'] = (clamp(idx + 35 * pct(hits7 / 5.0) + 25 * pct(sunk / 30.0)),
+                  '索引%d/4份(40)·近7天命中%d/5(35)·沉淀%d条/30(25)' % (idx // 10, hits7, sunk))
+
     return ev
 
 

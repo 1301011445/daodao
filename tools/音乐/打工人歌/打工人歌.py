@@ -29,28 +29,28 @@ def tones(name, octv):
 
 # ── 词：8 字一句、4+4 断句；主歌押遥条(ao)、副歌/桥段押江阳(ang)
 VERSES = [
-    ('早起赶车人挤如潮', [0, 2, 1, 2, 4, 3, 2, 0]),
-    ('早餐凉了也要吃饱', [0, 1, 2, 1, 3, 2, 1, 0]),
-    ('表格改到第五遍稿', [0, 2, 3, 2, 4, 3, 4, 2]),
-    ('抬头还是笑着说好', [0, 1, 2, 4, 5, 4, 3, 2]),
+    ('清早出门天刚放亮', [0, 2, 4, 2, 5, 4, 2, 0]),
+    ('一路小跑心里敞亮', [2, 4, 5, 4, 2, 4, 2, 0]),
+    ('活再琐碎也做成样', [0, 2, 4, 5, 4, 2, 4, 2]),
+    ('抬头笑说今天照常', [2, 0, 2, 0, 0, 2, 0, 0]),
 ]
 VERSES2 = [
-    ('加班到街灯都泛黄', [0, 2, 1, 2, 4, 3, 2, 0]),
-    ('电话里问我忙不忙', [0, 1, 2, 1, 3, 2, 1, 0]),
-    ('我说挺好别为我慌', [0, 2, 3, 2, 4, 3, 4, 2]),
-    ('谁不都是一样在扛', [0, 1, 2, 4, 5, 4, 3, 2]),
+    ('下班路上街灯正亮', [0, 2, 5, 4, 2, 4, 2, 0]),
+    ('手里的活做得漂亮', [2, 4, 5, 4, 2, 2, 0, 2]),
+    ('累了想想家里灯光', [0, 4, 2, 4, 5, 4, 2, 4]),
+    ('明天还有新的太阳', [2, 0, 2, 0, 0, 2, 0, 0]),
 ]
 CHORUS = [
-    ('把好日子扛在肩上', [0, 2, 4, 2, 7, 5, 7, 4]),
-    ('一步一步往前去闯', [0, 2, 4, 5, 7, 5, 4, 2]),
-    ('风再大我照样发光', [0, 3, 4, 7, 5, 6, 5, 4]),
-    ('把好日子扛在肩上', [0, 2, 4, 2, 7, 5, 7, 4]),
+    ('好日子就在我肩上', [0, 4, 7, 4, 0, 2, 4, 7]),
+    ('一步一寸也是成长', [2, 5, 7, 5, 2, 0, 2, 5]),
+    ('风大雨急心不慌忙', [0, 4, 7, 4, 0, 2, 4, 7]),
+    ('心里的光自己点亮', [4, 7, 5, 2, 0, 2, 5, 5]),
 ]
 BRIDGE = [
-    ('谁怕自己太过平常', [0, 1, 2, 1, 3, 4, 3, 1]),
-    ('平常也能亮一亮光', [0, 1, 2, 1, 3, 4, 3, 1]),
-    ('把手里的活做漂亮', [0, 2, 3, 2, 4, 3, 4, 2]),
-    ('明天还得照样上岗', [0, 1, 2, 1, 3, 2, 1, 0]),
+    ('平常人自有他的光', [0, 2, 4, 5, 4, 2, 0, 0]),
+    ('慢慢走也能到远方', [0, 2, 4, 5, 4, 7, 4, 2]),
+    ('心里有数就不慌张', [2, 4, 5, 4, 2, 2, 0, 0]),
+    ('一天更比一天更强', [0, 2, 4, 5, 7, 5, 2, 0]),
 ]
 BASE = {'V': 60, 'V2': 60, 'C': 67, 'B': 64}   # 主歌 C4 / 副歌 G4 / 桥段 E4
 
@@ -60,20 +60,31 @@ PROG_B = [('A', 3), ('F', 3), ('C', 4), ('G', 3)] * 2
 PROG_I = [('C', 3), ('G', 3), ('A', 3), ('F', 3), ('C', 3), ('G', 3), ('F', 3), ('G', 3)]   # 前奏/间奏
 PROG_O = [('F', 3), ('G', 3), ('C', 4), ('C', 4), ('C', 4), ('C', 4), ('C', 4), ('C', 4)]   # 尾奏
 
-def phrase_notes(base, contour, t0, short_end=False):
+# 节奏模板：(落拍位置, 时值)，每句 8 字
+RHY = {
+    'R1': ([0, 1, 2, 3, 4, 5, 5.5, 6], [1, 1, 1, 1, 1, 1, 0.5, 2]),
+    'R2': ([0, 0.5, 1, 1.5, 2, 3.5, 4.5, 6], [0.5, 0.5, 0.5, 0.5, 1.5, 1, 1, 2]),
+    'R3': ([0, 1, 2, 2.5, 4, 4.5, 5.5, 6.5], [1, 1, 0.5, 1.5, 0.5, 1, 1, 1.5]),
+    'R4': ([0, 1, 2, 3, 4, 5, 5.5, 6], [1, 1, 1, 1, 1, 1, 0.5, 1]),
+}
+VAR_RHY = {'V': 'R2', 'V2': 'R2', 'B': 'R1'}
+
+def phrase_notes(base, contour, t0, short_end=False, rhythm='R1'):
     """8 字一句：7 个整拍音 + 第 7 字半拍切分 + 末字 2 拍。
     short_end=True 只用于段末句（进副歌前）：末字只 1 拍，故意留 1 拍空，
     即第 16 类学到的「最响之前先撤掉」。
     """
-    beats = [0, 1, 2, 3, 4, 5, 5.5, 6]
-    dur = [1, 1, 1, 1, 1, 1, 0.5, 1 if short_end else 2]
+    beats, dur = RHY[rhythm]
+    dur = list(dur)
+    if short_end:
+        dur[-1] = 1
     out = []
     for i, off in enumerate(contour):
         out.append((t0 + int(beats[i] * BEAT), int(dur[i] * BEAT), base + off))
     return out
 
 # ── 伴奏：和弦 / 低音 / 分解和弦一首歌共用，按 level 决定厚度
-LEVEL_AMP = {'light': 0.5, 'verse': 1.0, 'chorus': 1.9, 'bridge': 1.4, 'mid': 1.2,
+LEVEL_AMP = {'intro': 0.80, 'light': 0.5, 'verse': 1.0, 'chorus': 1.9, 'bridge': 1.4, 'mid': 1.2,
              'build': 1.45, 'fadeout': 0.7}
 
 def add_harmony(notes, t, bars, prog, level, ramp=1.0):
@@ -94,7 +105,7 @@ def add_harmony(notes, t, bars, prog, level, ramp=1.0):
         if level in ('chorus', 'build') and bi % 2 == 0:
             notes.append(dict(t=ct, dur=4 * BEAT, pitch=tr[2] + 24, ch=2, amp=0.05 * k))
         # 间奏/前奏/尾奏用分解和弦把空出来的旋律位填上（不抢人声位置，只在中高区轻点）
-        if level in ('light', 'mid', 'build', 'fadeout'):
+        if level in ('intro', 'light', 'mid', 'build', 'fadeout'):
             for bi2, idx in enumerate((0, 1, 2, 0)):
                 notes.append(dict(t=ct + bi2 * BEAT, dur=int(0.9 * BEAT), pitch=tr[idx] + (24 if bi2 == 3 else 12),
                                   ch=2, amp=0.055 * thick * k))
@@ -119,12 +130,14 @@ def add_drums(notes, t, bars, level):
             hit(0, 'k', 0.55); hit(2, 's', 0.36)
         elif level == 'verse':
             hit(0, 'k', 0.26)
+        elif level == 'intro':                    # 前奏：四拍底鼓 + 反拍军鼓，先把律动立起来
+            hit(0, 'k', 0.34); hit(1, 's', 0.18); hit(2, 'k', 0.30); hit(3, 's', 0.18)
         elif level == 'light':
             hit(0, 'k', 0.30); hit(2, 'k', 0.30)
         for hb in (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5):
             if level in ('chorus', 'mid', 'build'):
                 hit(hb, 'h', 0.14)
-            elif level in ('bridge', 'verse', 'fadeout', 'light'):
+            elif level in ('bridge', 'verse', 'fadeout', 'light', 'intro'):
                 if hb in (0.0, 2.0):
                     hit(hb, 'h', 0.06 if level != 'bridge' else 0.10)
     return notes
@@ -139,7 +152,7 @@ def build():
     notes, mel_meta, secs = [], [], []
     t = 0
     plan = [
-        ('I1', 'inst', PROG_I, 8, 'light', None),
+        ('I1', 'inst', PROG_I, 8, 'intro', None),
         ('V',  'lyric', PROG_V, 8, 'verse', VERSES),
         ('C1', 'lyric', PROG_C, 8, 'chorus', CHORUS),
         ('I2', 'inst', PROG_I, 8, 'mid', None),
@@ -154,15 +167,16 @@ def build():
         start = t
         notes = add_harmony(notes, t, bars, prog, level)
         notes = add_drums(notes, t, bars, level)
-        if tag == 'I1':                      # 前奏：钩子先行
-            notes = add_hook_tease(notes, t, CHORUS[0][1])
+        if tag == 'I1':                      # 前奏：两小节立律动，再点钩子
+            notes = add_hook_tease(notes, t + 2 * 4 * BEAT, CHORUS[0][1])
         if kind == 'lyric':
             chorus = (tag.startswith('C'))
             base = BASE['V' if tag == 'V' else ('V2' if tag == 'V2' else ('B' if tag == 'B' else 'C'))]
             for li, (text, contour) in enumerate(lines):
                 t0 = t + li * 8 * BEAT
                 sec_last = (li == len(lines) - 1) and (not chorus)
-                for (nt, nd, pi) in phrase_notes(base, contour, t0, short_end=sec_last):
+                rhy = 'R4' if sec_last else ('R3' if chorus else VAR_RHY.get(tag, 'R1'))
+                for (nt, nd, pi) in phrase_notes(base, contour, t0, short_end=sec_last, rhythm=rhy):
                     notes.append(dict(t=nt, dur=nd, pitch=pi, ch=0,
                                       amp=0.38 if chorus else 0.24))
                 mel_meta.append(dict(text=text, t=t0, base=base, chorus=chorus,

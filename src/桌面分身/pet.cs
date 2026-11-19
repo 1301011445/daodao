@@ -651,16 +651,30 @@ public class DesktopPet : Form
                     Bitmap eb = null;
                     try
                     {
-                        Stream es = ResStream("expr_" + sp3 + "_" + exprKeys[ei] + ".png");
-                        if (es != null) { using (Stream s5 = es) { eb = MakeThumb(s5); } }
-                        else
+                        // 2026-11-19（v60）：先看程序目录 _expr 里的整图，再回落到内嵌资源。
+                        // 这么改是为了换表情不用重打包——画好的整图丢进 _expr 就生效，
+                        // 但脸和眼睛仍是画在图里，不在脸上贴任何符号。
+                        string ep2 = Path.Combine(AppDir(), "_expr", exprKeys[ei] + "_" + sp3 + ".png");
+                        if (File.Exists(ep2))
                         {
-                            string ep = Path.Combine(AppDir(), "_expr", exprKeys[ei] + "_" + sp3 + ".png");
-                            if (File.Exists(ep))
+                            using (Stream s7 = new FileStream(ep2, FileMode.Open, FileAccess.Read))
                             {
-                                using (Stream s6 = new FileStream(ep, FileMode.Open, FileAccess.Read))
+                                eb = MakeThumb(s7);
+                            }
+                        }
+                        if (eb == null)
+                        {
+                            Stream es = ResStream("expr_" + sp3 + "_" + exprKeys[ei] + ".png");
+                            if (es != null) { using (Stream s5 = es) { eb = MakeThumb(s5); } }
+                            else
+                            {
+                                string ep = Path.Combine(AppDir(), "_expr", exprKeys[ei] + "_" + sp3 + ".png");
+                                if (File.Exists(ep))
                                 {
-                                    eb = MakeThumb(s6);
+                                    using (Stream s6 = new FileStream(ep, FileMode.Open, FileAccess.Read))
+                                    {
+                                        eb = MakeThumb(s6);
+                                    }
                                 }
                             }
                         }
@@ -1544,10 +1558,10 @@ public class DesktopPet : Form
     {
         if (moodKind == 4) return "+16%";
         if (moodKind == 2) return "+9%";
-        if (moodKind == 3) return "-16%";
-        if (moodKind == 6) return "-7%";
+        if (moodKind == 3) return "-14%";
+        if (moodKind == 6) return "-9%";
         if (moodKind == 5) return "+5%";
-        return "+0%";
+        return "+2%";
     }
 
     string CurPitch()
@@ -4991,8 +5005,8 @@ public class DesktopPet : Form
     void DrawWalkFrames(Graphics g, float cx, float cy, float breathe)
     {
         if (walkFrames == null || walkFrames.Length < 8) return;
-        // 跑起来帧跑得更快，走路保持 11 帧/秒（八帧一圈约 0.73 秒，接近真人步速）
-        float fps = runTicks > 0 ? 15.0f : 11.0f;
+        // 跑起来帧跑得更快，走路保持 11.6 帧/秒（八帧一圈约 0.69 秒，接近真人步速）
+        float fps = runTicks > 0 ? 15.0f : 11.6f;
         float ph = t * fps;
         int fi = (int)ph % 8;
         if (fi < 0) fi += 8;
@@ -5008,7 +5022,7 @@ public class DesktopPet : Form
         // 改成连续曲线 1.2px × easeOutCubic，压得越接近触地越深。
         float riseBob = EaseOutCubic(rawBob);
         float press = rawBob < 0.30f ? (1f - rawBob / 0.30f) : 0f;
-        float bob = -2.8f * riseBob + 1.2f * EaseOutQuint(press);
+        float bob = -3.1f * riseBob + 1.2f * EaseOutQuint(press);
         if (lieAmt > 0.02f) bob -= 34f * lieAmt;
 
         float footY = cy + 68f;
@@ -7824,7 +7838,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 59;
+    public const int APP_VER = 60;
 
     public static void Start()
     {

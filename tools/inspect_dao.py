@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """「道」两端自动巡检：版本、名单、图片、包内、进程、发布一致性。
 用法：python inspect_dao.py
 输出：F:\\Daodao\\巡检报告\\巡检_YYYYMMDD_HHMM.txt，末行 PASS / FAIL
@@ -337,6 +337,20 @@ def cap_check(lines, problems):
         if not s or s.startswith('【能力激励】') or s.startswith('CAP_STATE='):
             continue
         lines.append(l)
+
+    # 回忆项存在性（2026-11-19 加）：缺项或证据为空，说明奖惩机制没接上
+    try:
+        with open(os.path.join(ROOT, '自我状态', '能力激励.json'), encoding='utf-8-sig') as f:
+            _caps = json.load(f).get('能力', {})
+        if '回忆' not in _caps:
+            problems.append('WARN 能力激励：缺「回忆」项')
+            lines.append('  ! 回忆项未登记（第十一项没接上）')
+        elif not str(_caps.get('回忆', {}).get('证据', '')).strip():
+            problems.append('WARN 能力激励：回忆项证据为空')
+            lines.append('  ! 回忆项证据为空（分数无从重算）')
+    except Exception as e:
+        problems.append('WARN 能力激励：回忆项读不出来（%s）' % e)
+
     if 'CAP_STATE=WARN' in out:
         for l in out.splitlines():
             s = l.strip()
@@ -355,6 +369,7 @@ AB_ACTIONS = {
     '反应': '压耗时：自检口目标 <100ms，用一次剖析找瓶颈（别靠感觉）',
     '思考': '沉淀制度：本轮新规则写进对应制度文档，不留只在脑子里',
     '反思': '记台账：每天把判断和后果记一笔（愉悦值/问题库都算账）',
+    '回忆': '回忆闭环：回忆台账 7 天内 ≥5 条命中，且每次引用都落到文件条目上（不许口头带过）',
 }
 
 

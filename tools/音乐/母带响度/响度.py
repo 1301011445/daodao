@@ -8,7 +8,7 @@
   这是本机没有重采样与系数表时的取舍，写在文档"没做的"里。
 - 真峰值：不做 4 倍过采样，只在峰值附近样本做三次插值估计，属**近似**，不是 dBTP 的权威值。
 """
-import math, os, struct, wave
+import sys, math, os, struct, wave
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, '..', '打工人歌', 'out', '把好日子扛在肩上.wav')
@@ -89,10 +89,17 @@ def write_scaled(samples, gain, path):
     data = struct.pack('<%dh' % len(samples),
                        *[max(-32767, min(32767, int(v * gain))) for v in samples])
     w = wave.open(path, 'wb'); w.setnchannels(1); w.setsampwidth(2)
-    w.setframerate(44100); w.writeframes(data); w.close()
+    w.setframerate(sr); w.writeframes(data); w.close()   # 2026-11-19 修：原来硬写 44100，源是 22050，导致 180 秒的母带被标成 90 秒
 
 if __name__ == '__main__':
     os.makedirs(os.path.join(HERE, 'out'), exist_ok=True)
+    # 2026-11-19 优化：支持任意曲目，参数 1=源 wav，参数 2=输出名（不给就用默认职场版）
+    if len(sys.argv) > 1:
+        SRC = sys.argv[1]
+        nm = os.path.splitext(os.path.basename(SRC))[0]
+        if len(sys.argv) > 2:
+            nm = sys.argv[2]
+        OUT = os.path.join(HERE, 'out', nm + '_母带版.wav')
     s, sr, ch = read_wav(SRC)
     sec = len(s) / float(sr)
     print('源文件：%.2f 秒，声道 %d（%s），采样率 %d'
@@ -128,7 +135,7 @@ if __name__ == '__main__':
         if abs(a) > limit:
             a = math.copysign(limit * math.tanh(abs(a) / limit), a)
         y.append(a * 32768.0)
-    out_b = os.path.join(HERE, 'out', '把好日子扛在肩上_母带版_限幅.wav')
+    out_b = os.path.join(HERE, 'out', os.path.splitext(os.path.basename(OUT))[0] + '_限幅.wav')
     write_scaled(y, 1.0, out_b)
     s3, sr3, _ = read_wav(out_b)
     l3, _n = lufs_integrated(s3, sr3)

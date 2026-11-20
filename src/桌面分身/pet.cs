@@ -7954,90 +7954,6 @@ public class DesktopPet : Form
         if (!bubbleForm.Visible) bubbleForm.Show();
     }
 
-    void DrawBubble(Graphics g)
-    {
-        if (bubble == null) return;
-        float fade = 1f;
-        if (bubbleFrames <= 16) fade = bubbleFrames / 16f;   // 说完最后十几帧淡掉、划走
-        if (fade > 1f) fade = 1f;
-        if (fade < 0f) fade = 0f;
-        if (fade <= 0.01f) return;
-
-        using (Font f = new Font("Microsoft YaHei", 9f))
-        {
-            // 话少气泡就窄一点，别一条大白条横糊满整屏
-            int perLine = 22;
-            int rows = (int)Math.Ceiling((double)bubble.Length / perLine);
-            if (rows < 1) rows = 1;
-            if (rows > 4) rows = 4;
-            float maxW = W - 40f;
-            int charsFirst = Math.Min(bubble.Length, perLine);
-            // 按真实文字量算宽度，凭字数估会窄那么一点点，末尾就被省略号吃掉
-            string firstLine = bubble.Length <= perLine ? bubble : bubble.Substring(0, perLine);
-            float needW = g.MeasureString(firstLine, f).Width + 34f;
-            if (needW > maxW) needW = maxW;
-            if (needW < 70f) needW = 70f;
-            // 高度按真实排版量：字数是估的，一段诗换行几行只有量过才知道，
-            // 估少了末一句就被气泡切掉半截
-            SizeF msz = g.MeasureString(bubble, f, (int)(needW - 20f));
-            float bh = msz.Height + 10f;
-            if (bh > 112f) bh = 112f;
-            float bx = W / 2f - needW / 2f;
-            float by = 5f;
-            float slide = (1f - fade) * 26f;   // 收尾时整块往右划出去
-
-            // 透明键窗口里半透明填充会跟键色混成品红，所以气泡一律实底，
-            // 进出只靠位置滑，不靠透明渐变
-            int fillA = 255;
-            int lineA = (int)(145 + 110f * (1f - fade));
-            int txtA = 255;
-            if (txtA < 0) txtA = 0;
-
-            GraphicsPath bp3 = new GraphicsPath();
-            float rr = 7f;
-            bp3.AddArc(bx + slide, by, rr * 2f, rr * 2f, 180f, 90f);
-            bp3.AddArc(bx + slide + needW - rr * 2f, by, rr * 2f, rr * 2f, 270f, 90f);
-            bp3.AddArc(bx + slide + needW - rr * 2f, by + bh - rr * 2f, rr * 2f, rr * 2f, 0f, 90f);
-            bp3.AddArc(bx + slide, by + bh - rr * 2f, rr * 2f, rr * 2f, 90f, 90f);
-            bp3.CloseFigure();
-            // 透明键窗口只认全透明和全不透明。抗锯齿造出来的那圈半透明像素，
-            // 不管外面再罩几层白都会跟洋红键色混成粉紫，所以气泡几何干脆不开抗锯齿：
-            // 边是硬像素，圆角看上去有点台阶，但至少干净
-            SmoothingMode oldSM = g.SmoothingMode;
-            PixelOffsetMode oldPO = g.PixelOffsetMode;
-            g.SmoothingMode = SmoothingMode.None;
-            g.PixelOffsetMode = PixelOffsetMode.None;
-            using (SolidBrush bg = new SolidBrush(Color.FromArgb(fillA, 252, 253, 255)))
-            {
-                g.FillPath(bg, bp3);
-            }
-            // 底下一个小尖角指着人
-            PointF[] tri = {
-                new PointF(W / 2f - 6f + slide, by + bh - 2f),
-                new PointF(W / 2f + slide, by + bh + 7f),
-                new PointF(W / 2f + 6f + slide, by + bh - 2f)
-            };
-            using (SolidBrush bg = new SolidBrush(Color.FromArgb(fillA, 252, 253, 255)))
-            {
-                g.FillPolygon(bg, tri);
-            }
-            using (Pen bp = new Pen(Color.FromArgb(lineA, 138, 154, 186), 1f))
-            {
-                g.DrawPath(bp, bp3);
-            }
-            g.SmoothingMode = oldSM;
-            g.PixelOffsetMode = oldPO;
-            bp3.Dispose();
-
-            RectangleF txtRect = new RectangleF(bx + 10f + slide, by + 5f, needW - 20f, bh - 6f);
-            StringFormat sf = new StringFormat();
-            sf.Trimming = StringTrimming.EllipsisCharacter;
-            using (SolidBrush tb = new SolidBrush(Color.FromArgb(txtA, 44, 46, 62)))
-            {
-                g.DrawString(bubble, f, tb, txtRect, sf);
-            }
-        }
-    }
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
@@ -8426,7 +8342,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 82;
+    public const int APP_VER = 83;
 
     public static void Start()
     {

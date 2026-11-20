@@ -1430,7 +1430,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='82';
+  var HTML_VER='83';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1558,17 +1558,8 @@ setInterval(daoSyncJoy, 60000);
     if (!it) return;
     // 三首真歌是 IMA ADPCM 打包的，统一交给本地播放器，别再按 music/*.wav 取
     if (window.daoPlaySong) { window.daoPlaySong(idx); return; }
-    try {
-      if (daoAudio) { try { daoAudio.pause(); } catch (e) {} daoAudio = null; }
-      daoAudio = new Audio('music/' + it.id + '.wav');
-      daoAudio.onended = function () { daoMIdx = -1; daoMusicMark(); say('这首放完了'); };
-      daoAudio.onerror = function () { say('这首没打进包里，回头补上'); };
-      var pr = daoAudio.play();
-      if (pr && pr.catch) { pr.catch(function () { say('手机没让出声，点一下屏幕再试'); }); }
-      daoMIdx = idx;
-      daoMusicMark();
-      say('放一首：' + it.name);
-    } catch (e) { say('这台手机放不了音频'); }
+    // 包里只剩 adp 版，没有 wav 兜底了：本地播放器没就位就直接说清楚
+    say('曲库还没就位，等页面加载完再点');
   }
   (function () {
     var tag = document.getElementById('musicTag');
@@ -1653,8 +1644,6 @@ setInterval(daoSyncJoy, 60000);
     if (!text) return;
     lastText = text;
     // 说话前先把本地曲库停掉，避免对话里混进歌声
-    try { if (window.daoStopMusic) window.daoStopMusic(); } catch (e) {}
-    // 出声通道互斥：要说就先停歌，要放歌就先停话
     try { if (window.daoStopMusic) window.daoStopMusic(); } catch (e) {}
     try { if (window.DaoNative && DaoNative.stopAll) DaoNative.stopAll(); } catch (e) {}
     if (EDGE_IDX[voiceMode] !== undefined) {

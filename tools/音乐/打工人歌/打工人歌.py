@@ -44,15 +44,16 @@ CHORUS = [
     ('好日子就在我肩上', [0, 4, 7, 4, 0, 2, 4, 7]),
     ('一步一寸也是成长', [2, 5, 7, 5, 2, 0, 2, 5]),
     ('风大雨急心不慌忙', [0, 4, 7, 4, 0, 2, 4, 7]),
-    ('心里的光自己点亮', [4, 7, 5, 2, 0, 2, 5, 5]),
+    ('一盏小灯自己点亮', [4, 7, 5, 2, 0, 2, 5, 5]),
 ]
 BRIDGE = [
     ('平常人自有他的光', [0, 2, 4, 5, 4, 2, 0, 0]),
-    ('慢慢走也能到远方', [0, 2, 4, 5, 4, 7, 4, 2]),
-    ('心里有数就不慌张', [2, 4, 5, 4, 2, 2, 0, 0]),
+    ('地铁末班照样赶上', [0, 2, 4, 5, 4, 7, 4, 2]),
+    ('工牌一别腰杆更壮', [2, 4, 5, 4, 2, 2, 0, 0]),
     ('一天更比一天更强', [0, 2, 4, 5, 7, 5, 2, 0]),
 ]
-BASE = {'V': 60, 'V2': 60, 'C': 67, 'B': 64}   # 主歌 C4 / 副歌 G4 / 桥段 E4
+BASE = {'V': 60, 'V2': 60, 'C': 67, 'B': 64}
+BASE['C1'], BASE['C2'], BASE['C3'] = 65, 67, 69   # 三遍副歌逐遍抬 2 度：峰 72/74/76（第30类）   # 主歌 C4 / 副歌 G4 / 桥段 E4
 
 PROG_V = [('C', 3), ('A', 3), ('F', 3), ('G', 3)] * 2
 PROG_C = [('F', 3), ('G', 3), ('E', 3), ('A', 3), ('D', 3), ('G', 3), ('C', 4), ('C', 4)]
@@ -68,6 +69,12 @@ RHY = {
     'R4': ([0, 1, 2, 3, 4, 5, 5.5, 6], [1, 1, 1, 1, 1, 1, 0.5, 1]),
 }
 VAR_RHY = {'V': 'R2', 'V2': 'R2', 'B': 'R1'}
+
+# 双音色分工（每首 >=2 音色：主歌自然声、副歌少年声）
+VOICE = {'V': 4, 'V2': 4, 'B': 4, 'C1': 0, 'C2': 0, 'C3': 0}
+VOCAL_CH = (0, 4)
+VOICE_GAIN = 1.02
+
 
 def phrase_notes(base, contour, t0, short_end=False, rhythm='R1'):
     """8 字一句：7 个整拍音 + 第 7 字半拍切分 + 末字 2 拍。
@@ -171,14 +178,15 @@ def build():
             notes = add_hook_tease(notes, t + 2 * 4 * BEAT, CHORUS[0][1])
         if kind == 'lyric':
             chorus = (tag.startswith('C'))
-            base = BASE['V' if tag == 'V' else ('V2' if tag == 'V2' else ('B' if tag == 'B' else 'C'))]
+            base = BASE[tag] if tag in BASE else BASE['V' if tag == 'V2' else 'C']
             for li, (text, contour) in enumerate(lines):
                 t0 = t + li * 8 * BEAT
                 sec_last = (li == len(lines) - 1) and (not chorus)
                 rhy = 'R4' if sec_last else ('R3' if chorus else VAR_RHY.get(tag, 'R1'))
+                vch = VOICE.get(tag, 0)
                 for (nt, nd, pi) in phrase_notes(base, contour, t0, short_end=sec_last, rhythm=rhy):
-                    notes.append(dict(t=nt, dur=nd, pitch=pi, ch=0,
-                                      amp=0.38 if chorus else 0.24))
+                    notes.append(dict(t=nt, dur=nd, pitch=pi, ch=vch,
+                                      amp=(0.38 if chorus else 0.24) * (VOICE_GAIN if vch == 4 else 1.0)))
                 mel_meta.append(dict(text=text, t=t0, base=base, chorus=chorus,
                                      peaks=max(base + o for o in contour)))
         secs.append(dict(tag=tag, kind=kind, level=level, t0=start,
@@ -192,7 +200,7 @@ def verify(notes, mel):
     for i, m in enumerate(mel):
         line = m['text']
         assert len(line) == 8, '每句必须 8 字：%s' % line
-        ph = sorted([x for x in notes if x['ch'] == 0 and m['t'] <= x['t'] < m['t'] + 8 * BEAT],
+        ph = sorted([x for x in notes if x['ch'] in VOCAL_CH and m['t'] <= x['t'] < m['t'] + 8 * BEAT],
                     key=lambda x: x['t'])
         assert len(ph) == 8, '%s 音符数不是 8' % line
         beats = [(x['t'] - m['t']) / float(BEAT) for x in ph]
@@ -210,7 +218,7 @@ def verify(notes, mel):
         ok = ok and ok_word and ok_end
     vmax = max(m['peaks'] for m in mel if not m['chorus'] and m['base'] == 60)
     cmax = max(m['peaks'] for m in mel if m['chorus'])
-    span = max(x['pitch'] for x in notes if x['ch'] == 0) - min(x['pitch'] for x in notes if x['ch'] == 0)
+    span = max(x['pitch'] for x in notes if x['ch'] in VOCAL_CH) - min(x['pitch'] for x in notes if x['ch'] in VOCAL_CH)
     print('副歌峰值 %d − 主歌峰值 %d = %d 半音（≥7） | 全曲音域 %d 半音（≤16）'
           % (cmax, vmax, cmax - vmax, span))
     return ok and (cmax - vmax >= 7) and span <= 16
@@ -228,7 +236,7 @@ def main():
         'cl', os.path.join(HERE, '..', '和弦对比', 'chord_lib.py'))
     cl = importlib.util.module_from_spec(spec2); spec2.loader.exec_module(cl)
     cl.write_mid([dict(t=x['t'], dur=x['dur'], pitch=x['pitch'], vel=90,
-                       ch=0 if x['ch'] == 0 else (1 if x['ch'] in (1, 2) else 2))
+                       ch=0 if x['ch'] in VOCAL_CH else (1 if x['ch'] in (1, 2) else 2))
                   for x in notes if x['ch'] != 3], PPQ, mid, TEMPO)
     w = wave.open(wav, 'rb'); n = w.getnframes()
     s = struct.unpack('<%dh' % n, w.readframes(n)); w.close()

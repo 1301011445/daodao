@@ -130,12 +130,53 @@ public class DesktopPet : Form
     // 说话时嘴的开合时段（毫秒，Environment.TickCount 计时）
     int speakMouthStart = 0;
     int speakMouthUntil = 0;
+    // v61（第26类落地）：说话时点头不再写死频率，改按曲子的拍长点头。
+    // 阈值从 口型阈值.json 读（谱子驱动动作检查.py 生成），读不到就用 92BPM 的 652.2ms 兜底。
+    static float nodBeatMs = 652.2f;
+    static bool nodThLoaded = false;
+    static void LoadNodThreshold()
+    {
+        if (nodThLoaded) return;
+        nodThLoaded = true;
+        try
+        {
+            string[] cands = new string[] {
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "口型阈值.json"),
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"tools\音乐\谱子驱动动作\口型阈值.json")
+            };
+            foreach (string p in cands)
+            {
+                if (!File.Exists(p)) continue;
+                string txt = File.ReadAllText(p, Encoding.UTF8);
+                var m = System.Text.RegularExpressions.Regex.Match(txt, "\"点头拍长_ms\"\\s*:\\s*([0-9.]+)");
+                if (!m.Success) m = System.Text.RegularExpressions.Regex.Match(txt, "\"小节_ms\"\\s*:\\s*([0-9.]+)");
+                if (m.Success)
+                {
+                    float v = 0f;
+                    if (float.TryParse(m.Groups[1].Value, out v) && v >= 200f && v <= 4000f)
+                    {
+                        nodBeatMs = v;
+                        return;
+                    }
+                }
+            }
+        }
+        catch { }
+    }
+
     int walkTicks = 0;
     int walkTargetX = -999999;
     int walkTargetY = -999999;
     int hopPend = 0;
     int hopWait = 260;
     int runTicks = 0;         // 跑：距离远时加速、前倾、步频更快
+    // 2026-11-20：步频跟真实位移联动。原来帧率固定在 11.6/s，而移动有 3px、7px 两档，
+    // 快走时一步跨得远、脚频不变，脚底就打滑。这里按"每秒实际挪多少像素"反推步频，
+    // 再逐跳平滑靠近，起步/停下都不会突然变速。
+    float walkFpsCur = 11.6f;
+    float moveSpeedPxPerSec = 0f;
+    float walkPhase = 0f;     // 走路相位（0..8，一帧一格），自己累加，帧率变化也不会跳帧
+    float walkLastT = -1f;
     int thinkTicks = 0;
     int thinkWait = 300;
     int diagCount = 0;
@@ -766,6 +807,23 @@ public class DesktopPet : Form
 
     static DesktopPet Self;
 
+    // 给 HTTP 那边（SyncServer 是另一个类）一个能调的跨网同步入口
+    public static string ForgetText(string t)
+    {
+        try { return Self == null ? "实例还没好" : Self.MemForget(t); }
+        catch (Exception ex) { return "忘掉失败：" + ex.Message; }
+    }
+
+    public static string SyncNetText()
+    {
+        try
+        {
+            if (Self == null) return "SYNCERR|实例还没好";
+            return "SYNC|" + Self.SyncPullMerge() + "|" + Self.SyncPush();
+        }
+        catch (Exception ex) { return "SYNCERR|" + ex.Message; }
+    }
+
     // 外面（豆包、手机、命令行）让它说一句
     public static void Push(string t)
     {
@@ -1139,7 +1197,9 @@ public class DesktopPet : Form
         if (lv >= 0) joyVal = (float)Math.Max(0, Math.Min(100, lv));
         int ab = LedgerAbAvg();
         if (ab < 0) ab = AbAvg();
-        return "value=" + ((int)Math.Round(joyVal)) + "|kind=" + JoyKind() + "|net=" + joyTodayNet + "|abil=" + ab;
+        // v62：多带一个 ts，手机连不上电脑时能说清"这是几点同步到的数"，不至于只显示 --
+        return "value=" + ((int)Math.Round(joyVal)) + "|kind=" + JoyKind() + "|net=" + joyTodayNet + "|abil=" + ab
+            + "|ts=" + DateTime.Now.ToString("yyyy-MM-dd HH:mm");
     }
 
     // ================= 能力台账（自省用的记分板，说明见 F:\Daodao\道_能力迭代制度.md）=================
@@ -1640,6 +1700,7 @@ public class DesktopPet : Form
         LoadPoses();
         LoadProps();
         LoadScenes();
+        LoadNodThreshold();   // v61：说话点头按谱子拍长
         species = PickDailySpecies();
         // 有整套动作图的形象才有手脚能真动，所以每天就在这几个里换一个；
         // 一个都没有的时候才退回原来的随机单张静态图
@@ -2125,7 +2186,7 @@ public class DesktopPet : Form
                 string askPath = Path.Combine(exeDir, "ask_story.txt");
                 File.WriteAllText(askPath, "来一个", new System.Text.UTF8Encoding(false));
                 ProcessStartInfo pi = new ProcessStartInfo();
-                pi.FileName = "python";
+                pi.FileName = PyExe();
                 pi.Arguments = "\"" + py + "\" " + cmd + " --file \"" + askPath + "\"";
                 pi.UseShellExecute = false;
                 pi.CreateNoWindow = true;
@@ -2237,6 +2298,8 @@ public class DesktopPet : Form
         // 四、记性
         ToolStripMenuItem gMind = new ToolStripMenuItem("记性和学问");
         gMind.DropDownItems.Add("我记住了什么", null, new EventHandler(MenuMemory));
+
+        gMind.DropDownItems.Add("同步记忆（跨网）", null, new EventHandler(MenuSync));
         gMind.DropDownItems.Add("我今天学了什么", null, new EventHandler(MenuKnowledge));
         m.Items.Add(gMind);
 
@@ -2471,7 +2534,7 @@ public class DesktopPet : Form
                 else
                 {
                     ProcessStartInfo pi = new ProcessStartInfo();
-                    pi.FileName = "python";
+                    pi.FileName = PyExe();
                     pi.Arguments = "\"" + py + "\" --level 3";
                     pi.UseShellExecute = false;
                     pi.CreateNoWindow = true;
@@ -2761,6 +2824,84 @@ public class DesktopPet : Form
         }
     }
 
+    // 本机装了多套 python，只有 E:\Python313 那套装了 edge_tts。
+    // 直接写 "python" 在服务进程里解析不到，合成必然失败（v67 踩过：/tts 一直回 TTSFAIL）
+    public static string PyExe()
+    {
+        string[] cands = new string[] {
+            @"E:\Python313\python.exe",
+            @"C:\Python313\python.exe",
+            @"C:\Users\LDY\AppData\Local\Programs\Python\Python313\python.exe"
+        };
+        foreach (string s in cands) { try { if (File.Exists(s)) return s; } catch { } }
+        return "python";
+    }
+
+    // 给手机端用的：只合成不播，返回 mp3 文件路径。手机拿这条路放电脑的声音，
+    // 音色比手机自带 TTS 自然得多。缓存键跟播放用同一套 text|voice，念过就直接复用
+    public static string TtsFile(string text, string voice)
+    {
+        try
+        {
+            if (text == null) return "";
+            string t2 = text.Replace("\r", " ").Replace("\n", " ").Trim();
+            if (t2.Length == 0) return "";
+            if (t2.Length > 90) t2 = t2.Substring(0, 90);
+            if (voice == null || voice.Trim().Length == 0) voice = "zh-CN-XiaoxiaoNeural";
+            string dir = Path.Combine(Path.GetTempPath(), "daovoice");
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            string key = "tts" + Math.Abs((t2 + "|" + voice + "|tts9").GetHashCode()).ToString();
+            string mp3 = Path.Combine(dir, key + ".mp3");
+            string txt = Path.Combine(dir, key + ".txt");
+            if (File.Exists(mp3) && new FileInfo(mp3).Length > 2048) return mp3;
+            string py = Path.Combine(dir, "say.py");
+            if (!File.Exists(py))
+            {
+                File.WriteAllText(py,
+                    "import asyncio,sys\n" +
+                    "from edge_tts import Communicate\n" +
+                    "t=open(sys.argv[1],'r',encoding='utf-8').read()\n" +
+                    "v=sys.argv[3] if len(sys.argv)>3 else 'zh-CN-XiaoxiaoNeural'\n" +
+                    "r=sys.argv[4] if len(sys.argv)>4 else '+0%'\n" +
+                    "p=sys.argv[5] if len(sys.argv)>5 else '+0Hz'\n" +
+                    "asyncio.run(Communicate(t,v,rate=r,pitch=p).save(sys.argv[2]))\n",
+                    new System.Text.UTF8Encoding(false));
+            }
+            File.WriteAllText(txt, t2, new System.Text.UTF8Encoding(false));
+            ProcessStartInfo pi = new ProcessStartInfo();
+            pi.FileName = PyExe();
+            pi.Arguments = "\"" + py + "\" \"" + txt + "\" \"" + mp3 + "\" \"" + voice + "\" \"+0%\" \"+0Hz\"";
+            pi.UseShellExecute = false;
+            pi.CreateNoWindow = true;
+            pi.WindowStyle = ProcessWindowStyle.Hidden;
+            Process p = Process.Start(pi);
+            p.WaitForExit(40000);
+            if (File.Exists(mp3) && new FileInfo(mp3).Length > 2048) return mp3;
+        }
+        catch { }
+        return "";
+    }
+
+    // 首字延迟的真相：edge_tts 联网合成，冷启一句 3.3 秒，命中缓存只要 7ms。
+    // 所以启动时后台把高频短句先合成好，日常应答直接走缓存，开口不用等
+    public static void PrewarmTts()
+    {
+        System.Threading.Thread t = new System.Threading.Thread(delegate()
+        {
+            string[] lines = new string[] {
+                "道在呢，你说吧", "我在呢", "来啦", "好嘞", "嗯嗯，我听着呢",
+                "这事儿我记下了", "今天感觉怎么样", "别急，慢慢来",
+                "我先看看", "一会儿就来", "还没好呢", "那我先忙着"
+            };
+            foreach (string s in lines)
+            {
+                try { TtsFile(s, "zh-CN-XiaoxiaoNeural"); } catch { }
+            }
+        });
+        t.IsBackground = true;
+        t.Start();
+    }
+
     // 排着队一句一句往外播，绝不叠着说
     void SpeakLoop()
     {
@@ -2796,7 +2937,9 @@ public class DesktopPet : Form
             // 同样一句"我在呢"，用同一个平语气念出来像个播报器
             string rate = CurRate();
             // 短句念慢一点、长句稍快：真人说短句是随口吐出来的，长句才收着赶
-            if (zc <= 10) rate = NudgeRate(rate, -3);
+            // v0.71 把短句从 -3 收到 -1：慢 3% 在十来个字的问候上听着像念稿，
+            // 也把「第一个字出来」的时间往后拖；-1 保留一点松弛感但出口更快
+            if (zc <= 10) rate = NudgeRate(rate, -1);
             else if (zc >= 26) rate = NudgeRate(rate, 4);
             string pitch = CurPitch();
             string seed = t2 + "|" + voice + "|" + (hasFx ? fx : "") + "|" + rate + "|" + pitch;
@@ -2834,11 +2977,13 @@ public class DesktopPet : Form
                         "sd.wait()\n",
                         new System.Text.UTF8Encoding(false));
                 }
-                if (!File.Exists(play))
+                if (!File.Exists(play) || (File.ReadAllText(play, System.Text.Encoding.Unicode).IndexOf(PyExe(), StringComparison.OrdinalIgnoreCase) < 0
+                    && File.ReadAllText(play).IndexOf(PyExe(), StringComparison.OrdinalIgnoreCase) < 0))
                 {
+                    // play.ps1 里不能再写裸 "python"（PATH 里没有它），否则播放在静默中失败
                     File.WriteAllText(play,
                         "param([string]$f)\r\n" +
-                        "& \"python\" \"$PSScriptRoot\\play_mp3.py\" $f\r\n",
+                        "& \"" + PyExe() + "\" \"$PSScriptRoot\\play_mp3.py\" $f\r\n",
                         new System.Text.UTF8Encoding(true));
                 }
 
@@ -2846,7 +2991,7 @@ public class DesktopPet : Form
                 {
                     File.WriteAllText(txt, t2, new System.Text.UTF8Encoding(false));
                     ProcessStartInfo pi = new ProcessStartInfo();
-                    pi.FileName = "python";
+                    pi.FileName = PyExe();
                     if (hasFx)
                     {
                         string vfx = Path.Combine(AppDir(), "voicefx.py");
@@ -2961,7 +3106,7 @@ public class DesktopPet : Form
                 }
                 string wav = Path.Combine(VoiceDir(), "heard.wav");
                 ProcessStartInfo pi = new ProcessStartInfo();
-                pi.FileName = "python";
+                pi.FileName = PyExe();
                 pi.Arguments = "\"" + py + "\" 8 \"" + wav + "\"";
                 pi.UseShellExecute = false;
                 pi.CreateNoWindow = true;
@@ -3009,7 +3154,7 @@ public class DesktopPet : Form
                     return;
                 }
                 ProcessStartInfo pi = new ProcessStartInfo();
-                pi.FileName = "python";
+                pi.FileName = PyExe();
                 pi.Arguments = "\"" + py + "\" chat";
                 pi.UseShellExecute = false;
                 pi.CreateNoWindow = true;
@@ -3096,7 +3241,7 @@ public class DesktopPet : Form
                 string askPath = Path.Combine(exeDir, "ask.txt");
                 File.WriteAllText(askPath, q, new System.Text.UTF8Encoding(false));
                 ProcessStartInfo pi = new ProcessStartInfo();
-                pi.FileName = "python";
+                pi.FileName = PyExe();
                 pi.Arguments = "\"" + py + "\" " + mode + " --file \"" + askPath + "\"";
                 pi.UseShellExecute = false;
                 pi.CreateNoWindow = true;
@@ -3269,7 +3414,7 @@ public class DesktopPet : Form
                     return;
                 }
                 ProcessStartInfo pi = new ProcessStartInfo();
-                pi.FileName = "python";
+                pi.FileName = PyExe();
                 pi.Arguments = "\"" + py + "\" \"" + q.Replace("\"", " ") + "\"";
                 pi.UseShellExecute = false;
                 pi.CreateNoWindow = true;
@@ -3313,7 +3458,7 @@ public class DesktopPet : Form
             if (!File.Exists(py)) return "";
             string wav = Path.Combine(VoiceDir(), "heard.wav");
             ProcessStartInfo pi = new ProcessStartInfo();
-            pi.FileName = "python";
+            pi.FileName = PyExe();
             pi.Arguments = "\"" + py + "\" " + secs + " \"" + wav + "\"";
             pi.UseShellExecute = false;
             pi.CreateNoWindow = true;
@@ -3341,7 +3486,7 @@ public class DesktopPet : Form
             string py = Path.Combine(AppDir(), "trans.py");
             if (!File.Exists(py)) return "";
             ProcessStartInfo pi = new ProcessStartInfo();
-            pi.FileName = "python";
+            pi.FileName = PyExe();
             pi.Arguments = "\"" + py + "\" \"" + text.Replace("\"", " ") + "\"";
             pi.UseShellExecute = false;
             pi.CreateNoWindow = true;
@@ -3764,6 +3909,353 @@ public class DesktopPet : Form
             return "";
         }
         catch { return ""; }
+    }
+
+    // ==== 分布式记忆（2026-11-20 改）====
+    // 不再「整份快照互相覆盖」，改成「一条记忆就是一个独立记录」：
+    //   id   = 内容 SHA-256 前 8 位（同一条内容在谁那儿都是一个 id，天然去重）
+    //   src  = 谁记下的（pc / phone / …，以后多台设备各报各的）
+    //   at   = 记下的时间（Unix 毫秒）
+    //   rev  = 同一条被改过的版本号，取大的
+    // 同步 = 反熵：拉一遍对方已有的 id，只把「自己这边对方没有的」发出去；收到就按 id 并进来。
+    // 谁先谁后、掉线多久都不怕，最后一定收敛到同一个集合。
+    const string SyncTopic = "dao_sync_2f7b8e14c9a36d50";
+
+    string MemBoxPath() { return System.IO.Path.Combine(BaseDir(), "记忆库.jsonl"); }
+
+    static string MemId(string text)
+    {
+        try
+        {
+            using (System.Security.Cryptography.SHA256 sha = System.Security.Cryptography.SHA256.Create())
+            {
+                byte[] h = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(text));
+                StringBuilder b = new StringBuilder();
+                for (int i = 0; i < 4; i++) b.Append(h[i].ToString("x2"));
+                return b.ToString();
+            }
+        }
+        catch { return text.GetHashCode().ToString("x8"); }
+    }
+
+    // 本地库：一行一条 id|src|at|rev|t
+    List<string[]> MemLoad()
+    {
+        List<string[]> r = new List<string[]>();
+        try
+        {
+            string p = MemBoxPath();
+            if (!System.IO.File.Exists(p)) return r;
+            foreach (string line in System.IO.File.ReadAllLines(p, System.Text.Encoding.UTF8))
+            {
+                string l = line.Trim();
+                if (l.Length == 0) continue;
+                string[] f = l.Split(new char[] { '|' }, 5);
+                if (f.Length < 5) continue;
+                r.Add(f);
+            }
+        }
+        catch { }
+        return r;
+    }
+
+    void MemSave(List<string[]> list)
+    {
+        try
+        {
+            StringBuilder b = new StringBuilder();
+            int drop = list.Count > 300 ? list.Count - 300 : 0;
+            for (int i = drop; i < list.Count; i++)
+                b.Append(list[i][0]).Append('|').Append(list[i][1]).Append('|').Append(list[i][2])
+                 .Append('|').Append(list[i][3]).Append('|').Append(list[i][4]).Append("\n");
+            System.IO.File.WriteAllText(MemBoxPath(), b.ToString(), System.Text.Encoding.UTF8);
+        }
+        catch { }
+    }
+
+    // 收一条进本地库；返回 true 表示这条是新的
+    bool MemPut(List<string[]> list, string id, string src, string at, string rev, string t)
+    {
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (list[i][0] != id) continue;
+            if (list[i][3] == "-1") return false;      // 已删的条目，正面记录不许复活
+            try
+            {
+                long a = long.Parse(list[i][3]), b = long.Parse(rev);
+                if (b > a) { list[i][3] = rev; list[i][4] = t; }
+            }
+            catch { }
+            return false;
+        }
+        list.Add(new string[] { id, src, at, rev, t });
+        return true;
+    }
+
+    static bool HasId(List<string[]> list, string id)
+    {
+        foreach (string[] e in list) if (e[0] == id) return true;
+        return false;
+    }
+
+    // 忘掉：发一条 rev=-1 的删除标记出去，别处收到同 id 就跟着删
+    string MemForget(string text)
+    {
+        try
+        {
+            string t = (text == null) ? "" : text.Trim();
+            if (t.Length < 2) return "没说要忘什么";
+            if (t.Length > 60) t = t.Substring(0, 60);
+            string id = MemId(t);
+            List<string[]> box = MemLoad();
+            int hit = -1;
+            for (int i = 0; i < box.Count; i++) if (box[i][0] == id) { hit = i; break; }
+            if (hit < 0) return "库里没这条，不用忘";
+            box[hit][3] = "-1";              // 墓碑：正面记录以后压不回来
+            MemSave(box);
+            // 人看的 记忆.txt 里也把这一行拿掉
+            try
+            {
+                string mp = MemoryPath();
+                if (System.IO.File.Exists(mp))
+                {
+                    List<string> keep = new List<string>();
+                    foreach (string ln in System.IO.File.ReadAllLines(mp, System.Text.Encoding.UTF8))
+                        if (ln.IndexOf(t) < 0) keep.Add(ln);
+                    System.IO.File.WriteAllLines(mp, keep.ToArray(), System.Text.Encoding.UTF8);
+                }
+            }
+            catch { }
+            long now = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
+            string line = "DAO2|" + id + "|pc|" + now + "|-1|" + t.Replace("|", "｜");
+            NtfyPost(line + "\n");
+            return "忘掉了：" + t;
+        }
+        catch (Exception ex) { return "忘掉失败：" + ex.Message; }
+    }
+
+    // 第一次跑分布式：把老的 记忆.txt 里那几类条目搬进来
+    void MemMigrate(List<string[]> list)
+    {
+        try
+        {
+            string p = MemoryPath();
+            if (!System.IO.File.Exists(p)) return;
+            foreach (string line in System.IO.File.ReadAllLines(p, System.Text.Encoding.UTF8))
+            {
+                string s0 = line.Trim();
+                if (s0.Length == 0) continue;
+                if (s0.IndexOf("[记住]") < 0 && s0.IndexOf("[纠正]") < 0
+                    && s0.IndexOf("[学会]") < 0 && s0.IndexOf("[同步]") < 0) continue;
+                string body = s0;
+                int q = s0.IndexOf("] ");
+                if (q > 0 && q + 2 < s0.Length) body = s0.Substring(q + 2).Trim();
+                if (body.Length < 2) continue;
+                if (body.Length > 60) body = body.Substring(0, 60);
+                MemPut(list, MemId(body), "pc", "0", "1", body.Replace("|", "｜"));
+            }
+        }
+        catch { }
+    }
+
+    // ntfy 的 /raw 会把消息里的换行压平，整批只剩第一条；改从 /json 取原文再自己解转义
+    static string JsonUn(string s)
+    {
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (c != '\\') { b.Append(c); continue; }
+            i++;
+            if (i >= s.Length) break;
+            char e = s[i];
+            if (e == 'n') b.Append('\n');
+            else if (e == 'r') b.Append('\r');
+            else if (e == 't') b.Append('\t');
+            else if (e == 'u' && i + 4 < s.Length)
+            {
+                try { b.Append((char)Convert.ToInt32(s.Substring(i + 1, 4), 16)); i += 4; } catch { }
+            }
+            else b.Append(e);
+        }
+        return b.ToString();
+    }
+
+    static List<string> ExtractMessages(string ndjson)
+    {
+        List<string> r = new List<string>();
+        foreach (string line in ndjson.Split('\n'))
+        {
+            string l = line.Trim();
+            if (l.Length == 0) continue;
+            int k = l.IndexOf("\"message\":\"");
+            if (k < 0) continue;
+            int st = k + 11;
+            StringBuilder raw = new StringBuilder();
+            for (int i = st; i < l.Length; i++)
+            {
+                char c = l[i];
+                if (c == '\\' && i + 1 < l.Length) { raw.Append(c).Append(l[i + 1]); i++; continue; }
+                if (c == '"') break;
+                raw.Append(c);
+            }
+            r.Add(JsonUn(raw.ToString()));
+        }
+        return r;
+    }
+
+    // 拉：把通道里的条目按 id 并进来
+    string SyncPullMerge()
+    {
+        try
+        {
+            HttpWebRequest rq = (HttpWebRequest)WebRequest.Create("https://ntfy.sh/" + SyncTopic + "/json?poll=1&since=all");
+            rq.Method = "GET"; rq.Timeout = 8000; rq.ReadWriteTimeout = 8000; rq.UserAgent = "DaoPet/68";
+            string text;
+            using (HttpWebResponse rs = (HttpWebResponse)rq.GetResponse())
+            using (StreamReader rd = new StreamReader(rs.GetResponseStream(), System.Text.Encoding.UTF8))
+                text = rd.ReadToEnd();
+
+            List<string[]> box = MemLoad();
+            MemMigrate(box);
+            lastRemoteIds = new List<string>();
+            int added = 0, removed = 0;
+            List<string> msgs = ExtractMessages(text);
+            List<string> allLines = new List<string>();
+            foreach (string m in msgs) foreach (string ml in m.Split('\n')) if (ml.Trim().Length > 0) allLines.Add(ml.Trim());
+            foreach (string line in allLines)
+            {
+                string l = line.Trim();
+                if (!l.StartsWith("DAO2|")) continue;
+                string[] f = l.Split(new char[] { '|' }, 6);
+                if (f.Length < 6) continue;
+                lastRemoteIds.Add(f[1]);
+                if (f[2] == "pc") continue;
+                string tt = f[5];
+                if (tt.IndexOf("DAO2") >= 0) continue;   // 老版本粘包留下的脏数据，一律不收
+                if (f[4] == "-1")                        // 删除标记：落成墓碑，永远压住正面记录
+                {
+                    bool had = false;
+                    for (int i = 0; i < box.Count; i++)
+                    {
+                        if (box[i][0] != f[1]) continue;
+                        had = box[i][3] != "-1";
+                        box[i][3] = "-1"; box[i][4] = tt;
+                    }
+                    if (!had && !HasId(box, f[1])) box.Add(new string[] { f[1], f[2], f[3], "-1", tt });
+                    removed++;
+                    continue;
+                }
+                if (tt.Length < 2) continue;
+                if (MemPut(box, f[1], f[2], f[3], f[4], tt)) added++;
+            }
+            MemSave(box);
+            // 本轮新并入的条目写进人看的 记忆.txt
+            if (added > 0)
+            {
+                List<string[]> fresh = new List<string[]>();
+                foreach (string line in allLines)
+                {
+                    string l = line.Trim();
+                    if (!l.StartsWith("DAO2|")) continue;
+                    string[] f = l.Split(new char[] { '|' }, 6);
+                    if (f.Length < 6 || f[2] == "pc") continue;
+                    fresh.Add(f);
+                }
+                string seen = "";
+                try { if (System.IO.File.Exists(MemoryPath())) seen = System.IO.File.ReadAllText(MemoryPath(), System.Text.Encoding.UTF8); } catch { }
+                int wrote = 0;
+                foreach (string[] f in fresh)
+                {
+                    if (seen.IndexOf(f[5]) >= 0) continue;
+                    AppendMemory("同步", f[5]);
+                    seen += f[5] + "\n";
+                    wrote++;
+                }
+            }
+            if (added == 0 && removed == 0 && allLines.Count == 0)
+                return "读到 " + text.Length + " 字节/消息 " + msgs.Count + " 条，没有可用条目";
+            if (removed > 0 && added == 0) return "别处删了 " + removed + " 条";
+            if (removed > 0) return "别处同步来 " + added + " 条、删了 " + removed + " 条";
+            return added > 0 ? ("别处同步来 " + added + " 条") : "已经是最新的";
+        }
+        catch (Exception ex) { return "拉取失败：" + ex.Message; }
+    }
+
+    List<string> lastRemoteIds = new List<string>();
+
+    // 推：只发「对方还没有的」条目，按 3KB 一批
+    string SyncPush()
+    {
+        try
+        {
+            List<string[]> box = MemLoad();
+            StringBuilder one = new StringBuilder();
+            int sent = 0, chunks = 0;
+            foreach (string[] e in box)
+            {
+                if (lastRemoteIds.Contains(e[0])) continue;
+                string line = "DAO2|" + e[0] + "|" + e[1] + "|" + e[2] + "|" + e[3] + "|" + e[4] + "\n";
+                if (one.Length + line.Length > 3000)
+                {
+                    if (one.Length > 0) { NtfyPost(one.ToString()); chunks++; sent += CountLines(one.ToString()); one.Length = 0; }
+                }
+                one.Append(line);
+            }
+            if (one.Length > 0) { NtfyPost(one.ToString()); chunks++; sent += CountLines(one.ToString()); }
+            return chunks == 0 ? "没有要发的新东西" : ("发出 " + sent + " 条（" + chunks + " 批）");
+        }
+        catch (Exception ex) { return "发送失败：" + ex.Message; }
+    }
+
+    int CountLines(string s)
+    {
+        int n = 0;
+        foreach (string line in s.Split('\n')) if (line.Trim().Length > 0) n++;
+        return n;
+    }
+
+    void NtfyPost(string body)
+    {
+        byte[] raw = System.Text.Encoding.UTF8.GetBytes(body);
+        HttpWebRequest rq = (HttpWebRequest)WebRequest.Create("https://ntfy.sh/" + SyncTopic);
+        rq.Method = "POST";
+        rq.Timeout = 8000; rq.ReadWriteTimeout = 8000;
+        rq.ContentType = "text/plain; charset=utf-8";
+        rq.UserAgent = "DaoPet/68";
+        rq.ContentLength = raw.Length;
+        using (Stream st = rq.GetRequestStream()) st.Write(raw, 0, raw.Length);
+        using (HttpWebResponse rs = (HttpWebResponse)rq.GetResponse()) { rs.Close(); }
+    }
+
+    // 本机记下一条，立刻进库（并尽快发出去）
+    void MemRemember(string text)
+    {
+        try
+        {
+            string t = (text == null) ? "" : text.Trim();
+            if (t.Length < 2) return;
+            if (t.Length > 60) t = t.Substring(0, 60);
+            List<string[]> box = MemLoad();
+            MemPut(box, MemId(t), "pc", ((long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds).ToString(), "1", t.Replace("|", "｜"));
+            MemSave(box);
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate(object o) { SyncPullMerge(); SyncPush(); });
+        }
+        catch { }
+    }
+
+    void MenuSync(object s, EventArgs e)
+    {
+        try
+        {
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate(object o)
+            {
+                string a = SyncPullMerge();
+                string b = SyncPush();
+                try { BeginInvoke(new Action(delegate() { Say("同步好了：" + a); })); } catch { }
+            });
+        }
+        catch { Say("同步没跑起来。"); }
     }
 
     void MenuMemory(object s, EventArgs e)
@@ -4677,8 +5169,12 @@ public class DesktopPet : Form
             if (moodTicks < 24) moodTicks = 24;
         }
         if (edgeStay > 0) edgeStay--;
-        if (walkTicks > 0) walkTicks--;
+        // 已经走到位了就别继续原地空踏：剩量一次掉 3，约 0.4 秒内收干净；
+        // 还在赶路（有目标）时保持正常衰减。
+        if (walkTicks > 0) walkTicks -= (walkTargetX == -999999 ? 3 : 1);
+        if (walkTicks < 0) walkTicks = 0;
         if (runTicks > 0) runTicks--;
+        if (walkTicks <= 0 && runTicks <= 0) moveSpeedPxPerSec = 0f;
         if (thinkTicks > 0) thinkTicks--;
         if (moodTicks > 0) moodTicks--;
         else
@@ -4766,6 +5262,8 @@ public class DesktopPet : Form
                     int syp = Math.Sign(dyw) * Math.Min(sypMax, Math.Abs(dyw));
                     Location = new Point(curX + sxp, curY + syp);
                     walkTicks = 40;
+                    // 30 跳/秒：这一跳挪了 sxp 像素 → 每秒挪 |sxp|×30 像素
+                    moveSpeedPxPerSec = Math.Abs(sxp) * 30f;
                     runTicks = farAway ? 46 : 0;
                     walkDirX = Math.Sign(dxw);
                     // 走着走着忽然蹦一下，像动画片里那样（飞在天上就别蹦了）
@@ -4872,7 +5370,7 @@ public class DesktopPet : Form
         float breathe = (float)(Math.Sin(t * 1.5f) * breatheAmp);
         float dy = 8.5f * (float)Math.Sin(t * (1.12f + 0.05f * (float)Math.Sin(t * 0.07f))) * (0.9f + 0.1f * breatheAmp);
         float dxs = 2.4f * (float)Math.Sin(t * 0.53);
-        if (speaking) dy += 2.4f * (float)Math.Sin(t * 7.5);
+        if (speaking) dy += 2.4f * (float)Math.Sin(t * (2.0f * (float)Math.PI / (nodBeatMs / 1000.0f)));
         if (moodTicks > 0) { dy -= 1.4f * (float)Math.Sin(t * 6.0); }
         // 躺下：慢慢倒过去，不是一下子翻
         lieAmt += ((lying ? 1f : 0f) - lieAmt) * 0.09f;
@@ -5005,9 +5503,21 @@ public class DesktopPet : Form
     void DrawWalkFrames(Graphics g, float cx, float cy, float breathe)
     {
         if (walkFrames == null || walkFrames.Length < 8) return;
-        // 跑起来帧跑得更快，走路保持 11.6 帧/秒（八帧一圈约 0.69 秒，接近真人步速）
-        float fps = runTicks > 0 ? 15.0f : 11.6f;
-        float ph = t * fps;
+        // 步频按真实位移反推：11.6 帧/秒对应 90 像素/秒（3px×30 跳），挪得越快脚频越快，
+        // 脚底才不打滑；每跳向目标靠近 18%，起步与停下都是渐变而不是硬切。
+        float targetFps = 11.6f * Math.Max(moveSpeedPxPerSec, 6f) / 90f;
+        if (runTicks > 0) targetFps = Math.Max(targetFps, 15.0f);
+        if (targetFps < 8.5f) targetFps = 8.5f;
+        if (targetFps > 20f) targetFps = 20f;
+        walkFpsCur += (targetFps - walkFpsCur) * 0.18f;
+        float fps = walkFpsCur;
+        // 相位自己累加，不再用 t×fps：帧率一变，t×fps 会整段跳帧，脚就像被人拽了一下
+        float dt = t - walkLastT;
+        if (dt < 0f || dt > 0.2f) dt = 0.033f;
+        walkLastT = t;
+        walkPhase += fps * dt;
+        if (walkPhase >= 8f) walkPhase -= 8f * (float)Math.Floor(walkPhase / 8f);
+        float ph = walkPhase;
         int fi = (int)ph % 8;
         if (fi < 0) fi += 8;
         Bitmap pb = walkFrames[fi];
@@ -5244,8 +5754,9 @@ public class DesktopPet : Form
         else if (moodTicks > 0 && moodKind > 0)
         {
             if (moodKind == 1) exprKind = 1;
-            else if (moodKind == 2) exprKind = 2;
+            else if (moodKind == 2) exprKind = 1;   // 2 是「高兴」，以前错配到生气脸，一高兴反而皱眉
             else if (moodKind == 3) exprKind = 3;
+            else if (moodKind == 4) exprKind = 1;   // 4 是「兴奋」，配开心脸才和 +16% 的语速对得上
             else if (moodKind == 6) exprKind = 4;
         }
         bool useExpr = false;
@@ -5801,6 +6312,15 @@ public class DesktopPet : Form
         {
             string dir = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "icons");
             string today = Path.Combine(dir, "dao_" + DateTime.Today.ToString("yyyyMMdd") + ".ico");
+            // 优先用 current.ico：rotate_icon.ps1 换的是它，任务栏要跟桌面图标是同一枚；
+            // 只有它不在时才退回当天的存档文件
+            string cur = Path.Combine(dir, "current.ico");
+            if (File.Exists(cur))
+            {
+                SetShortcutIcon(cur);
+                ApplyFormIcon(cur);
+                return;
+            }
             if (File.Exists(today))
             {
                 SetShortcutIcon(today);   // 文件在就只校准快捷方式，不重写文件
@@ -7548,6 +8068,8 @@ public class DesktopPet : Form
             catch { }
             if (volLevel < 0) volLevel = 0;
             if (volLevel > 2) volLevel = 2;
+            // 开机先拉一次手机那边的记忆（走公网，不挑 WiFi）
+            try { System.Threading.ThreadPool.QueueUserWorkItem(delegate(object o) { SyncPullMerge(); }); } catch { }
             // 开机不再一句接一句地自己播报（简报、记忆、今日所学都挪到右键菜单里，
             // 想看再点）。话只在两处出现：他要的早晚问候，还有用户点它或喊它的时候。
         }
@@ -7758,6 +8280,8 @@ public class DesktopPet : Form
             try { singleLock = new System.Threading.Mutex(true, "DaoPetSingleInstance", out isFirst); }
             catch { isFirst = true; }
             if (!isFirst) return;
+            // 启动即后台预热常用短句，开口不用等联网合成
+            try { PrewarmTts(); } catch { }
 
             AppDomain.CurrentDomain.UnhandledException += delegate(object s0, UnhandledExceptionEventArgs e0)
             {
@@ -7838,7 +8362,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 60;
+    public const int APP_VER = 71;
 
     public static void Start()
     {
@@ -8012,6 +8536,45 @@ static class SyncServer
                     }
                     DesktopPet.Push(t);
                     SendText(ns, t.Trim().Length > 0 ? "OK" : "EMPTY");
+                }
+                else if (path.StartsWith("/tts"))
+                {
+                    // 只合成、不放音，直接把 mp3 吐给请求方（手机端拿这个出声）
+                    string t4 = "";
+                    string v4 = "";
+                    if (method == "POST") t4 = body;
+                    else
+                    {
+                        int qi4 = path.IndexOf("?t=");
+                        if (qi4 >= 0)
+                        {
+                            try
+                            {
+                                t4 = Uri.UnescapeDataString(path.Substring(qi4 + 3).Replace('+', ' '));
+                                int amp = t4.IndexOf('&');
+                                if (amp > 0) t4 = t4.Substring(0, amp);
+                            }
+                            catch { t4 = ""; }
+                        }
+                    }
+                    int vi4 = path.IndexOf("v=");
+                    if (vi4 >= 0)
+                    {
+                        try
+                        {
+                            v4 = Uri.UnescapeDataString(path.Substring(vi4 + 2));
+                            int amp2 = v4.IndexOf('&');
+                            if (amp2 > 0) v4 = v4.Substring(0, amp2);
+                        }
+                        catch { v4 = ""; }
+                    }
+                    string f4 = DesktopPet.TtsFile(t4, v4);
+                    if (f4.Length == 0) SendText(ns, "TTSFAIL");
+                    else
+                    {
+                        byte[] ab4 = File.ReadAllBytes(f4);
+                        SendRaw(ns, "audio/mpeg", ab4);
+                    }
                 }
                 else if (path.StartsWith("/chat"))
                 {
@@ -8216,6 +8779,24 @@ static class SyncServer
                     {
                         SendText(ns, Dump());
                     }
+                }
+                else if (path.StartsWith("/forget"))
+                {
+                    string q = "";
+                    int qm = path.IndexOf("?");
+                    if (qm > 0 && qm + 1 < path.Length)
+                    {
+                        string rest = path.Substring(qm + 1);
+                        int amp = rest.IndexOf("t=");
+                        if (amp >= 0) rest = rest.Substring(amp + 2);
+                        try { q = Uri.UnescapeDataString(rest); } catch { q = rest; }
+                    }
+                    SendText(ns, "FORGET|" + (q.Length > 0 ? DesktopPet.ForgetText(q) : "没说要忘什么"));
+                }
+                else if (path.StartsWith("/netsync"))
+                {
+                    // 跨网记忆同步的调试入口：Pull 一次再 Push 一次，把结果摊在文本里
+                    SendText(ns, DesktopPet.SyncNetText());
                 }
                 else if (path.StartsWith("/selfcheck"))
                 {

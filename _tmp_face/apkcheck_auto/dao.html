@@ -1334,7 +1334,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '60';
+  var HTML_VER = '62';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1353,10 +1353,18 @@ var exprImgs = [];
 function daoSyncJoy() {
   var el = document.getElementById('joyTag');
   if (!el) return;
-  if (!window.DaoNative || !DaoNative.getJoy) { el.textContent = '愉悦 --'; return; }
+  var showCache = function (note) {
+    try {
+      var c = JSON.parse(localStorage.getItem('dao_joy_cache') || 'null');
+      if (!c || !c.value) { el.textContent = '愉悦 --'; el.className = ''; return; }
+      el.textContent = '愉悦 ' + c.value + (c.abil ? ' · 能力 ' + c.abil : '') + ' · ' + c.word + (note ? ' · ' + note : '');
+      el.className = (c.value >= 65) ? 'hi' : (c.value < 45 ? 'lo' : '');
+    } catch (e) { el.textContent = '愉悦 --'; }
+  };
+  if (!window.DaoNative || !DaoNative.getJoy) { showCache('离线'); return; }
   try {
     var raw = DaoNative.getJoy();
-    if (!raw) { el.textContent = '愉悦 --'; el.className = ''; return; }
+    if (!raw) { showCache('离线'); return; }
     var m = raw.match(/value=(\d+)/);
     var k = raw.match(/kind=(\d+)/);
     if (!m) { el.textContent = '愉悦 --'; return; }
@@ -1368,9 +1376,15 @@ function daoSyncJoy() {
     else if (kind === 6) word = '低落';
     else if (kind === 3) word = '恹恹';
     var a = raw.match(/abil=(\d+)/);
+    var ts = raw.match(/ts=([0-9:\- ]{11,20})/);
+    try {
+      localStorage.setItem('dao_joy_cache', JSON.stringify({
+        value: v, abil: a ? parseInt(a[1], 10) : 0, word: word, ts: ts ? ts[1].trim() : ''
+      }));
+    } catch (e2) {}
     el.textContent = '愉悦 ' + v + (a ? ' · 能力 ' + parseInt(a[1], 10) : '') + ' · ' + word;
     el.className = (v >= 65) ? 'hi' : (v < 45 ? 'lo' : '');
-  } catch (e) { el.textContent = '愉悦 --'; }
+  } catch (e) { showCache('离线'); }
 }
 function daoSelfCheck() {
     var bad = [];

@@ -65,6 +65,8 @@ def build():
         t += 4 * BEAT
     return notes
 
+PEAK_DBFS = -1.0    # 母带峰值上限 -1.0 dBFS（行业标准 dBTP ≤ -1）
+
 def render(notes, path):
     sec_tick = (60.0 / TEMPO) / PPQ
     total = max(n['t'] + n['dur'] for n in notes)
@@ -88,13 +90,59 @@ def render(notes, path):
             continue
         f = 440.0 * (2.0 ** ((n['pitch'] - 69) / 12.0))
         harm = 0.28 if n['ch'] == 0 else 0.18
-        for i in range(min(ln, length - st)):
-            tt = i / float(SR)
-            env = min(1.0, i / 200.0) * min(1.0, (ln - i) / 400.0)
-            buf[st + i] += n['amp'] * env * (math.sin(2 * math.pi * f * tt) +
-                                            harm * math.sin(4 * math.pi * f * tt))
+        if n['ch'] in (4, 5, 6):
+            pass                             # 4/5 走下面的专属合成，不许再叠一遍通用音
+        else:
+            for i in range(min(ln, length - st)):
+                tt = i / float(SR)
+                env = min(1.0, i / 200.0) * min(1.0, (ln - i) / 400.0)
+                buf[st + i] += n['amp'] * env * (math.sin(2 * math.pi * f * tt) +
+                                                harm * math.sin(4 * math.pi * f * tt))
+        if n['ch'] == 4:                     # 自然声：谐波淡、起音慢、带气声与轻颤，不做修饰
+            harm = 0.13
+            atk = 460.0
+            for i in range(min(ln, length - st)):
+                tt = i / float(SR)
+                env = min(1.0, i / atk) * min(1.0, (ln - i) / 520.0)
+                vib = 0.30 * math.sin(2 * math.pi * 5.2 * tt) if i > ln * 0.25 else 0.0
+                voice = (math.sin(2 * math.pi * f * tt + vib) +
+                         harm * math.sin(4 * math.pi * f * tt + 0.6 * vib))
+                breath = 0.045 * rnd.uniform(-1, 1) * min(1.0, (ln - i) / 200.0)
+                buf[st + i] += n['amp'] * env * (voice + breath)
+            continue
+        if n['ch'] == 6:                     # 电音：锯齿式谐波堆叠 + 轻微失谐双振荡器，短促起音
+            for i in range(min(ln, length - st)):
+                tt = i / float(SR)
+                env = min(1.0, i / 12.0) * min(1.0, (ln - i) / 260.0)
+                det = 1.0 + 0.0032                    # 两路轻微失谐，做出电子的“厚度”
+                sig = 0.0
+                for h in range(1, 7):
+                    sig += math.sin(2 * math.pi * f * h * tt) / h
+                sig += 0.6 * sum(math.sin(2 * math.pi * f * h * det * tt + 0.7) / h for h in range(1, 5))
+                buf[st + i] += n['amp'] * env * (sig / 2.0)
+            continue
+        if n['ch'] == 5:                     # 戏曲腔：字头重、奇次泛音亮、上滑入音、拖腔带大颤、尾音上扬
+            atk = 38.0                       # 字头要快，才有「咬字」的劲（判据 P4 <=80ms）
+            for i in range(min(ln, length - st)):
+                tt = i / float(SR)
+                # 起音 90ms 内从低 0.6 个半音滑到本音，模仿上滑入腔
+                glide = 0.6 * (1.0 - min(1.0, tt / 0.09))
+                fnow = f * (2.0 ** (glide / 12.0))
+                env = min(1.0, i / atk) * min(1.0, (ln - i) / 300.0)
+                # 拖腔颤音：深度按第32类判据 25–100 cents；起颤用毫秒计（30ms 后才起，90ms 内加满），
+                # 不能写成占音符长度的百分比——长音会被拖到 400ms 以上，判据 P3 直接不过
+                ramp = max(0.0, min(1.0, (tt - 0.03) / 0.09))
+                vib = 1.62 * ramp * math.sin(2 * math.pi * 6.4 * tt)
+                # 奇次泛音（3 倍、5 倍）给戏曲特有的尖亮金属感（判据 P5 >=-10dB）
+                voice = (math.sin(2 * math.pi * fnow * tt + vib) +
+                         0.50 * math.sin(6 * math.pi * fnow * tt + 1.4 * vib) +
+                         0.28 * math.sin(10 * math.pi * fnow * tt + 2.1 * vib))
+                lift = 1.0 + 0.02 * math.sin(2 * math.pi * 1.7 * tt)   # 轻微尾音上扬
+                buf[st + i] += n['amp'] * env * voice * lift
+            continue
     peak = max(1e-9, max(abs(x) for x in buf))
-    g = 0.92 / peak if peak > 1 else 1.0
+    tgt = 10 ** (PEAK_DBFS / 20.0)          # 母带峰值目标，留够 headroom
+    g = (1.0 / peak) * tgt if peak > tgt else 1.0
     w = wave.open(path, 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR)
     w.writeframes(b''.join(struct.pack('<h', int(max(-1, min(1, x * g)) * 32767)) for x in buf))
     w.close()

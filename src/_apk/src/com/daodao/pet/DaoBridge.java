@@ -1,6 +1,14 @@
 package com.daodao.pet;
 
 import android.app.DownloadManager;
+import java.util.Locale;
+import android.speech.tts.TextToSpeech;
+import android.speech.SpeechRecognizer;
+import android.speech.RecognizerIntent;
+import android.os.Bundle;
+import android.content.pm.PackageManager;
+import android.content.Intent;
+import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
@@ -53,6 +61,504 @@ public class DaoBridge {
         this.sp = c.getSharedPreferences("daodao", Context.MODE_PRIVATE);
     }
 
+    // ==== 说话与听（2026-11-20 补）====
+    // 说话走系统 TTS（离线、免流量）；听走系统语音识别（需 RECORD_AUDIO）。
+    // 两边都用 evaluateJavascript 回给页面：window.__daoVoice(id, 文本)
+    private TextToSpeech tts;
+    private SpeechRecognizer sr;
+    private String voiceCb = "";
+
+    private void initTts() {
+        if (tts != null) return;
+        try {
+            tts = new TextToSpeech(ctx, new TextToSpeech.OnInitListener() {
+                public void onInit(int status) {
+                    try { if (status == TextToSpeech.SUCCESS) tts.setLanguage(Locale.CHINA); } catch (Exception e) { }
+                }
+            });
+        } catch (Exception e) { }
+    }
+
+    @JavascriptInterface
+    public void speak(final String text) {
+        final String t = (text == null) ? "" : text.trim();
+        if (t.length() == 0) return;
+        initTts();
+        ui.post(new Runnable() {
+            public void run() {
+                try {
+                    if (tts == null) return;
+                    tts.setSpeechRate(0.95f);
+                    tts.speak(t, TextToSpeech.QUEUE_ADD, null, "dao" + System.currentTimeMillis());
+                } catch (Exception e) { }
+            }
+        });
+    }
+
+    @JavascriptInterface
+    public void stopSpeak() { try { if (tts != null) tts.stop(); } catch (Exception e) { } }
+
+    // ==== 云端语音（2026-11-20 补，手机一直有网就不用靠电脑）====
+    // 听：本地录 16k 单声道 PCM，存成 wav，传 GLM-ASR-2512 换文字（实测 0.4s、转写准）
+    // 说：GLM-TTS（/audio/speech）。当前账号语音合成额度不足（错误码 1113），
+    //     所以这条只在页面切到「云语音」时才走，失败立刻退回系统 TTS
+    private android.media.AudioRecord rec;
+    private Thread recThread;
+    private volatile boolean recording = false;
+    private java.io.File recWav;
+    private android.media.MediaPlayer mp;
+
+    @JavascriptInterface
+    public void listenCloud(String cbId) {
+        voiceCb = (cbId == null) ? "" : cbId;
+        try {
+            if (ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                if (ctx instanceof Activity) {
+                    ((Activity) ctx).requestPermissions(
+                        new String[]{android.Manifest.permission.RECORD_AUDIO}, 9001);
+                } else {
+                    postVoice("麦克风没给权限");
+                }
+                return;
+            }
+        } catch (Exception e) { postVoice("麦克风没给权限"); return; }
+        startRecCloud();
+    }
+
+    private void startRecCloud() {
+        try {
+            int hz = 16000;
+            int min = android.media.AudioRecord.getMinBufferSize(hz,
+                android.media.AudioFormat.CHANNEL_IN_MONO,
+                android.media.AudioFormat.ENCODING_PCM_16BIT);
+            if (min <= 0) { postVoice("录音初始化失败"); return; }
+            int bufSize = Math.max(min, 4096);
+            if (rec == null) {
+                rec = new android.media.AudioRecord(android.media.MediaRecorder.AudioSource.MIC, hz,
+                    android.media.AudioFormat.CHANNEL_IN_MONO,
+                    android.media.AudioFormat.ENCODING_PCM_16BIT, bufSize);
+            }
+            recWav = new java.io.File(ctx.getCacheDir(), "rec_" + System.currentTimeMillis() + ".wav");
+            recording = true;
+            try { rec.startRecording(); } catch (Exception e) { postVoice("录音启动失败"); recording = false; return; }
+            final int bs = bufSize;
+            final java.io.File out = recWav;
+            recThread = new Thread(new Runnable() {
+                public void run() {
+                    java.io.FileOutputStream fos = null;
+                    try {
+                        fos = new java.io.FileOutputStream(out);
+                        byte[] hdr = new byte[44];
+                        fos.write(hdr);                    // 先占位，收尾再回填头
+                        byte[] buf = new byte[bs];
+                        int total = 0;
+                        while (recording) {
+                            int n = rec.read(buf, 0, buf.length);
+                            if (n > 0) { fos.write(buf, 0, n); total += n; }
+                        }
+                        fos.close();
+                        writeWavHeader(out, total, 16000);
+                    } catch (Exception e) {
+                        try { if (fos != null) fos.close(); } catch (Exception x) { }
+                    }
+                }
+            });
+            recThread.start();
+        } catch (Exception e) { postVoice("录音启动失败"); }
+    }
+
+    private void writeWavHeader(java.io.File f, int dataLen, int hz) {
+        try {
+            java.io.RandomAccessFile raf = new java.io.RandomAccessFile(f, "rw");
+            raf.seek(0);
+            raf.writeBytes("RIFF");
+            raf.write(intLE(36 + dataLen));
+            raf.writeBytes("WAVEfmt ");
+            raf.write(intLE(16));
+            raf.write(shortLE(1));
+            raf.write(shortLE(1));
+            raf.write(intLE(hz));
+            raf.write(intLE(hz * 2));
+            raf.write(shortLE(2));
+            raf.write(shortLE(16));
+            raf.writeBytes("data");
+            raf.write(intLE(dataLen));
+            raf.close();
+        } catch (Exception e) { }
+    }
+
+    private byte[] intLE(int v) {
+        return new byte[]{(byte) (v & 0xff), (byte) ((v >> 8) & 0xff), (byte) ((v >> 16) & 0xff), (byte) ((v >> 24) & 0xff)};
+    }
+
+    private byte[] shortLE(int v) {
+        return new byte[]{(byte) (v & 0xff), (byte) ((v >> 8) & 0xff)};
+    }
+
+    @JavascriptInterface
+    public void stopListenCloud() {
+        if (!recording) return;
+        recording = false;
+        try { if (rec != null) rec.stop(); } catch (Exception e) { }
+        final java.io.File f = recWav;
+        new Thread(new Runnable() {
+            public void run() {
+                try { Thread.sleep(250); } catch (Exception e) { }
+                if (f == null || !f.exists() || f.length() < 3000) { postVoice("没录到声音"); return; }
+                String t = asrCloud(f);
+                try { f.delete(); } catch (Exception e) { }
+                if (t == null) { postVoice("没听清（网络不通）"); return; }
+                t = t.trim();
+                if (t.length() == 0) { postVoice("没听清，再说一遍"); return; }
+                postVoice(t);
+            }
+        }).start();
+    }
+
+    private String asrCloud(java.io.File f) {
+        HttpURLConnection c = null;
+        try {
+            String B = "----dao" + System.currentTimeMillis();
+            c = (HttpURLConnection) new URL("https://open.bigmodel.cn/api/paas/v4/audio/transcriptions").openConnection();
+            c.setRequestMethod("POST");
+            c.setDoOutput(true);
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(30000);
+            c.setRequestProperty("Authorization", "Bearer " + KEY);
+            c.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + B);
+            OutputStream os = c.getOutputStream();
+            os.write(("--" + B + "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nglm-asr-2512\r\n").getBytes("UTF-8"));
+            os.write(("--" + B + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n").getBytes("UTF-8"));
+            java.io.FileInputStream fis = new java.io.FileInputStream(f);
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = fis.read(buf)) > 0) os.write(buf, 0, n);
+            fis.close();
+            os.write(("\r\n--" + B + "--\r\n").getBytes("UTF-8"));
+            os.flush();
+            os.close();
+            if (c.getResponseCode() != 200) return null;
+            String r = readAllText(c.getInputStream());
+            JSONObject o = new JSONObject(r);
+            return o.optString("text", "");
+        } catch (Exception e) {
+            return null;
+        } finally {
+            try { if (c != null) c.disconnect(); } catch (Exception e) { }
+        }
+    }
+
+    private String readAllText(InputStream is) {
+        try {
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] b = new byte[4096];
+            int n;
+            while ((n = is.read(b)) > 0) bo.write(b, 0, n);
+            is.close();
+            return new String(bo.toByteArray(), "UTF-8");
+        } catch (Exception e) { return ""; }
+    }
+
+    // 云端合成：拿到 wav 存本地，用 MediaPlayer 放（系统 TTS 和它互不干扰）
+    @JavascriptInterface
+    public void speakCloud(final String text, final String voice) {
+        final String t = (text == null) ? "" : text.trim();
+        if (t.length() == 0) return;
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    JSONObject body = new JSONObject();
+                    body.put("model", "glm-tts");
+                    body.put("input", t);
+                    body.put("voice", (voice == null || voice.length() == 0) ? "female" : voice);
+                    body.put("speed", 1.0);
+                    body.put("volume", 1.0);
+                    body.put("response_format", "wav");
+                    HttpURLConnection c = (HttpURLConnection) new URL("https://open.bigmodel.cn/api/paas/v4/audio/speech").openConnection();
+                    c.setRequestMethod("POST");
+                    c.setDoOutput(true);
+                    c.setConnectTimeout(8000);
+                    c.setReadTimeout(40000);
+                    c.setRequestProperty("Authorization", "Bearer " + KEY);
+                    c.setRequestProperty("Content-Type", "application/json");
+                    OutputStream os = c.getOutputStream();
+                    os.write(body.toString().getBytes("UTF-8"));
+                    os.close();
+                    if (c.getResponseCode() != 200) { fallbackNative(t); return; }
+                    java.io.File f = new java.io.File(ctx.getCacheDir(), "tts_" + System.currentTimeMillis() + ".wav");
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+                    java.io.InputStream is = c.getInputStream();
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = is.read(buf)) > 0) fos.write(buf, 0, n);
+                    is.close();
+                    fos.close();
+                    c.disconnect();
+                    if (f.length() < 2000) { fallbackNative(t); return; }
+                    ui.post(new Runnable() {
+                        public void run() {
+                            try {
+                                if (mp != null) { try { mp.release(); } catch (Exception e) { } }
+                                mp = new android.media.MediaPlayer();
+                                mp.setDataSource(f.getAbsolutePath());
+                                mp.prepare();
+                                mp.start();
+                            } catch (Exception e) { fallbackNative(t); }
+                        }
+                    });
+                } catch (Exception e) { fallbackNative(t); }
+            }
+        }).start();
+    }
+
+    private void fallbackNative(final String t) { ui.post(new Runnable() { public void run() { speak(t); } }); }
+
+    // ==== 腾讯云语音合成（TextToVoice，TC3-HMAC-SHA256）====
+    // 为什么选它：通用合成基础音色有 800 万字符免费额度，日常说话够用好几辈子。
+    // 密钥不写死在代码里，存在本机 SharedPreferences；页面长按「听歌」可录入。
+    private static final String TC_HOST = "tts.tencentcloudapi.com";
+    private static final String TC_SERVICE = "tts";
+    private static final String TC_ACTION = "TextToVoice";
+    private static final String TC_VERSION = "2019-08-23";
+    private static final String TC_REGION = "ap-guangzhou";
+
+    @JavascriptInterface
+    public void setTencentKeys(String sid, String skey) {
+        try {
+            sp.edit().putString("tc_sid", sid == null ? "" : sid.trim())
+                      .putString("tc_skey", skey == null ? "" : skey.trim()).apply();
+        } catch (Exception e) { }
+    }
+
+    @JavascriptInterface
+    public String hasTencentKeys() {
+        try {
+            String a = sp.getString("tc_sid", "");
+            String b = sp.getString("tc_skey", "");
+            return (a.length() > 10 && b.length() > 10) ? "1" : "0";
+        } catch (Exception e) { return "0"; }
+    }
+
+    private static String tcHex(byte[] b) {
+        StringBuilder sb = new StringBuilder();
+        for (byte x : b) sb.append(String.format("%02x", x));
+        return sb.toString();
+    }
+
+    private static String tcSha256(String s) throws Exception {
+        java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+        return tcHex(md.digest(s.getBytes("UTF-8")));
+    }
+
+    private static byte[] tcHmac(byte[] key, String msg) throws Exception {
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+        mac.init(new javax.crypto.spec.SecretKeySpec(key, "HmacSHA256"));
+        return mac.doFinal(msg.getBytes("UTF-8"));
+    }
+
+    private static String tcJsonStr(String s) {
+        StringBuilder sb = new StringBuilder("\"");
+        for (char ch : s.toCharArray()) {
+            if (ch == '"' || ch == '\\') sb.append('\\').append(ch);
+            else if (ch == '\n') sb.append("\\n");
+            else if (ch < 32) sb.append(String.format("\\u%04x", (int) ch));
+            else sb.append(ch);
+        }
+        return sb.append('"').toString();
+    }
+
+    @JavascriptInterface
+    public void speakTencent(final String text, final int voiceType) {
+        final String t = (text == null) ? "" : text.trim();
+        if (t.length() == 0) return;
+        final String sid = sp.getString("tc_sid", "");
+        final String skey = sp.getString("tc_skey", "");
+        if (sid.length() < 10 || skey.length() < 10) {
+            ui.post(new Runnable() { public void run() { speak(t); } });
+            return;
+        }
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    long ts = System.currentTimeMillis() / 1000;
+                    java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US);
+                    sdf.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+                    String date = sdf.format(new java.util.Date(ts * 1000));
+                    String ct = "application/json; charset=utf-8";
+                    String payload = "{\"Text\":" + tcJsonStr(t) + ",\"SessionId\":\"dao" + ts
+                            + "\",\"VoiceType\":" + voiceType + ",\"Codec\":\"mp3\""
+                            + ",\"SampleRate\":16000,\"ModelType\":1,\"Speed\":0}";
+                    String canonical = "POST\n/\n\n" + "content-type:" + ct + "\nhost:" + TC_HOST
+                            + "\n\ncontent-type;host\n" + tcSha256(payload);
+                    String toSign = "TC3-HMAC-SHA256\n" + ts + "\n" + date + "/" + TC_SERVICE
+                            + "/tc3_request\n" + tcSha256(canonical);
+                    byte[] k1 = tcHmac(("TC3" + skey).getBytes("UTF-8"), date);
+                    byte[] k2 = tcHmac(k1, TC_SERVICE);
+                    byte[] k3 = tcHmac(k2, "tc3_request");
+                    String sig = tcHex(tcHmac(k3, toSign));
+                    String auth = "TC3-HMAC-SHA256 Credential=" + sid + "/" + date + "/" + TC_SERVICE
+                            + "/tc3_request, SignedHeaders=content-type;host, Signature=" + sig;
+
+                    HttpURLConnection c = (HttpURLConnection) new URL("https://" + TC_HOST).openConnection();
+                    c.setRequestMethod("POST");
+                    c.setDoOutput(true);
+                    c.setConnectTimeout(8000);
+                    c.setReadTimeout(30000);
+                    c.setRequestProperty("Authorization", auth);
+                    c.setRequestProperty("Content-Type", ct);
+                    c.setRequestProperty("Host", TC_HOST);
+                    c.setRequestProperty("X-TC-Action", TC_ACTION);
+                    c.setRequestProperty("X-TC-Timestamp", String.valueOf(ts));
+                    c.setRequestProperty("X-TC-Version", TC_VERSION);
+                    c.setRequestProperty("X-TC-Region", TC_REGION);
+                    OutputStream os = c.getOutputStream();
+                    os.write(payload.getBytes("UTF-8"));
+                    os.close();
+                    if (c.getResponseCode() != 200) { fallbackNative(t); return; }
+                    String rs = readAllText(c.getInputStream());
+                    JSONObject resp = new JSONObject(rs).optJSONObject("Response");
+                    String audio = (resp == null) ? "" : resp.optString("Audio", "");
+                    if (audio.length() < 100) { fallbackNative(t); return; }
+                    byte[] mp3 = android.util.Base64.decode(audio, android.util.Base64.DEFAULT);
+                    final java.io.File f = new java.io.File(ctx.getCacheDir(), "tc_" + System.currentTimeMillis() + ".mp3");
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+                    fos.write(mp3);
+                    fos.close();
+                    ui.post(new Runnable() {
+                        public void run() {
+                            try {
+                                if (mp != null) { try { mp.release(); } catch (Exception e) { } }
+                                mp = new android.media.MediaPlayer();
+                                mp.setDataSource(f.getAbsolutePath());
+                                mp.prepare();
+                                mp.start();
+                            } catch (Exception e) { fallbackNative(t); }
+                        }
+                    });
+                } catch (Exception e) { fallbackNative(t); }
+            }
+        }).start();
+    }
+
+    // ==== Edge 直连发音（2026-11-20 补，手机自己连微软朗读，不要密钥不要额度）====
+    // 令牌是 Sec-MS-GEC v2（私有 SHA256 变体 + CS64），算法在 EdgeToken.java；
+    // WebSocket 自己在 EdgeTts.java 里手搓，手机端不依赖 OkHttp。
+    // 实测：7 秒句子约 3 秒出声，mp3 直接 MediaPlayer 放，不烧任何额度。
+    public static final String[] EDGE_VOICES = {
+        "zh-CN-XiaoxiaoNeural",   // 0 少女清亮
+        "zh-CN-YunxiNeural",      // 1 少年
+        "zh-CN-YunjianNeural",    // 2 男声偏厚
+        "zh-CN-XiaoyiNeural"      // 3 女声温柔
+    };
+
+    @JavascriptInterface
+    public void speakEdge(final String text, final int vIdx) {
+        final String t = (text == null) ? "" : text.trim();
+        if (t.length() == 0) return;
+        final String voice = EDGE_VOICES[(vIdx < 0 || vIdx >= EDGE_VOICES.length) ? 0 : vIdx];
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    byte[] mp3 = EdgeTts.synth(t, voice);
+                    if (mp3 == null || mp3.length < 1500) { fallbackNative(t); return; }
+                    final java.io.File f = new java.io.File(ctx.getCacheDir(), "edge_" + System.currentTimeMillis() + ".mp3");
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+                    fos.write(mp3);
+                    fos.close();
+                    ui.post(new Runnable() {
+                        public void run() {
+                            try {
+                                if (mp != null) { try { mp.release(); } catch (Exception e) { } }
+                                mp = new android.media.MediaPlayer();
+                                mp.setDataSource(f.getAbsolutePath());
+                                mp.prepare();
+                                mp.start();
+                            } catch (Exception e) { fallbackNative(t); }
+                        }
+                    });
+                } catch (Exception e) { fallbackNative(t); }
+            }
+        }).start();
+    }
+
+
+
+    private void postVoice(final String text) {
+        final String id = voiceCb;
+        final String tx = (text == null) ? "" : text;
+        ui.post(new Runnable() {
+            public void run() {
+                try {
+                    String js = "window.__daoVoice && window.__daoVoice(" + JSONObject.quote(id) + ","
+                              + JSONObject.quote(tx) + ");";
+                    web.evaluateJavascript(js, null);
+                } catch (Exception e) { }
+            }
+        });
+    }
+
+    public void tellNoMic() { postVoice("麦克风没给权限"); }
+
+    @JavascriptInterface
+    public void listen(String cbId) {
+        voiceCb = (cbId == null) ? "" : cbId;
+        try {
+            if (ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                if (ctx instanceof Activity) {
+                    ((Activity) ctx).requestPermissions(
+                        new String[]{android.Manifest.permission.RECORD_AUDIO}, 9001);
+                } else {
+                    postVoice("麦克风没给权限");
+                }
+                return;
+            }
+        } catch (Exception e) { postVoice("麦克风没给权限"); return; }
+        startListenNow();
+    }
+
+    public void startListenNow() {
+        ui.post(new Runnable() {
+            public void run() {
+                try {
+                    if (!SpeechRecognizer.isRecognitionAvailable(ctx)) { postVoice("这台手机没有语音识别服务"); return; }
+                    if (sr == null) sr = SpeechRecognizer.createSpeechRecognizer(ctx);
+                    sr.setRecognitionListener(new android.speech.RecognitionListener() {
+                        public void onReadyForSpeech(Bundle b) { }
+                        public void onBeginningOfSpeech() { }
+                        public void onRmsChanged(float v) { }
+                        public void onBufferReceived(byte[] b) { }
+                        public void onEndOfSpeech() { }
+                        public void onError(int code) { postVoice("没听清（" + code + "）"); }
+                        public void onPartialResults(Bundle p) { }
+                        public void onEvent(int type, Bundle p) { }
+                        public void onResults(Bundle res) {
+                            String t = "";
+                            try {
+                                ArrayList<String> xs = res.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                                if (xs != null && xs.size() > 0) t = xs.get(0);
+                            } catch (Exception e) { }
+                            postVoice(t);
+                        }
+                    });
+                    Intent it = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+                    it.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+                    it.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN");
+                    it.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
+                    sr.startListening(it);
+                } catch (Exception e) {
+                    postVoice("语音识别启动失败");
+                }
+            }
+        });
+    }
+
+    @JavascriptInterface
+    public void stopListen() {
+        ui.post(new Runnable() {
+            public void run() { try { if (sr != null) sr.stopListening(); } catch (Exception e) { } }
+        });
+    }
+
     // 每天换一枚桌面图标：manifest 里 7 个 Launcher 别名各带一张图，只启用当天那一个
     public void rotateLauncherIcon() {
         try {
@@ -68,6 +574,322 @@ public class DaoBridge {
                         android.content.pm.PackageManager.DONT_KILL_APP);
             }
         } catch (Exception e) { }
+    }
+
+    // 道的「脑子」：把记得的事拼进系统提示，模型才知道自己是谁、在跟谁说话
+    private static final String[] FIXED_FACTS = {
+        "主人是农村的初中数学老师，平时要备课、批作业、管学生。",
+        "主人喜欢听歌写歌，道自己有 3 首歌：归途的月光、把好日子扛在肩上、少年模样。",
+        "道说话要短、要暖，不说教，不列清单，不炫耀。"
+    };
+
+    private String fullSys(String sys) {
+        StringBuilder sb = new StringBuilder(sys);
+        sb.append("\n\n【你记得的事，能自然用到就用，不要生硬背诵】\n");
+        for (int i = 0; i < FIXED_FACTS.length; i++) sb.append("- ").append(FIXED_FACTS[i]).append("\n");
+        try {
+            JSONArray f = new JSONArray(sp.getString("chat_facts", "[]"));
+            int st = Math.max(0, f.length() - 8);
+            for (int i = st; i < f.length(); i++) {
+                String s = f.optString(i, "").trim();
+                if (s.length() > 0) sb.append("- ").append(s).append("\n");
+            }
+        } catch (Exception e) { }
+        try {
+            JSONArray lh = new JSONArray(sp.getString("learn_history", "[]"));
+            if (lh.length() > 0) {
+                sb.append("- 最近跟主人学过：")
+                  .append(lh.optString(lh.length() - 1, "").trim()).append("\n");
+            }
+        } catch (Exception e) { }
+        return sb.toString();
+    }
+
+    // 页面可以随时教它记一件事（"记住：…"），下次对话自动带上
+    @JavascriptInterface
+    public String remember(String fact) {
+        String f = (fact == null) ? "" : fact.trim();
+        if (f.length() < 2) return "没记住";
+        if (f.length() > 60) f = f.substring(0, 60);
+        try {
+            JSONArray arr = new JSONArray(sp.getString("chat_facts", "[]"));
+            for (int i = 0; i < arr.length(); i++) {
+                if (f.equals(arr.optString(i, ""))) return "记着呢";
+            }
+            arr.put(f);
+            while (arr.length() > 24) {
+                JSONArray n = new JSONArray();
+                for (int i = 1; i < arr.length(); i++) n.put(arr.optString(i, ""));
+                arr = n;
+            }
+            sp.edit().putString("chat_facts", arr.toString()).apply();
+            // 同时写进分布式库：这条从此有自己的 id，别的设备按 id 认出它
+            JSONArray box = memLoad();
+            memPut(box, memId(f), "phone", System.currentTimeMillis(), 1, f);
+            memSave(box);
+            new Thread(new Runnable() { public void run() { syncPullMerge(); syncPush(); } }).start();
+            return "记住了：" + f;
+        } catch (Exception e) { return "没记住"; }
+    }
+
+    // ==== 分布式记忆（2026-11-20 改）====
+    // 一条记忆 = 一个独立记录，按 id 认（内容 SHA-256 前 8 位），谁缺谁补。
+    // 去中心：每台设备都是完整副本，同步只交换「对方没有的」条目，最后收敛到同一集合。
+    private static final String SYNC_TOPIC = "dao_sync_2f7b8e14c9a36d50";
+    private static final String MEM_KEY = "mem_entries";
+    private java.util.ArrayList<String> lastRemoteIds = new java.util.ArrayList<String>();
+
+    private String memId(String t) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] h = md.digest(t.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 4; i++) sb.append(String.format("%02x", h[i]));
+            return sb.toString();
+        } catch (Exception e) { return Integer.toHexString(t.hashCode()); }
+    }
+
+    private JSONArray memLoad() {
+        try { return new JSONArray(sp.getString(MEM_KEY, "[]")); } catch (Exception e) { return new JSONArray(); }
+    }
+
+    private void memSave(JSONArray a) {
+        try {
+            JSONArray keep = new JSONArray();
+            int st = Math.max(0, a.length() - 300);
+            for (int i = st; i < a.length(); i++) keep.put(a.get(i));
+            sp.edit().putString(MEM_KEY, keep.toString()).apply();
+        } catch (Exception e) { }
+    }
+
+    // 收一条；返回 true 表示是新的
+    private boolean memPut(JSONArray a, String id, String src, long at, int rev, String t) {
+        try {
+            for (int i = 0; i < a.length(); i++) {
+                JSONObject o = a.optJSONObject(i);
+                if (o == null || !id.equals(o.optString("i"))) continue;
+                if (o.optInt("r", 1) == -1) return false;   // 已删的条目不许复活
+                if (rev > o.optInt("r", 1)) { o.put("r", rev); o.put("t", t); }
+                return false;
+            }
+            JSONObject n = new JSONObject();
+            n.put("i", id); n.put("s", src); n.put("a", at); n.put("r", rev); n.put("t", t);
+            a.put(n);
+            return true;
+        } catch (Exception e) { return false; }
+    }
+
+    // 第一次跑：把老的 chat_facts 搬进分布式库
+    private void memMigrate() {
+        try {
+            if (memLoad().length() > 0) return;
+            JSONArray f = new JSONArray(sp.getString("chat_facts", "[]"));
+            JSONArray a = new JSONArray();
+            for (int i = 0; i < f.length(); i++) {
+                String t = f.optString(i, "").trim();
+                if (t.length() < 2) continue;
+                memPut(a, memId(t), "phone", 0, 1, t);
+            }
+            if (a.length() > 0) memSave(a);
+        } catch (Exception e) { }
+    }
+
+    private void memMirror(JSONArray a) {
+        try {
+            JSONArray f = new JSONArray();
+            int st = Math.max(0, a.length() - 24);
+            for (int i = st; i < a.length(); i++) {
+                JSONObject o = a.optJSONObject(i);
+                if (o != null) f.put(o.optString("t", ""));
+            }
+            sp.edit().putString("chat_facts", f.toString()).apply();
+        } catch (Exception e) { }
+    }
+
+    private String readHttp(String url, int timeout) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setConnectTimeout(timeout);
+        c.setReadTimeout(timeout);
+        int code = c.getResponseCode();
+        String t = (code == 200) ? readAllText(c.getInputStream()) : "";
+        c.disconnect();
+        return t;
+    }
+
+    private void ntfyPost(String body) throws Exception {
+        byte[] raw = body.getBytes("UTF-8");
+        HttpURLConnection c = (HttpURLConnection) new URL("https://ntfy.sh/" + SYNC_TOPIC).openConnection();
+        c.setRequestMethod("POST");
+        c.setDoOutput(true);
+        c.setConnectTimeout(8000);
+        c.setReadTimeout(8000);
+        c.setRequestProperty("Content-Type", "text/plain; charset=utf-8");
+        OutputStream os = c.getOutputStream();
+        os.write(raw);
+        os.close();
+        int code = c.getResponseCode();
+        c.disconnect();
+        if (code != 200) throw new Exception("发送被拒 " + code);
+    }
+
+    // 拉：按 id 并进来
+    private String syncPullMerge() {
+        try {
+            String text = readHttp("https://ntfy.sh/" + SYNC_TOPIC + "/json?poll=1&since=all", 8000);
+            JSONArray box = memLoad();
+            memMigrate();
+            box = memLoad();
+            lastRemoteIds = new java.util.ArrayList<String>();
+            int added = 0, removed = 0;
+            // ntfy 的 /raw 会把换行压平，这里按 /json 每行取 message 原文
+            java.util.ArrayList<String> allLines = new java.util.ArrayList<String>();
+            for (String nl : text.split("\\n")) {
+                String tl = nl.trim();
+                if (!tl.startsWith("{")) continue;
+                try {
+                    JSONObject o = new JSONObject(tl);
+                    String msg = o.optString("message", "");
+                    for (String ml : msg.split("\\n")) if (ml.trim().length() > 0) allLines.add(ml.trim());
+                } catch (Exception e) { }
+            }
+            for (String line : allLines) {
+                String l = line.trim();
+                if (!l.startsWith("DAO2|")) continue;
+                String[] f = l.split("\\|", 6);
+                if (f.length < 6) continue;
+                lastRemoteIds.add(f[1]);
+                if ("phone".equals(f[2])) continue;
+                if (f[5].trim().length() < 2) continue;
+                if (f[5].indexOf("DAO2") >= 0) continue;   // 粘包的脏数据不收
+                long at = 0; int rev = 1;
+                try { at = Long.parseLong(f[3]); } catch (Exception e) { }
+                try { rev = Integer.parseInt(f[4]); } catch (Exception e) { }
+                if (rev == -1) {                     // 删除标记：落墓碑，永远压住正面记录
+                    boolean found = false;
+                    for (int i = 0; i < box.length(); i++) {
+                        JSONObject o = box.optJSONObject(i);
+                        if (o != null && f[1].equals(o.optString("i", ""))) { o.put("r", -1); found = true; }
+                    }
+                    if (!found) {
+                        JSONObject nt = new JSONObject();
+                        nt.put("i", f[1]); nt.put("s", f[2]); nt.put("a", at); nt.put("r", -1); nt.put("t", f[5]);
+                        box.put(nt);
+                    }
+                    removed++;
+                    continue;
+                }
+                if (memPut(box, f[1], f[2], at, rev, f[5])) added++;
+            }
+            memSave(box);
+            memMirror(memLoad());
+            if (removed > 0 && added == 0) return "别处删了 " + removed + " 条";
+            if (removed > 0) return "别处同步来 " + added + " 条、删了 " + removed + " 条";
+            return added > 0 ? ("别处同步来 " + added + " 条") : "已经是最新的";
+        } catch (Exception e) { return "拉取失败：" + e.getMessage(); }
+    }
+
+    // 推：只发对方没有的，3KB 一批
+    private String syncPush() {
+        try {
+            JSONArray box = memLoad();
+            StringBuilder one = new StringBuilder();
+            int sent = 0, chunks = 0;
+            for (int i = 0; i < box.length(); i++) {
+                JSONObject o = box.optJSONObject(i);
+                if (o == null) continue;
+                String id = o.optString("i", "");
+                if (id.length() == 0 || lastRemoteIds.contains(id)) continue;
+                String line = "DAO2|" + id + "|" + o.optString("s", "phone") + "|" + o.optLong("a", 0)
+                        + "|" + o.optInt("r", 1) + "|" + o.optString("t", "") + "\n";
+                if (one.length() + line.length() > 3000) {
+                    if (one.length() > 0) { ntfyPost(one.toString()); chunks++; sent += lenLines(one.toString()); one.setLength(0); }
+                }
+                one.append(line);
+            }
+            if (one.length() > 0) { ntfyPost(one.toString()); chunks++; sent += lenLines(one.toString()); }
+            return chunks == 0 ? "没有要发的新东西" : ("发出 " + sent + " 条（" + chunks + " 批）");
+        } catch (Exception e) { return "发送失败：" + e.getMessage(); }
+    }
+
+    private int lenLines(String s) {
+        int n = 0;
+        for (String line : s.split("\n")) if (line.trim().length() > 0) n++;
+        return n;
+    }
+
+    // 忘掉一件事：本地删掉，再发一条 rev=-1 的删除标记，别处跟着删
+    @JavascriptInterface
+    public void forget(final String text) {
+        final String t0 = (text == null) ? "" : text.trim();
+        if (t0.length() < 2) return;
+        new Thread(new Runnable() {
+            public void run() {
+                String msg;
+                try {
+                    String t = t0.length() > 60 ? t0.substring(0, 60) : t0;
+                    String id = memId(t);
+                    JSONArray box = memLoad();
+                    boolean hit = false;
+                    for (int i = box.length() - 1; i >= 0; i--) {
+                        JSONObject o = box.optJSONObject(i);
+                        if (o != null && id.equals(o.optString("i", ""))) { box.remove(i); hit = true; }
+                    }
+                    if (!hit) { msg = "库里没这条，不用忘"; }
+                    else {
+                        for (int i = 0; i < box.length(); i++) {
+                            JSONObject o = box.optJSONObject(i);
+                            if (o != null && id.equals(o.optString("i", ""))) o.put("r", -1);
+                        }
+                        memSave(box);
+                        memMirror(memLoad());
+                        ntfyPost("DAO2|" + id + "|phone|" + System.currentTimeMillis() + "|-1|" + t + "\n");
+                        msg = "忘掉了：" + t;
+                    }
+                } catch (Exception e) { msg = "忘掉失败：" + e.getMessage(); }
+                final String m = msg;
+                ui.post(new Runnable() {
+                    public void run() {
+                        try { web.evaluateJavascript("window.__daoSync && window.__daoSync(" + JSONObject.quote(m) + ");", null); } catch (Exception e) { }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    @JavascriptInterface
+    public void syncNow() {
+        new Thread(new Runnable() {
+            public void run() {
+                String a = syncPullMerge();
+                String b = syncPush();
+                final String msg = a + " / " + b;
+                ui.post(new Runnable() {
+                    public void run() {
+                        try {
+                            web.evaluateJavascript("window.__daoSync && window.__daoSync(" + JSONObject.quote(msg) + ");", null);
+                        } catch (Exception e) { }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    // 页面要放本地音乐，得先把 assets 里的曲子读出来（WebView 的 file:// 不给读）
+    @JavascriptInterface
+    public String assetB64(String path) {
+        InputStream is = null;
+        try {
+            is = ctx.getAssets().open(path);
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = is.read(buf)) > 0) bo.write(buf, 0, n);
+            return android.util.Base64.encodeToString(bo.toByteArray(), android.util.Base64.NO_WRAP);
+        } catch (Exception e) {
+            return "";
+        } finally {
+            try { if (is != null) is.close(); } catch (Exception e) { }
+        }
     }
 
     private static final String SYS_CHAT =
@@ -87,7 +909,7 @@ public class DaoBridge {
         }
         new Thread(new Runnable() {
             public void run() {
-                String out = requestChat(SYS_CHAT, q, 0.7, 130);
+                String out = requestChat(fullSys(SYS_CHAT), q, 0.7, 130);
                 if (out == null) {
                     postReply(id, "我这边网有点慢，刚没连上，等一下再跟我说一次吧。", 0);
                     return;

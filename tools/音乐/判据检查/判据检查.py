@@ -24,7 +24,8 @@ ZHE = {'ang': '江阳', 'iang': '江阳', 'uang': '江阳', 'an': '言前', 'ian
        'ao': '遥条', 'ing': '中东', 'eng': '中东'}
 
 def melody_notes(notes, t0):
-    return [x for x in notes if x['ch'] == 0 and t0 <= x['t'] < t0 + 8 * BEAT]
+    # 人声轨是 0(少年声)/4(自然声)/5(戏曲腔)，只认 ch==0 会在双音色歌里取空（2026-11-20 踩过）
+    return [x for x in notes if x['ch'] in (0, 4, 5) and t0 <= x['t'] < t0 + 8 * BEAT]
 
 def check_leap(notes, mel):
     print('═ L1 大跳后反向级进 ═')

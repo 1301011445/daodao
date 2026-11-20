@@ -65,12 +65,18 @@ BRIDGE = [
     ('一年更比一年想家', [0, 2, 4, 0, 5, 2, 0, 0]),
 ]
 # 每句的情感重音字（0 起算）：必须落在强拍、且音高在句子的上半区
-STRESS = {'V': [2, 2, 2, 0], 'V2': [4, 4, 2, 2], 'C': [4, 4, 4, 0], 'B': [4, 4, 4, 4]}
+STRESS = {'V': [2, 2, 2, 0], 'V2': [4, 4, 2, 2], 'C': [4, 4, 4, 0], 'B': [4, 4, 4, 4], 'PC': [4, 4, 2, 4]}
 
-BASE = {'V': 60, 'V2': 60, 'C1': 67, 'C2': 67, 'C3': 69, 'B': 64}
+PRECHORUS = [
+    ('话到嘴边又咽回去', [0, 2, 4, 5, 4, 2, 4, 5]),
+    ('再走一步就到家门', [2, 4, 5, 4, 4, 2, 5, 5]),
+]
+BASE = {'PC': 62, 'V': 60, 'V2': 60, 'C1': 67, 'C2': 67, 'C3': 69, 'B': 64}
+BASE['PC'] = 62          # 预副歌：比主歌高 2 度，给副歌留一级台阶（第29类）
 
 # 民谣循环：主歌 I-V-vi-IV；副歌 下属开场再回主音；桥段 vi-IV-I-V
 PROG_V = [('C', 3), ('G', 3), ('A', 3), ('F', 3)] * 2
+PROG_PC = [('F', 3), ('G', 3), ('F', 3), ('G', 3)]   # IV-V 绕圈，停 V 不回 I
 PROG_C = [('F', 3), ('G', 3), ('C', 4), ('A', 3), ('F', 3), ('G', 3), ('C', 4), ('C', 4)]
 PROG_B = [('A', 3), ('F', 3), ('C', 4), ('G', 3)] * 2
 PROG_I = [('C', 3), ('G', 3), ('A', 3), ('F', 3), ('C', 3), ('G', 3), ('F', 3), ('G', 3)]
@@ -95,6 +101,13 @@ RHY = {
     'R5': ([0, 1, 2, 3, 4, 5, 5.5, 6], [1, 1, 1, 0.6, 1, 1, 0.5, 2]),   # 同 R4 的附点推进，末音留 2 拍（非段末句用）
 }
 VAR_RHY = {'V': 'R1', 'V2': 'R5', 'B': 'R2'}
+
+# 三音色分工（用户要求：每首 >=2 音色；2026-11-20 加戏曲腔，收尾一遍副歌用戏腔）
+# 0 = 少年声（清亮偏高，副歌抬起来）  4 = 自然声（不加修饰的日常感，主歌讲细节）
+# 5 = 戏曲腔（字头快、奇次泛音亮、上滑入音、拖腔大颤）
+VOICE = {'V': 4, 'V2': 4, 'PC': 4, 'B': 4, 'C1': 0, 'C2': 0, 'C3': 5}
+VOCAL_CH = (0, 4, 5)     # 人声轨，其余是伴奏与打击乐
+VOICE_GAIN = 1.02        # 自然声谐波淡，要补电平才不被主歌压掉
 
 def phrase_notes(base, contour, t0, short_end=False, rhythm='R1'):
     """8 字一句，按节奏模板落拍；段末句末音收 1 拍留白。"""
@@ -172,12 +185,15 @@ def build_intro(notes, t):
         for hb in (0.5, 1.5, 2.5, 3.5):
             notes.append(dict(t=ct + int(hb * BEAT), dur=int(0.15 * BEAT), pitch=0, ch=3,
                               amp=0.07 + 0.02 * bi, kind='h'))
-    # ② 远处汽笛：长音 72(G4) 一记，音量很轻，像站台外的回响
-    notes.append(dict(t=t, dur=int(7 * BEAT), pitch=72, ch=2, amp=0.05))
-    notes.append(dict(t=t + int(0.5 * BEAT), dur=int(6 * BEAT), pitch=67, ch=2, amp=0.035))
-    # ③ 钩子影子：第 2 小节起只点钩子前 4 个音（不整句剧透）
+    # ② 远处汽笛：长音 72(G4) 一记，音量很轻，像站台外的回响（第27类：不许盖住 0 秒钩子，再压低一档）
+    notes.append(dict(t=t, dur=int(7 * BEAT), pitch=72, ch=2, amp=0.04))
+    notes.append(dict(t=t + int(0.5 * BEAT), dur=int(6 * BEAT), pitch=67, ch=2, amp=0.028))
+    # ③ 钩子先行（第27类 L1/L4）：第 1 小节就把副歌主句的 4 个音亮出来，2.6 秒内听到"这是哪首"
     for i, off in enumerate(CHORUS[0][1][:4]):
-        notes.append(dict(t=t + 4 * BEAT + i * BEAT, dur=int(0.9 * BEAT), pitch=67 + off, ch=0, amp=0.20))
+        notes.append(dict(t=t + i * BEAT, dur=int(0.9 * BEAT), pitch=67 + off, ch=0, amp=0.30))
+    # ③b 第 3 小节再轻点一遍，形成"重复的签名动机"，不是一闪而过
+    for i, off in enumerate(CHORUS[0][1][:4]):
+        notes.append(dict(t=t + 2 * 4 * BEAT + i * BEAT, dur=int(0.85 * BEAT), pitch=67 + off, ch=0, amp=0.22))
     # ④ 上行引子：最后半小节四音爬升，直接接到主歌第一字(C4)
     lead = [60, 62, 64, 67]
     for i, pi in enumerate(lead):
@@ -197,15 +213,18 @@ def build():
     plan = [
         ('I1', 'inst', PROG_I, 4, 'intro', None),
         ('V',  'lyric', PROG_V, 8, 'verse', VERSES),
+        ('PC', 'lyric', PROG_PC, 4, 'build', PRECHORUS),
         ('C1', 'lyric', PROG_C, 8, 'chorus', CHORUS),
-        ('I2', 'inst', PROG_I, 8, 'mid', None),
+        ('I2', 'inst', PROG_I, 4, 'mid', None),
         ('V2', 'lyric', PROG_V, 8, 'verse', VERSES2),
+        ('PC', 'lyric', PROG_PC, 4, 'build', PRECHORUS),
         ('C2', 'lyric', PROG_C, 8, 'chorus', CHORUS2),
         ('B',  'lyric', PROG_B, 8, 'bridge', BRIDGE),
         ('C3', 'lyric', PROG_C3, 8, 'chorus', CHORUS3),
         ('O',  'inst', PROG_O, 8, 'fadeout', None),
     ]
-    for tag, kind, prog, bars, level, lines in plan:
+    for pi_, (tag, kind, prog, bars, level, lines) in enumerate(plan):
+        next_is_chorus = (pi_ + 1 < len(plan) and str(plan[pi_ + 1][0]).startswith('C'))
         start = t
         notes = add_harmony(notes, t, bars, prog, level)
         notes = add_drums(notes, t, bars, level)
@@ -216,12 +235,28 @@ def build():
             base = BASE.get(tag, BASE['C1'])
             for li, (text, contour) in enumerate(lines):
                 t0 = t + li * 8 * BEAT
-                sec_last = (li == len(lines) - 1) and (not chorus)
-                rhy = 'R4' if sec_last else ('R3' if chorus else VAR_RHY.get(tag, 'R1'))
-                for (nt, nd, pi) in phrase_notes(base, contour, t0, short_end=sec_last, rhythm=rhy):
-                    notes.append(dict(t=nt, dur=nd, pitch=pi, ch=0,
-                                      amp=0.36 if chorus else 0.26))
+                is_last = (li == len(lines) - 1)
+                junct = is_last and next_is_chorus          # 这句之后紧跟副歌
+                sec_last = is_last and junct
+                if junct:
+                    rhy = 'R4'                             # 收在 7 拍、末音 1 拍，直接顶进副歌
+                elif is_last and not chorus:
+                    rhy = VAR_RHY.get(tag, 'R1')           # 段末但不接副歌：长尾收偶数拍
+                elif chorus:
+                    rhy = 'R3'
+                else:
+                    rhy = VAR_RHY.get(tag, 'R1')
+                ph = phrase_notes(base, contour, t0, short_end=sec_last, rhythm=rhy)
+                np_ = max(1, len(ph) - 1)
+                line_gain = (1.0 if chorus else 0.96) + 0.03 * li        # 段内越往后越往前推
+                vch = VOICE.get(tag, 0)
+                for k, (nt, nd, pi) in enumerate(ph):
+                    arc = 0.93 + 0.07 * (k / np_)                        # 句内渐强，句尾最实
+                    notes.append(dict(t=nt, dur=nd, pitch=pi, ch=vch,
+                                      amp=(0.44 if chorus else 0.25) * line_gain * arc *
+                                          (VOICE_GAIN if vch == 4 else 1.0)))
                 mel_meta.append(dict(text=text, t=t0, base=base, chorus=chorus, tag=tag,
+                                     next_is_chorus=next_is_chorus, junct=junct, li=li,
                                      peaks=max(base + o for o in contour)))
         secs.append(dict(tag=tag, kind=kind, level=level, t0=start,
                          t1=t + bars * 4 * BEAT, bars=bars))
@@ -236,12 +271,12 @@ def verify_lyric_fit(notes, mel, sec_tags):
     ok = True
     print('══ 词曲适配 ══')
     for i, m in enumerate(mel):
-        ph = sorted([x for x in notes if x['ch'] == 0 and m['t'] <= x['t'] < m['t'] + 8 * BEAT],
+        ph = sorted([x for x in notes if x['ch'] in VOCAL_CH and m['t'] <= x['t'] < m['t'] + 8 * BEAT],
                     key=lambda x: x['t'])
         tg = sec_tags[i]
         key = 'C' if tg.startswith('C') else tg      # C1/C2/C3 统一按副歌的适配表
         tag = key
-        si = STRESS[key][i % 4]
+        si = STRESS[key][m.get('li', i) % 4]   # 按段内句序取重音位，避免插段后整段错位
         beat4 = (ph[3]['t'] - m['t']) / float(BEAT) + ph[3]['dur'] / float(BEAT)
         beat5 = (ph[4]['t'] - m['t']) / float(BEAT)
         gap = beat5 - beat4
@@ -263,14 +298,14 @@ def verify(notes, mel):
     for i, m in enumerate(mel):
         line = m['text']
         assert len(line) == 8, '每句必须 8 字：%s' % line
-        ph = sorted([x for x in notes if x['ch'] == 0 and m['t'] <= x['t'] < m['t'] + 8 * BEAT],
+        ph = sorted([x for x in notes if x['ch'] in VOCAL_CH and m['t'] <= x['t'] < m['t'] + 8 * BEAT],
                     key=lambda x: x['t'])
         assert len(ph) == 8, '%s 音符数不是 8' % line
         beats = [(x['t'] - m['t']) / float(BEAT) for x in ph]
         w1, w5 = beats[0], beats[4]
         ok_word = (abs(w1 % 2) < 1e-9) and abs(w5 % 2) < 1e-9
         end = (ph[-1]['t'] - m['t']) / float(BEAT) + ph[-1]['dur'] / float(BEAT)
-        at_junction = (i == 3 or i == 11 or i == 19)
+        at_junction = bool(m.get('junct'))    # 第31类：按「这句之后是否接副歌」判，逐句记录，不按句序号
         need = 1.0 if at_junction else 1.5
         ok_end = ph[-1]['dur'] / float(BEAT) >= need and (
             abs(end % 2) < 1e-6 if not at_junction else (abs(end - 7) < 1e-6))
@@ -281,10 +316,14 @@ def verify(notes, mel):
         ok = ok and ok_word and ok_end
     vmax = max(m['peaks'] for m in mel if not m['chorus'] and m['base'] == 60)
     cmax = max(m['peaks'] for m in mel if m['chorus'])
-    span = max(x['pitch'] for x in notes if x['ch'] == 0) - min(x['pitch'] for x in notes if x['ch'] == 0)
+    span = max(x['pitch'] for x in notes if x['ch'] in VOCAL_CH) - min(x['pitch'] for x in notes if x['ch'] in VOCAL_CH)
     print('副歌峰值 %d − 主歌峰值 %d = %d 半音（≥7） | 全曲音域 %d 半音（≤16）'
           % (cmax, vmax, cmax - vmax, span))
-    return ok and (cmax - vmax >= 7) and span <= 16
+    used = sorted(set(x['ch'] for x in notes if x['ch'] in VOCAL_CH))
+    NAME = {0: '少年声', 4: '自然声', 5: '戏曲腔'}
+    print('人声音色 %d 种：%s（要求 ≥2：少年声0 / 自然声4 / 戏曲腔5）'
+          % (len(used), '、'.join(NAME.get(c, str(c)) for c in used)))
+    return ok and (cmax - vmax >= 7) and span <= 16 and len(used) >= 2
 
 def main():
     out = os.path.join(HERE, 'out')
@@ -300,7 +339,7 @@ def main():
         'cl', os.path.join(HERE, '..', '和弦对比', 'chord_lib.py'))
     cl = importlib.util.module_from_spec(spec2); spec2.loader.exec_module(cl)
     cl.write_mid([dict(t=x['t'], dur=x['dur'], pitch=x['pitch'], vel=90,
-                       ch=0 if x['ch'] == 0 else (1 if x['ch'] in (1, 2) else 2))
+                       ch=0 if x['ch'] in VOCAL_CH else (1 if x['ch'] in (1, 2) else 2))
                   for x in notes if x['ch'] != 3], PPQ, mid, TEMPO)
     w = wave.open(wav, 'rb'); n = w.getnframes()
     s = struct.unpack('<%dh' % n, w.readframes(n)); w.close()

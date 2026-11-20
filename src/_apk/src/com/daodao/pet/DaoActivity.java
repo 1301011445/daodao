@@ -55,6 +55,18 @@ public class DaoActivity extends Activity {
     }
 
     @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
+        super.onRequestPermissionsResult(code, perms, res);
+        if (code == 9001 && bridge != null) {
+            if (res != null && res.length > 0 && res[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                bridge.startListenNow();
+            } else {
+                bridge.tellNoMic();
+            }
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         if (web != null) {
             web.stopLoading();

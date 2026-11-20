@@ -468,6 +468,10 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
   }
   var mode = 'idle', modeLeft = 4, mood = 0, moodLeft = 0, waveLeft = 0;
   var dx = 0, tilt = 0, hopY = 0, walkPhase = 0, lieAmt = 0;
+  // 2026-11-20 参照《The Animator's Survival Kit》的四姿势走路（contact/down/passing/up）：
+  // 贴图只提供腿的姿态，重量感必须靠身体自己的上下沉浮与挤压拉伸补出来
+  var animBob = 0, animSqY = 1, animSqX = 1;
+  var jumpT = -1, JUMP_DUR = 0.95;
   if (lockMode) { mode = lockMode; modeLeft = 99; }
   if (lockMode && actOfMode(lockMode)) {
     actKind = actOfMode(lockMode);
@@ -730,6 +734,11 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
       bob = bob * (1 - lieAmt) + 20 * lieAmt;
     }
 
+    // 走路/跑/跳/跳舞的身体力学：先沉浮，再挤压拉伸（脚底不动，所以只改纵向尺寸）
+    bob += animBob;
+    sy *= animSqY;
+    sx *= animSqX;
+
     var bedA = lieAmt > 0.45 ? (lieAmt - 0.45) / 0.55 : 0;
     if (bedA > 0) bedA = Math.min(1, bedA);
 
@@ -824,10 +833,10 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
 
     var strips = 26, stripH = TARGET_H / strips;
     var imgScale = img.naturalHeight / TARGET_H;
-    var amp = (mode === 'run') ? 4.4 : ((mode === 'walk') ? 2.6 : 0.9);
+    var amp = (mode === 'run') ? 2.2 : ((mode === 'walk') ? 1.1 : 0.9);
     var ph0 = t * ((mode === 'run') ? 11.0 : 7.2);
     // 跳舞不再靠加大切条幅度（那就是折叠），只留一点摆动，动感交给整体位移
-    if (actKind === 4 && actAmt > 0.25 && species !== 8) { amp += 1.4 * actAmt; ph0 = t * 6.4; }
+    if (actKind === 4 && actAmt > 0.25 && species !== 8) { amp += 0.8 * actAmt; ph0 = t * 6.4; }
     var i, off, fy, yy, sh, syp, shp;
     for (i = 0; i < strips; i++) {
       fy = (i + 0.5) / strips;
@@ -920,23 +929,69 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
 
     if (mode === 'walk') {
       walkPhase += dt;
-      dx = 0;            // 位移交给八帧走路图，身体不再整只左右滑（原来 ±16px 像在飘）
+      dx = 0;
+      // 一个 8 帧循环 = 两步：p 从 0 到 1，接触在 0/0.5，最低点在 0.125/0.625，最高点在 0.375/0.875
+      var pW = (t * 11 / 8) % 1;
+      animBob = -2.6 * Math.sin(4 * Math.PI * pW) + 0.6;
+      animSqY = 1 - 0.016 * Math.sin(4 * Math.PI * pW);
+      animSqX = 1 + 0.012 * Math.sin(4 * Math.PI * pW);
+      tilt = 2.4;                       // 走路带一点前倾，不是直挺挺地滑
     } else if (mode === 'run') {
       walkPhase += dt * 1.9;
       dx = 0;
-      tilt = Math.sin(walkPhase * 2.2) * 3;   // 原来是 ±12 度硬翻，看着像左右甩
+      var pR = (t * 14 / 8) % 1;
+      animBob = -5.0 * Math.sin(4 * Math.PI * pR) + 1.2;
+      animSqY = 1 - 0.030 * Math.sin(4 * Math.PI * pR);
+      animSqX = 1 + 0.022 * Math.sin(4 * Math.PI * pR);
+      tilt = 6.0;                       // 跑起来前倾更多，重心压在前面
     } else if (mode === 'wave') {
       tilt = Math.sin(t * 9) * 3.2;
       dx = 0;
     } else {
       dx *= 0.9; tilt *= 0.9;
+      animBob *= 0.88; animSqY += (1 - animSqY) * 0.14; animSqX += (1 - animSqX) * 0.14;
+      if (Math.abs(animBob) < 0.02) animBob = 0;
     }
 
     lieAmt = 0;   // v22：不再躺下睡觉，床和飘 Z 一起撤掉
 
     hopY = 0;
     if (mode === 'hop') {
-      hopY = -Math.abs(Math.sin(t * 6.2)) * 22;
+      if (jumpT < 0) jumpT = 0;
+      jumpT += dt;
+      var jp = jumpT;
+      if (jp < 0.16) {                       // 预备下蹲：挤压，重心下沉
+        var k1 = jp / 0.16;
+        animSqY = 1 - 0.11 * Math.sin(k1 * Math.PI * 0.5);
+        animSqX = 1 + 0.07 * Math.sin(k1 * Math.PI * 0.5);
+        animBob = 3.0 * k1;
+      } else if (jp < 0.28) {                // 蹬地：拉伸、离地
+        var k2 = (jp - 0.16) / 0.12;
+        animSqY = 0.89 + 0.17 * k2;
+        animSqX = 1.07 - 0.11 * k2;
+        animBob = 3.0 - 6.0 * k2;
+        hopY = -8 * k2;
+      } else if (jp < 0.62) {                // 腾空：抛物线，顶点约 44px
+        var k3 = (jp - 0.28) / 0.34;
+        hopY = -8 - 36 * Math.sin(Math.PI * k3);
+        animSqY = 1.06 - 0.05 * Math.sin(Math.PI * k3);
+        animSqX = 0.96 + 0.04 * Math.sin(Math.PI * k3);
+        animBob = -3.0;
+      } else if (jp < 0.78) {                // 落地缓冲：压到最低再起
+        var k4 = (jp - 0.62) / 0.16;
+        hopY = -8 + 8 * Math.min(1, k4 * 2);
+        animSqY = 0.86 + 0.10 * k4;
+        animSqX = 1.10 - 0.07 * k4;
+        animBob = k4 < 0.5 ? (2.5 * Math.sin(k4 * Math.PI * 2)) : 0;
+      } else if (jp < JUMP_DUR) {            // 回正
+        var k5 = (jp - 0.78) / (JUMP_DUR - 0.78);
+        animSqY = 0.96 + 0.04 * k5;
+        animSqX = 1.03 - 0.03 * k5;
+      } else {
+        jumpT = -1; animSqY = 1; animSqX = 1; animBob = 0; hopY = 0;
+      }
+    } else if (jumpT >= 0) {
+      jumpT = -1; animSqY = 1; animSqX = 1; animBob = 0;
     }
 
     // 走动：人往前走，场景往后退；走到画面边上了就转身往回走
@@ -965,8 +1020,13 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
 
     // 飞、御剑、骑坐骑这几个是离地的，得抬起来再轻轻飘
     if (mode === 'fly' || mode === 'sword' || mode === 'ride') {
-      hopY -= 16 * actAmt;
-      tilt = Math.sin(t * 1.4) * 2.2 * actAmt;
+      // 跳舞/动作：随拍点往下沉一点，左右只留很小的重心移，别再整条带子甩
+      var beatA = t * 3.6;
+      var bB = Math.abs(Math.sin(beatA));
+      animBob = actAmt * (0.9 - 1.7 * bB);
+      animSqY = 1 - 0.035 * actAmt * bB;
+      hopY -= 6 * actAmt;
+      tilt = Math.sin(beatA) * 1.8 * actAmt;
     }
 
     if (modeLeft <= 0) {
@@ -1347,7 +1407,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='76';
+  var HTML_VER='77';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;

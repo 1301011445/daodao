@@ -482,7 +482,7 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
 
   function resize() {
     // 高分屏按 3x 画会让画布像素多 9 倍，手机卡到掉帧；封到 1.5 肉眼几乎无差
-    dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    dpr = Math.min(window.devicePixelRatio || 1, (Math.min(window.innerWidth, window.innerHeight) < 700 ? 1.25 : 1.5));
     var sw = document.getElementById('stage').clientWidth;
     var sh = document.getElementById('stage').clientHeight;
     scale = Math.min((sw * 0.94) / CW, (sh * 0.94) / CH);
@@ -912,12 +912,31 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
   }
 
   var _idleGate = 0;
+  // 帧率读数：手机端用来量「迟钝」到底是多少帧，用户报数字就能定位
+  var fpsTag = null, _fpsN = 0, _fpsT0 = 0, _fpsVal = 0;
+  function fpsPaint(v) {
+    if (!fpsTag) {
+      fpsTag = document.createElement('div');
+      fpsTag.style.cssText = 'position:fixed;right:6px;top:46px;font-size:11px;line-height:1.2;'
+        + 'color:#8fa2bd;opacity:.8;z-index:9;pointer-events:none;font-family:system-ui';
+      document.body.appendChild(fpsTag);
+    }
+    fpsTag.textContent = v + ' fps';
+    fpsTag.style.color = v < 24 ? '#ff9a8a' : (v < 40 ? '#e8d48a' : '#8fa2bd');
+  }
   function tick(now) {
     // 空闲（不是走/跑/挥手/说话）时每两帧只画一帧：手机不发烫、点按才跟手
     if (mode === 'idle' && waveLeft <= 0 && moodLeft <= 0) {
       _idleGate++;
-      if (_idleGate % 2 === 0) { lastT = now; requestAnimationFrame(tick); return; }
+      if (_idleGate % 3 !== 0) { lastT = now; requestAnimationFrame(tick); return; }
     } else { _idleGate = 0; }
+    _fpsN++;
+    if (!_fpsT0) _fpsT0 = now;
+    if (now - _fpsT0 >= 1000) {
+      _fpsVal = Math.round(_fpsN * 1000 / (now - _fpsT0));
+      _fpsN = 0; _fpsT0 = now;
+      fpsPaint(_fpsVal);
+    }
     if (!lastT) lastT = now;
     var dt = Math.min(0.05, (now - lastT) / 1000);
     lastT = now;
@@ -1404,7 +1423,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='80';
+  var HTML_VER='81';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;

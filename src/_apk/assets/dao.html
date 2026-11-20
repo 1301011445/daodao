@@ -42,7 +42,7 @@
     padding: 10px 14px calc(13px + env(safe-area-inset-bottom, 0px));
     display: flex; flex-direction: column; gap: 9px; width: 100%;
   }
-  #bar .minis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; width: 100%; }
+  #bar .minis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; width: 100%; }
   button {
     display: inline-block; margin: 0; border-radius: 999px;
     background: rgba(118,158,255,.15); color: #cfdcff; font-size: 15px;
@@ -174,8 +174,7 @@
     <div id="verTag">v40</div>
     <div id="whoTag"><span class="dotc"></span><span id="whoName">银发剑客</span><span class="tw">· 手办风</span></div>
     <div id="joyTag">愉悦 --</div>
-    <div id="musicTag">♪ 曲库</div>
-    <div id="musicPanel"></div>
+      <div id="musicPanel"></div>
     <div id="pcBtn">电脑</div>
     <div id="pcPanel">
       <button id="pcSync">同步记忆</button>
@@ -187,7 +186,6 @@
       <button id="btnSwap"><span class="lb">换形象</span></button>
       <button id="btnAct"><span class="lb">换动作</span></button>
       <button id="btnSong"><span class="lb">唱歌</span></button>
-      <button id="btnLib"><span class="lb">曲库</span></button>
     </div>
     <button id="btnTalk">跟它说话</button>
   </div>
@@ -796,7 +794,7 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
       if (dIm.complete && dIm.naturalWidth) {
         var dW = TARGET_H * (dIm.naturalWidth / dIm.naturalHeight);
         var beat = t * 3.6;
-        var swayX = 9 * actAmt * Math.sin(beat);
+        var swayX = 4 * actAmt * Math.sin(beat);
         var swayY = -6 * actAmt * Math.abs(Math.sin(beat * 2));
         ctx.drawImage(dIm, -dW / 2 + swayX, -TARGET_H + swayY, dW, TARGET_H);
         ctx.restore();
@@ -922,11 +920,11 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
 
     if (mode === 'walk') {
       walkPhase += dt;
-      dx = Math.sin(walkPhase * 1.6) * 16;
+      dx = 0;            // 位移交给八帧走路图，身体不再整只左右滑（原来 ±16px 像在飘）
     } else if (mode === 'run') {
       walkPhase += dt * 1.9;
-      dx = Math.sin(walkPhase * 1.6) * 26;
-      tilt = walkPhase % 3.14 < 1.57 ? 12 : -12;
+      dx = 0;
+      tilt = Math.sin(walkPhase * 2.2) * 3;   // 原来是 ±12 度硬翻，看着像左右甩
     } else if (mode === 'wave') {
       tilt = Math.sin(t * 9) * 3.2;
       dx = 0;
@@ -968,7 +966,7 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
     // 飞、御剑、骑坐骑这几个是离地的，得抬起来再轻轻飘
     if (mode === 'fly' || mode === 'sword' || mode === 'ride') {
       hopY -= 16 * actAmt;
-      tilt = Math.sin(t * 1.4) * 4.5 * actAmt;
+      tilt = Math.sin(t * 1.4) * 2.2 * actAmt;
     }
 
     if (modeLeft <= 0) {
@@ -1294,11 +1292,8 @@ var exprImgs = [];
 
   document.getElementById('btnSong').addEventListener('pointerdown', function (e) {
     e.preventDefault();
-    if (window.daoPlayNext) window.daoPlayNext(); else showKnow();
-  });
-  document.getElementById('btnLib').addEventListener('pointerdown', function (e) {
-    e.preventDefault();
     if (window.daoMusicPanel) window.daoMusicPanel();
+    else if (window.daoPlayNext) window.daoPlayNext();
   });
 
   // 「讲题」已从第二行撤掉；要讲题直接在输入框里说「讲讲这道题」
@@ -1352,7 +1347,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='74';
+  var HTML_VER='75';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1841,7 +1836,6 @@ setInterval(daoSyncJoy, 60000);
     if (playing === i) { stopMusic(); return; }
     stopMusic();
     // 唱歌前先把朗读停掉，两路声音不能一起响
-    try { if (window.DaoNative && DaoNative.stopAll) DaoNative.stopAll(); } catch (e) {}
     try { if (window.DaoNative && DaoNative.stopAll) DaoNative.stopAll(); } catch (e) {}
     try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
     playing = i;

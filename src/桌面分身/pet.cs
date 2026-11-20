@@ -5142,6 +5142,7 @@ public class DesktopPet : Form
             bubbleFrames--;
             if (bubbleFrames == 0) bubble = null;
         }
+        SyncBubbleWindow();
         // 招手打招呼
         if (waveTicks > 0) waveTicks--;
         // 空闲计时：一有交互就清零
@@ -5450,7 +5451,7 @@ public class DesktopPet : Form
             DrawFace(g, cx, cy, ry, dark);
         }
 
-        if (bubble != null) DrawBubble(g);
+        // 气泡浮层改由计时器驱动（见 tick），不在 Paint 里建窗口，避免重入卡死
     }
 
     // 御剑专属画法：没有整套姿势图的形象，御剑时直接贴这张踩剑姿势。
@@ -7906,6 +7907,53 @@ public class DesktopPet : Form
         }
     }
 
+    // 说话气泡原来画在窗口里(顶端 y=5)，而窗口只有 205 高、人 188 高，
+    // 头顶就在 y≈17，白框必然糊在脸上。改成独立浮层窗口：贴在道的头顶上方，
+    // 上面放不下就翻到脚下，跟着人物走，说完自动隐藏。
+    Form bubbleForm;
+    Label bubbleLabel;
+    void SyncBubbleWindow()
+    {
+        if (bubble == null || bubbleFrames <= 0)
+        {
+            if (bubbleForm != null && bubbleForm.Visible) bubbleForm.Hide();
+            return;
+        }
+        if (bubbleForm == null)
+        {
+            bubbleForm = new Form();
+            bubbleForm.FormBorderStyle = FormBorderStyle.None;
+            bubbleForm.ShowInTaskbar = false;
+            bubbleForm.TopMost = true;
+            bubbleForm.BackColor = Color.FromArgb(252, 253, 255);
+            bubbleLabel = new Label();
+            bubbleLabel.AutoSize = false;
+            bubbleLabel.BackColor = Color.FromArgb(252, 253, 255);
+            bubbleLabel.ForeColor = Color.FromArgb(44, 46, 62);
+            bubbleLabel.Font = new Font("Microsoft YaHei", 9f);
+            bubbleForm.Controls.Add(bubbleLabel);
+        }
+        if (bubbleLabel.Text != bubble) bubbleLabel.Text = bubble;
+
+        int maxW = 340;
+        Size szTxt = TextRenderer.MeasureText(bubble, bubbleLabel.Font, new Size(maxW, 900), TextFormatFlags.WordBreak);
+        int bw = Math.Min(maxW, Math.Max(64, szTxt.Width)) + 22;
+        int bh = Math.Min(120, Math.Max(22, szTxt.Height)) + 16;
+        bubbleForm.Size = new Size(bw, bh);
+        bubbleLabel.Bounds = new Rectangle(11, 8, bw - 22, bh - 16);
+
+        Rectangle wa = Screen.FromControl(this).WorkingArea;
+        Rectangle me = this.Bounds;
+        int x = me.Left + (me.Width - bw) / 2;
+        int y = me.Top - bh - 5;
+        if (y < wa.Top + 4) y = me.Bottom + 5;
+        if (y + bh > wa.Bottom - 4) y = wa.Top + 4;
+        if (x + bw > wa.Right - 4) x = wa.Right - 4 - bw;
+        if (x < wa.Left + 4) x = wa.Left + 4;
+        bubbleForm.Location = new Point(x, y);
+        if (!bubbleForm.Visible) bubbleForm.Show();
+    }
+
     void DrawBubble(Graphics g)
     {
         if (bubble == null) return;
@@ -8378,7 +8426,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 74;
+    public const int APP_VER = 75;
 
     public static void Start()
     {

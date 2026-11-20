@@ -270,6 +270,14 @@ public class DaoBridge {
         });
     }
 
+    /** 预热：页面刚起来就把到智谱的 TLS 连接握好，等下识别/对话少一次握手（约 150~300ms） */
+    @JavascriptInterface
+    public void warmUp() {
+        new Thread(new Runnable() { public void run() {
+            try { httpGet("https://open.bigmodel.cn/api/paas/v4/models", 4000); } catch (Exception e) { }
+        }}).start();
+    }
+
     @JavascriptInterface
     public void listenCloud(String cbId) {
         voiceCb = (cbId == null) ? "" : cbId;
@@ -365,11 +373,15 @@ public class DaoBridge {
         recording = false;
         try { if (rec != null) rec.stop(); } catch (Exception e) { }
         final java.io.File f = recWav;
+        // 原来固定等 250ms 让录音线程把文件收尾；现在直接等线程结束，能少等就少等
+        try { if (recThread != null) recThread.join(600); } catch (Exception e) { }
         new Thread(new Runnable() {
             public void run() {
-                try { Thread.sleep(250); } catch (Exception e) { }
                 if (f == null || !f.exists() || f.length() < 3000) { postVoice("没录到声音"); return; }
-                String t = asrCloud(f);
+                java.io.File up = trimSilence(f);      // 先裁首尾静音：少传一段、识别也快一点
+                if (up == null) up = f;
+                String t = asrCloud(up);
+                try { if (up != f) up.delete(); } catch (Exception e) { }
                 try { f.delete(); } catch (Exception e) { }
                 if (t == null) { postVoice("没听清（网络不通）"); return; }
                 t = t.trim();
@@ -377,6 +389,43 @@ public class DaoBridge {
                 postVoice(t);
             }
         }).start();
+    }
+
+    /** 裁掉首尾静音：16k 单声道 16bit，50ms 一窗算 RMS，阈值 300（约 -40dBFS）。
+     *  常见一句话前后各有一两秒空白，裁掉后上传量少 20%~40%，云识别也更快。 */
+    private java.io.File trimSilence(java.io.File f) {
+        try {
+            byte[] all = java.nio.file.Files.readAllBytes(f.toPath());
+            int n = (all.length - 44) / 2;
+            if (n < 800) return null;
+            int win = 800;                                   // 50ms
+            int frames = n / win;
+            int first = -1, last = -1;
+            for (int i = 0; i < frames; i++) {
+                long sum = 0;
+                int base = 44 + i * win * 2;
+                for (int j = 0; j < win; j++) {
+                    int s = all[base + j * 2] | (all[base + j * 2 + 1] << 8);
+                    sum += s * s;
+                }
+                double rms = Math.sqrt((double) sum / win);
+                if (rms > 300) { if (first < 0) first = i; last = i; }
+            }
+            if (first < 0) return null;
+            int s0 = Math.max(0, (first - 2) * win);          // 前后各留 100ms 余量
+            int s1 = Math.min(n, (last + 3) * win);
+            if (s1 - s0 < win) return null;                   // 太短就别折腾
+            java.io.File out = new java.io.File(ctx.getCacheDir(), "rec_trim_" + System.currentTimeMillis() + ".wav");
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
+            byte[] hdr = new byte[44];
+            fos.write(hdr);
+            byte[] body = new byte[(s1 - s0) * 2];
+            System.arraycopy(all, 44 + s0 * 2, body, 0, body.length);
+            fos.write(body);
+            fos.close();
+            writeWavHeader(out, body.length, 16000);
+            return out;
+        } catch (Exception e) { return null; }
     }
 
     private String asrCloud(java.io.File f) {

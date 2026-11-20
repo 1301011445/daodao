@@ -1430,7 +1430,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='83';
+  var HTML_VER='84';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1623,6 +1623,7 @@ setInterval(daoSyncJoy, 60000);
     tip(msg);
   };
   setTimeout(function () { try { if (window.DaoNative && DaoNative.syncNow) DaoNative.syncNow(); } catch (e) {} }, 1500);
+setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNative.warmUp(); } catch (e) {} }, 800);
 
   // ---------- 说话：先用电脑的声音，连不上再退回手机自带 TTS ----------
   // 电脑端 /tts 返回的是 Edge 合成的 mp3，音色比手机自带 TTS 自然；

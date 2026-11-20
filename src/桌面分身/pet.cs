@@ -3330,13 +3330,29 @@ public class DesktopPet : Form
         catch { return 0; }
     }
 
+    // 对话框不再钉在屏幕正中（正中正好压着道那张脸）：贴着自己的窗口摆，
+    // 下面放不下就翻到头顶上方，左右再按屏幕边界夹一下
+    void PlaceNearMe(Form f)
+    {
+        Rectangle wa = Screen.FromControl(this).WorkingArea;
+        Rectangle me = this.Bounds;
+        int x = me.Left + (me.Width - f.Width) / 2;
+        int y = me.Bottom + 8;
+        if (y + f.Height > wa.Bottom - 8) y = me.Top - f.Height - 8;
+        if (y < wa.Top + 8) y = wa.Top + 8;
+        if (x + f.Width > wa.Right - 8) x = wa.Right - 8 - f.Width;
+        if (x < wa.Left + 8) x = wa.Left + 8;
+        f.StartPosition = FormStartPosition.Manual;
+        f.Location = new Point(x, y);
+    }
+
     string AskText(string title, string tip)
     {
         Form f = new Form();
         f.Text = title;
         f.Width = 460;
         f.Height = 190;
-        f.StartPosition = FormStartPosition.CenterScreen;
+        PlaceNearMe(f);
         f.FormBorderStyle = FormBorderStyle.FixedDialog;
         f.MaximizeBox = false;
         f.MinimizeBox = false;
@@ -4502,7 +4518,7 @@ public class DesktopPet : Form
         f.FormBorderStyle = FormBorderStyle.FixedDialog;
         f.MaximizeBox = false;
         f.MinimizeBox = false;
-        f.StartPosition = FormStartPosition.CenterScreen;
+        PlaceNearMe(f);
         f.TopMost = true;
         f.Width = 440;
         f.Height = 165;
@@ -8362,7 +8378,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 73;
+    public const int APP_VER = 74;
 
     public static void Start()
     {

@@ -27,7 +27,8 @@
   #bg.show { opacity: 1; }
   canvas { display: block; position: relative; }
   #bubble {
-    position: absolute; left: 50%; top: auto; bottom: 41%; transform: translate(-50%, 6px);
+    /* 位置由 resize() 按立绘高度算：气泡底边压在人头顶上方，不再糊在脸上 */
+    position: absolute; left: 50%; top: auto; bottom: 52%; transform: translate(-50%, 6px);
     max-width: 80%; padding: 10px 15px;
     background: rgba(255,255,255,.95); color: #18202f;
     border-radius: 15px; font-size: 15px; line-height: 1.5;
@@ -489,6 +490,10 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
     cv.height = Math.round(cssH * dpr);
     ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
     ctx.imageSmoothingEnabled = true;
+    // 气泡底边贴着立绘头顶：气泡往上长，脸永远露得出来
+    var stageH = document.getElementById('stage').clientHeight;
+    var headTop = stageH - (cv.offsetTop || 0);
+    bubble.style.bottom = Math.max(64, headTop + 10) + 'px';
     redraw();
   }
 
@@ -1347,7 +1352,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='73';
+  var HTML_VER='74';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;

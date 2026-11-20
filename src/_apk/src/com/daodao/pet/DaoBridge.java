@@ -100,6 +100,7 @@ public class DaoBridge {
     // 不说话时叠着放，就是「对话时会冒出别的声音」
     private void stopAudio() {
         stopSong();
+        try { cancelSay(); } catch (Exception e) { }
         try { if (tts != null) tts.stop(); } catch (Exception e) { }
         try { if (mp != null) { mp.stop(); mp.release(); mp = null; } } catch (Exception e) { try { if (mp != null) mp.release(); } catch (Exception e2) { } mp = null; }
     }
@@ -645,6 +646,278 @@ public class DaoBridge {
                 } catch (Exception e) { fallbackNative(t); }
             }
         }).start();
+    }
+
+    // ================== 低延迟说话（v0.79） ==================
+    // 旧路径：整段回答 -> 合成整段 mp3（1.3~1.8s）-> 才出声，加上识别和对话，一趟要 4~6 秒。
+    // 新路径：回答按句流出 -> 每句单独合成 -> 第 1 句一好就开口，
+    //        后面几句在播第 1 句的同时后台预合成，句子之间不断档。
+    // 常用短句命中缓存（cacheDir/dao_tts）就不用联网，出声只要几十毫秒。
+    private final java.util.ArrayDeque<String> sayQ = new java.util.ArrayDeque<String>();
+    private final java.util.HashSet<String> saying = new java.util.HashSet<String>();
+    private final Object sayLock = new Object();
+    private Thread sayWorker = null;
+    private volatile int sayGen = 0;
+
+    private String md5h(String s) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+            byte[] d = md.digest(s.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < d.length; i++) sb.append(String.format("%02x", d[i]));
+            return sb.toString();
+        } catch (Exception e) { return Integer.toHexString(s.hashCode()); }
+    }
+
+    private java.io.File ttsCacheFile(String text) {
+        try {
+            java.io.File dir = new java.io.File(ctx.getCacheDir(), "dao_tts");
+            if (!dir.exists()) dir.mkdirs();
+            return new java.io.File(dir, md5h(EDGE_VOICES[0] + "|" + text) + ".mp3");
+        } catch (Exception e) { return null; }
+    }
+
+    /** 作废当前说话队列（停歌、开新话题、页面喊停时都调） */
+    private void cancelSay() {
+        synchronized (sayLock) {
+            sayGen++;
+            sayQ.clear();
+            try { sayLock.notifyAll(); } catch (Exception e) { }
+        }
+    }
+
+    /** 把一句放进说话队列（线程安全，可边生成边放） */
+    private void sayEnqueue(String text) {
+        if (text == null) return;
+        final String t0 = text.trim();
+        if (t0.length() == 0) return;
+        synchronized (sayLock) {
+            sayQ.add(t0);
+            if (sayWorker == null || !sayWorker.isAlive()) {
+                final int gen = sayGen;
+                sayWorker = new Thread(new Runnable() { public void run() { sayPump(gen); } });
+                sayWorker.setPriority(Thread.NORM_PRIORITY + 2);
+                sayWorker.start();
+            }
+        }
+    }
+
+    private void sayPump(int gen) {
+        while (true) {
+            String t;
+            synchronized (sayLock) {
+                t = sayQ.poll();
+                if (t == null) { sayWorker = null; return; }
+            }
+            if (gen != sayGen) { sayWorker = null; return; }
+            String nx;
+            synchronized (sayLock) { nx = sayQ.peek(); }
+            if (nx != null) prefetchTts(nx);           // 边播这句边备下一句
+            sayOne(t, gen);
+        }
+    }
+
+    private void prefetchTts(final String text) {
+        final java.io.File f = ttsCacheFile(text);
+        if (f == null || (f.exists() && f.length() > 1200)) return;
+        synchronized (saying) { if (!saying.add(text)) return; }
+        new Thread(new Runnable() { public void run() {
+            try {
+                byte[] mp3 = EdgeTts.synth(text, EDGE_VOICES[0]);
+                if (mp3 != null && mp3.length > 1200) {
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+                    fos.write(mp3); fos.close();
+                }
+            } catch (Exception e) { }
+            finally { synchronized (saying) { saying.remove(text); } }
+        }}).start();
+    }
+
+    /** 系统 TTS 兜底：追加不打断，一段段接下去说 */
+    private void speakRaw(final String t) {
+        initTts();
+        ui.post(new Runnable() { public void run() {
+            try {
+                if (tts == null) return;
+                tts.setSpeechRate(0.95f);
+                tts.speak(t, TextToSpeech.QUEUE_ADD, null, "dao" + System.currentTimeMillis());
+            } catch (Exception e) { }
+        }});
+    }
+
+    private void sayOne(final String text, int gen) {
+        if (gen != sayGen) return;
+        java.io.File f = ttsCacheFile(text);
+        boolean ok = false;
+        try {
+            if (f != null && !(f.exists() && f.length() > 1200)) {
+                byte[] mp3 = EdgeTts.synth(text, EDGE_VOICES[0]);
+                if (mp3 != null && mp3.length > 1200) {
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+                    fos.write(mp3); fos.close();
+                }
+            }
+            ok = (f != null && f.exists() && f.length() > 1200);
+        } catch (Exception e) { ok = false; }
+        if (!ok) { speakRaw(text); return; }
+
+        final Object done = new Object();
+        final boolean[] fin = new boolean[]{false};
+        final java.io.File ff = f;
+        ui.post(new Runnable() { public void run() {
+            try {
+                if (mp != null) { try { mp.release(); } catch (Exception e) { } }
+                mp = new android.media.MediaPlayer();
+                mp.setDataSource(ff.getAbsolutePath());
+                mp.prepare();
+                mp.setOnCompletionListener(new android.media.MediaPlayer.OnCompletionListener() {
+                    public void onCompletion(android.media.MediaPlayer m) {
+                        synchronized (done) { fin[0] = true; done.notifyAll(); }
+                    }
+                });
+                mp.start();
+            } catch (Exception e) { synchronized (done) { fin[0] = true; done.notifyAll(); } }
+        }});
+        synchronized (done) {
+            long dl = System.currentTimeMillis() + 20000;
+            while (!fin[0] && System.currentTimeMillis() < dl) {
+                try { done.wait(200); } catch (Exception e) { break; }
+                if (gen != sayGen) { try { if (mp != null) mp.stop(); } catch (Exception e) { } return; }
+            }
+        }
+        trimTtsCache();
+    }
+
+    private long ttsTrimAt = 0;
+    private void trimTtsCache() {
+        long now = System.currentTimeMillis();
+        if (now - ttsTrimAt < 60000) return;
+        ttsTrimAt = now;
+        try {
+            java.io.File dir = new java.io.File(ctx.getCacheDir(), "dao_tts");
+            java.io.File[] fs = dir.listFiles();
+            if (fs == null || fs.length < 80) return;
+            java.util.Arrays.sort(fs, new java.util.Comparator<java.io.File>() {
+                public int compare(java.io.File a, java.io.File b) {
+                    return Long.compare(a.lastModified(), b.lastModified());
+                }
+            });
+            int n = fs.length - 60;
+            for (int i = 0; i < n; i++) { try { fs[i].delete(); } catch (Exception e) { } }
+        } catch (Exception e) { }
+    }
+
+    /** JS 直接丢一句话来念（不需要走对话） */
+    @JavascriptInterface
+    public void sayText(String text) {
+        stopAudio();
+        sayEnqueue(text);
+    }
+
+    /** 流式对话：边生成边按句说话，字幕最后一次性给 */
+    @JavascriptInterface
+    public void chatStream(final String text, final String cbId) {
+        final String q = (text == null) ? "" : text.trim();
+        final String id = (cbId == null) ? "" : cbId;
+        if (q.length() == 0) { postReply(id, "你想跟我说点什么？", 0); return; }
+        stopAudio();
+        new Thread(new Runnable() {
+            public void run() {
+                StringBuilder body = new StringBuilder();
+                StringBuilder raw = new StringBuilder();
+                boolean moodParsed = false;
+                int mood = 0;
+                int spoken = 0;
+                HttpURLConnection conn = null;
+                try {
+                    JSONObject o = new JSONObject();
+                    o.put("model", MODEL);
+                    o.put("temperature", 0.7);
+                    o.put("max_tokens", 130);
+                    o.put("stream", true);
+                    o.put("messages", buildMsgs(SYS_CHAT, q, true));
+                    conn = (HttpURLConnection) new URL(API).openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setConnectTimeout(12000);
+                    conn.setReadTimeout(30000);
+                    conn.setDoOutput(true);
+                    conn.setRequestProperty("Content-Type", "application/json");
+                    conn.setRequestProperty("Authorization", "Bearer " + KEY);
+                    OutputStream os = conn.getOutputStream();
+                    os.write(o.toString().getBytes("UTF-8"));
+                    os.flush(); os.close();
+                    if (conn.getResponseCode() != 200) { chat(q, id); return; }
+
+                    BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        if (line.length() < 5 || !line.startsWith("data:")) continue;
+                        String d = line.substring(5).trim();
+                        if (d.equals("[DONE]")) break;
+                        JSONObject j;
+                        try { j = new JSONObject(d); } catch (Exception e) { continue; }
+                        JSONArray ch = j.optJSONArray("choices");
+                        if (ch == null || ch.length() == 0) continue;
+                        JSONObject dl = ch.getJSONObject(0).optJSONObject("delta");
+                        if (dl == null) continue;
+                        String piece = dl.optString("content", "");
+                        if (piece.length() == 0) continue;
+
+                        if (!moodParsed) {
+                            raw.append(piece);
+                            int bar = raw.indexOf("|");
+                            if (bar >= 0) {
+                                mood = moodCode(raw.substring(0, Math.min(bar, 10)).trim());
+                                body.append(raw.substring(bar + 1));
+                                raw.setLength(0);
+                                moodParsed = true;
+                            } else if (raw.length() > 14) {
+                                body.append(raw); raw.setLength(0); moodParsed = true;
+                            }
+                        } else {
+                            body.append(piece);
+                        }
+                        if (moodParsed) spoken = flushSpeak(body, spoken);
+                    }
+                    br.close();
+                } catch (Exception e) {
+                    if (body.length() == 0) { chat(q, id); return; }
+                } finally { try { if (conn != null) conn.disconnect(); } catch (Exception e) { } }
+
+                if (!moodParsed && raw.length() > 0) { body.append(raw); }
+                String fin2 = body.toString().trim();
+                if (fin2.length() == 0) { postReply(id, "我没想好怎么回，你再说一句？", 0); return; }
+                if (spoken < fin2.length()) sayEnqueue(fin2.substring(spoken));
+                if (fin2.length() > 200) fin2 = fin2.substring(0, 200);
+                saveTurn(q, fin2);
+                postReply(id, fin2, mood);
+            }
+        }).start();
+    }
+
+    /** 从上次说到的位置往后切句子，够一句就入队；返回新的已说位置 */
+    private int flushSpeak(StringBuilder body, int spoken) {
+        String cur = body.toString();
+        int last = cur.length();
+        if (last <= spoken) return spoken;
+        for (int i = spoken; i < last; i++) {
+            char c = cur.charAt(i);
+            if (c == '。' || c == '？' || c == '！' || c == '?' || c == '!') {
+                String seg = cur.substring(spoken, i + 1).trim();
+                if (seg.length() > 1) sayEnqueue(seg);
+                return i + 1;
+            }
+        }
+        if (last - spoken >= 24) {
+            int p = cur.lastIndexOf('，', last - 1);
+            if (p <= spoken + 8) p = cur.lastIndexOf('、', last - 1);
+            if (p > spoken + 6) {
+                String seg = cur.substring(spoken, p + 1).trim();
+                if (seg.length() > 0) sayEnqueue(seg);
+                return p + 1;
+            }
+        }
+        return spoken;
     }
 
 

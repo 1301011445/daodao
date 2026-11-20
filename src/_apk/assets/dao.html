@@ -1404,7 +1404,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='78';
+  var HTML_VER='79';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1684,6 +1684,7 @@ setInterval(daoSyncJoy, 60000);
   // 「跟它说话」：点一下开输入框；按住 0.45 秒改成语音输入（松手识别）
   // 「跟它说话」：轻点＝直接开口说话（语音对话，再点一下结束并识别）
   //               长按 0.55 秒＝改用打字（键盘输入），不会再一点就弹键盘
+  var streamed = false;
   var talkBtn = document.getElementById('btnTalk');
   var holdTmr = null, longFired = false, listening = false;
 
@@ -1693,6 +1694,7 @@ setInterval(daoSyncJoy, 60000);
       return;
     }
     listening = true;
+    try { if (window.DaoNative && DaoNative.stopAll) DaoNative.stopAll(); } catch (e) {}
     talkBtn.classList.add('listening');
     try { if (DaoNative.listenCloud) DaoNative.listenCloud('mic'); else DaoNative.listen('mic'); } catch (e) {}
     tip('我在听…说完再点一下');
@@ -1736,8 +1738,10 @@ setInterval(daoSyncJoy, 60000);
       else tip('这台设备删不了记忆');
       return;
     }
-    if (window.DaoNative && DaoNative.chat) {
-      tip('道在想…');
+    if (window.DaoNative && (DaoNative.chatStream || DaoNative.chat)) {
+      streamed = true;                       // 原生会边出字边说，页面别再重复念一遍
+      tip('我在听你说…');
+      if (DaoNative.chatStream) { try { DaoNative.chatStream(q, 'bar'); return; } catch (e) {} }
       DaoNative.chat(q, 'bar');
       return;
     }
@@ -1748,7 +1752,11 @@ setInterval(daoSyncJoy, 60000);
   var oldReply = window.__daoReply;
   window.__daoReply = function (id, reply, mood) {
     try { if (typeof oldReply === 'function') oldReply.apply(null, arguments); } catch (e) {}
-    if (id === 'bar' && reply) { tip(reply); speak(reply); }
+    if (id === 'bar' && reply) {
+      tip(reply);
+      if (streamed) { streamed = false; return; }   // 流式路径：音频已由原生按句放完
+      speak(reply);
+    }
   };
 
 

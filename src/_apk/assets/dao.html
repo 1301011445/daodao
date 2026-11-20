@@ -1347,7 +1347,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='75';
+  var HTML_VER='76';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1530,30 +1530,6 @@ setInterval(daoSyncJoy, 60000);
     return d;
   }
 
-  // ---------- 浮动栏 ----------
-  var bar = el('div',
-    'position:fixed;left:0;right:0;bottom:0;z-index:9999;display:flex;gap:8px;' +
-    'padding:10px 12px calc(10px + env(safe-area-inset-bottom));' +
-    'background:linear-gradient(180deg,rgba(11,16,34,0),rgba(11,16,34,.92) 38%);' +
-    'font-family:system-ui,-apple-system,"PingFang SC",sans-serif;user-select:none;');
-
-  function btn(label, bg) {
-    var b = el('div',
-      'flex:1;min-height:48px;min-width:64px;display:flex;align-items:center;justify-content:center;' +
-      'border-radius:14px;font-size:16px;color:#fff;background:' + bg + ';' +
-      '-webkit-tap-highlight-color:transparent;touch-action:none;');
-    b.textContent = label;
-    return b;
-  }
-
-  var bTalk = btn('按住说话', 'linear-gradient(180deg,#3f7cff,#2a54c8)');
-  var bSay = btn('朗读', 'linear-gradient(180deg,#5b6b8c,#39445c)');
-  var bChat = btn('对话', 'linear-gradient(180deg,#24b47e,#178260)');
-  var bSing = btn('唱一句', 'linear-gradient(180deg,#c2578f,#8d3568)');
-  var bMusic = btn('听歌', 'linear-gradient(180deg,#8a6ad4,#5c43a0)');
-  bar.appendChild(bTalk); bar.appendChild(bSay); bar.appendChild(bChat); bar.appendChild(bSing);
-  bar.appendChild(bMusic);
-  document.body.appendChild(bar);
 
   function tip(msg) {
     var t = el('div',
@@ -1648,26 +1624,29 @@ setInterval(daoSyncJoy, 60000);
     chatAsk(text);
   };
 
-  var holding = false;
-  bTalk.addEventListener('pointerdown', function (e) {
+  // 「跟它说话」：点一下开输入框；按住 0.45 秒改成语音输入（松手识别）
+  var holding = false, holdTmr = null;
+  var talkBtn = document.getElementById('btnTalk');
+  talkBtn.addEventListener('pointerdown', function (e) {
     e.preventDefault();
-    holding = true;
-    bTalk.style.filter = 'brightness(1.25)';
-    // 有网就用云端识别（GLM-ASR，比厂商识别器准）；云端不可用才退回系统识别
-    if (window.DaoNative && DaoNative.listenCloud) { DaoNative.listenCloud('mic'); tip('我在听…松手结束'); }
-    else if (window.DaoNative && DaoNative.listen) { DaoNative.listen('mic'); tip('我在听…松手结束'); }
-    else tip('这台设备没有语音通道，先打字吧');
+    holdTmr = setTimeout(function () {
+      holdTmr = null;
+      holding = true;
+      if (window.DaoNative && DaoNative.listenCloud) { DaoNative.listenCloud('mic'); tip('我在听…松手结束'); }
+      else if (window.DaoNative && DaoNative.listen) { DaoNative.listen('mic'); tip('我在听…松手结束'); }
+      else tip('这台设备没有语音通道，先打字吧');
+    }, 450);
   });
-  function endTalk(e) {
+  function endTalk() {
+    if (holdTmr) { clearTimeout(holdTmr); holdTmr = null; }
     if (!holding) return;
     holding = false;
-    bTalk.style.filter = '';
     if (window.DaoNative && DaoNative.stopListenCloud) DaoNative.stopListenCloud();
     else if (window.DaoNative && DaoNative.stopListen) DaoNative.stopListen();
   }
-  bTalk.addEventListener('pointerup', endTalk);
-  bTalk.addEventListener('pointercancel', endTalk);
-  bTalk.addEventListener('pointerleave', endTalk);
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (k) {
+    talkBtn.addEventListener(k, endTalk);
+  });
 
   // ---------- 对话 ----------
   function chatAsk(q) {
@@ -1687,10 +1666,6 @@ setInterval(daoSyncJoy, 60000);
     }
     tip('这台设备连不上对话通道');
   }
-  bChat.addEventListener('click', function () {
-    var q = window.prompt('跟道说点什么');
-    if (q) chatAsk(q);
-  });
 
   // 桥回来的回答：读出来 + 贴一句字幕（不改原页面自己的处理）
   var oldReply = window.__daoReply;
@@ -1699,29 +1674,6 @@ setInterval(daoSyncJoy, 60000);
     if (id === 'bar' && reply) { tip(reply); speak(reply); }
   };
 
-  // 点一下读；长按 1.2 秒在「电脑的声音 / 手机自带朗读」之间切换
-  var sayTmr = null;
-  bSay.addEventListener('pointerdown', function () {
-    sayTmr = setTimeout(function () {
-      var order = ['edge', 'edge1', 'edge2', 'pc', 'native'];
-      var idx = order.indexOf(voiceMode);
-      voiceMode = order[(idx < 0 ? 0 : idx + 1) % order.length];
-      localStorage.setItem('dao_voice_mode', voiceMode);
-      var names = { edge: 'Edge 少女声（手机直连）', edge1: 'Edge 少年声（手机直连）', edge2: 'Edge 温柔女声（手机直连）', pc: '电脑的声音', native: '手机自带的朗读' };
-      if (voiceMode === 'tencent' && window.DaoNative && DaoNative.hasTencentKeys && DaoNative.hasTencentKeys() !== '1') {
-        tip('腾讯语音还没填密钥：长按「听歌」录入');
-      } else {
-        tip('改用' + (names[voiceMode] || voiceMode));
-      }
-    }, 1200);
-  });
-  ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (k) {
-    bSay.addEventListener(k, function () { if (sayTmr) { clearTimeout(sayTmr); sayTmr = null; } });
-  });
-  bSay.addEventListener('click', function () {
-    if (!lastText) { tip('还没内容可读'); return; }
-    speak(lastText);
-  });
 
   // ---------- 唱歌：让电脑端开口 ----------
   function hit(path, body) {
@@ -1730,24 +1682,6 @@ setInterval(daoSyncJoy, 60000);
       body: body
     }).then(function (r) { return r.text(); }).catch(function () { return 'ERR'; });
   }
-  var singTmr = null;
-  bSing.addEventListener('pointerdown', function () {
-    singTmr = setTimeout(function () {
-      var f = window.prompt('要道记住什么？（下次对话它会记着）');
-      if (f && window.DaoNative && DaoNative.remember) {
-        var r = '记住';
-        try { r = DaoNative.remember(f) || '记住'; } catch (e) {}
-        tip(r);
-      }
-    }, 1200);
-  });
-  ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (k) {
-    bSing.addEventListener(k, function () { if (singTmr) { clearTimeout(singTmr); singTmr = null; } });
-  });
-  bSing.addEventListener('click', function () {
-    tip('让道唱一句…');
-    hit('/do', '唱一句').then(function (r) { if (r === 'ERR') tip('连不上电脑端'); });
-  });
 
   // ---------- 本地曲库：手机自己出声，不靠电脑 ----------
   // 曲子是 IMA ADPCM 压的（tools\音乐\手机曲库\adpcm.py），体积约原 wav 的 1/4，
@@ -1763,7 +1697,7 @@ setInterval(daoSyncJoy, 60000);
     2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,
     10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767];
   var IDXT = [-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8];
-  var actx = null, srcNode = null, playing = -1, playingBuf = null;
+  var actx = null, srcNode = null, playing = -1, playingBuf = null, songBufCache = {};
 
   function b64ToBuf(b64) {
     var bin = atob(b64), n = bin.length, u8 = new Uint8Array(n);
@@ -1841,12 +1775,17 @@ setInterval(daoSyncJoy, 60000);
     playing = i;
     tip('载入《' + s.t + '》…');
     try {
-      var b64 = (window.DaoNative && DaoNative.assetB64) ? DaoNative.assetB64(s.f) : '';
-      if (!b64) { tip('拿不到曲库文件'); return; }
-      var d = decodeAdp(b64ToBuf(b64));
       if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
-      var buf = actx.createBuffer(1, d.pcm.length, d.sr);
-      buf.getChannelData(0).set(d.pcm);
+      // 解一次缓存一次：同一首再点不用重新解码（4M 采样现解要一两秒）
+      var buf = songBufCache[s.f];
+      if (!buf) {
+        var b64 = (window.DaoNative && DaoNative.assetB64) ? DaoNative.assetB64(s.f) : '';
+        if (!b64) { tip('拿不到曲库文件'); return; }
+        var d = decodeAdp(b64ToBuf(b64));
+        buf = actx.createBuffer(1, d.pcm.length, d.sr);
+        buf.getChannelData(0).set(d.pcm);
+        songBufCache = {}; songBufCache[s.f] = buf;   // 只留最近一首，别把内存吃满
+      }
       playingBuf = buf;
       srcNode = actx.createBufferSource();
       srcNode.buffer = buf;
@@ -1857,36 +1796,18 @@ setInterval(daoSyncJoy, 60000);
     } catch (e) { tip('放不了：' + e.message); playing = -1; }
   }
 
-  bMusic.addEventListener('click', musicPanel);
 
-  // 长按「听歌」1.5 秒：录入腾讯云语音合成密钥（存本机，不上传）
-  var mTmr = null;
-  bMusic.addEventListener('pointerdown', function () {
-    mTmr = setTimeout(function () {
-      var sid = window.prompt('腾讯云 SecretId（API 密钥里的 SecretId）', '');
-      if (!sid) return;
-      var sk = window.prompt('腾讯云 SecretKey', '');
-      if (!sk) return;
-      if (window.DaoNative && DaoNative.setTencentKeys) {
-        DaoNative.setTencentKeys(sid.trim(), sk.trim());
-        tip(DaoNative.hasTencentKeys() === '1' ? '密钥已存，长按「朗读」切到腾讯云语音' : '密钥没存上');
-      }
-    }, 1500);
-  });
-  ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (k) {
-    bMusic.addEventListener(k, function () { if (mTmr) { clearTimeout(mTmr); mTmr = null; } });
-  });
-
-  // 长按「对话」设电脑 IP（换 WiFi 时用）
+  // 长按右上角「电脑」设电脑 IP（换 WiFi 时用）
   var tmr = null;
-  bChat.addEventListener('pointerdown', function () {
+  var pcBtnEl = document.getElementById('pcBtn');
+  pcBtnEl.addEventListener('pointerdown', function () {
     tmr = setTimeout(function () {
       var ip = window.prompt('电脑端 IP（同一 WiFi）', pcIp);
       if (ip) { pcIp = ip.trim(); localStorage.setItem('dao_pc_ip', pcIp); tip('已记下 ' + pcIp); }
     }, 1200);
   });
   ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (k) {
-    bChat.addEventListener(k, function () { if (tmr) { clearTimeout(tmr); tmr = null; } });
+    pcBtnEl.addEventListener(k, function () { if (tmr) { clearTimeout(tmr); tmr = null; } });
   });
   window.daoStopMusic = stopMusic;
   window.daoMusicPanel = musicPanel;

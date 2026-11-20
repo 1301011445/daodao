@@ -380,6 +380,7 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
 
   // 动作：跟电脑端共用一套编号 1 飞 2 御剑 3 坐骑 4 跳舞 5 喝茶 6 电视 7 滑板 8 轮滑
   var actKind = 0, actAmt = 0;
+  var swayX = 0;   // 重心左右转移（走路交替落脚 / 跳舞重心摆动），不动画本身只加位移
   // 走动：人往前走，场景往后退，看着就像真的在场景里走了一大段
   var walkX = 0, camX = 0, walkDir = 1;
   function actOfMode(m) {
@@ -744,7 +745,7 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
     if (bedA > 0) bedA = Math.min(1, bedA);
 
     ctx.save();
-    ctx.translate(CX + dx + walkX, footY + hopY + bob);
+    ctx.translate(CX + dx + walkX + swayX, footY + hopY + bob);
     ctx.rotate(tilt * Math.PI / 180);
     ctx.scale(sx, sy);
     drawActProps(false);
@@ -952,26 +953,32 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
       dx = 0;
       // 一个 8 帧循环 = 两步：p 从 0 到 1，接触在 0/0.5，最低点在 0.125/0.625，最高点在 0.375/0.875
       var pW = (t * 11 / 8) % 1;
-      animBob = -2.6 * Math.sin(4 * Math.PI * pW) + 0.6;
-      animSqY = 1 - 0.016 * Math.sin(4 * Math.PI * pW);
+      // 主沉浮按两步一循环（4π），落地那一下再叠一层二次谐波（8π）：接触帧更"实"
+      animBob = -2.6 * Math.sin(4 * Math.PI * pW) - 0.75 * Math.sin(8 * Math.PI * pW) + 0.6;
+      animSqY = 1 - 0.016 * Math.sin(4 * Math.PI * pW) - 0.007 * Math.abs(Math.sin(8 * Math.PI * pW));
       animSqX = 1 + 0.012 * Math.sin(4 * Math.PI * pW);
+      // 重心左右交替：每步换脚，幅度小（1px 级），只是让身体别像贴纸平移
+      swayX = 1.0 * Math.sin(4 * Math.PI * pW);
       tilt = 2.4;                       // 走路带一点前倾，不是直挺挺地滑
     } else if (mode === 'run') {
       walkPhase += dt * 1.9;
       dx = 0;
       var pR = (t * 14 / 8) % 1;
-      animBob = -5.0 * Math.sin(4 * Math.PI * pR) + 1.2;
-      animSqY = 1 - 0.030 * Math.sin(4 * Math.PI * pR);
+      animBob = -5.0 * Math.sin(4 * Math.PI * pR) - 1.4 * Math.sin(8 * Math.PI * pR) + 1.2;
+      animSqY = 1 - 0.030 * Math.sin(4 * Math.PI * pR) - 0.012 * Math.abs(Math.sin(8 * Math.PI * pR));
       animSqX = 1 + 0.022 * Math.sin(4 * Math.PI * pR);
+      swayX = 1.8 * Math.sin(4 * Math.PI * pR);
       tilt = 6.0;                       // 跑起来前倾更多，重心压在前面
     } else if (mode === 'wave') {
       tilt = Math.sin(t * 9) * 3.2;
       dx = 0;
     } else {
-      dx *= 0.9; tilt *= 0.9;
+      dx *= 0.9; tilt *= 0.9; swayX *= 0.9;
       animBob *= 0.88; animSqY += (1 - animSqY) * 0.14; animSqX += (1 - animSqX) * 0.14;
       if (Math.abs(animBob) < 0.02) animBob = 0;
     }
+
+    if (actKind === 4 && actAmt > 0.2) swayX = 5.2 * actAmt * Math.sin(t * 1.9);
 
     lieAmt = 0;   // v22：不再躺下睡觉，床和飘 Z 一起撤掉
 
@@ -1005,8 +1012,8 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
         animBob = k4 < 0.5 ? (2.5 * Math.sin(k4 * Math.PI * 2)) : 0;
       } else if (jp < JUMP_DUR) {            // 回正
         var k5 = (jp - 0.78) / (JUMP_DUR - 0.78);
-        animSqY = 0.96 + 0.04 * k5;
-        animSqX = 1.03 - 0.03 * k5;
+        animSqY = 0.96 + 0.04 * k5 + 0.035 * Math.sin(Math.PI * k5);   // 过冲：先比 1 大一点再落回
+        animSqX = 1.03 - 0.03 * k5 - 0.020 * Math.sin(Math.PI * k5);
       } else {
         jumpT = -1; animSqY = 1; animSqX = 1; animBob = 0; hopY = 0;
       }
@@ -1423,7 +1430,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='81';
+  var HTML_VER='82';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;

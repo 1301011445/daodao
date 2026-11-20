@@ -99,6 +99,7 @@ public class DaoBridge {
     // 三条出声通道（系统 TTS / MediaPlayer / 网页 WebAudio）必须互斥：
     // 不说话时叠着放，就是「对话时会冒出别的声音」
     private void stopAudio() {
+        stopSong();
         try { if (tts != null) tts.stop(); } catch (Exception e) { }
         try { if (mp != null) { mp.stop(); mp.release(); mp = null; } } catch (Exception e) { try { if (mp != null) mp.release(); } catch (Exception e2) { } mp = null; }
     }
@@ -108,6 +109,138 @@ public class DaoBridge {
 
     @JavascriptInterface
     public void stopSpeak() { try { if (tts != null) tts.stop(); } catch (Exception e) { } }
+
+    // ==== 本地曲库（2026-11-20 晚）：改成原生解码 + MediaPlayer ====
+    // 原来页面用 assetB64 把整首 2MB 曲子拉进 JS 再自己解，真机上出现过「拿不到曲库文件」，
+    // 而且 4M 采样在 JS 里解要一两秒。这里直接读 assets、解 ADPCM、写 wav 缓存，再交给 MediaPlayer。
+    private android.media.MediaPlayer songMp;
+    private String songName = "";
+
+    @JavascriptInterface
+    public void stopSong() {
+        try { if (songMp != null && songMp.isPlaying()) songMp.stop(); } catch (Exception e) { }
+        try { if (songMp != null) songMp.release(); } catch (Exception e) { }
+        songMp = null;
+        songName = "";
+    }
+
+    @JavascriptInterface
+    public String nowSong() { return songName; }
+
+    @JavascriptInterface
+    public String playSongAsset(String name) {
+        try {
+            if (name == null || name.length() == 0) return "ERR|没给歌名";
+            stopAudio();
+            java.io.File cache = ctx.getCacheDir();
+            java.io.File wav = new java.io.File(cache, "dao_song_" + name + ".wav");
+            if (!wav.exists() || wav.length() < 4096) {
+                byte[] raw = readAsset("music/" + name + ".adp");
+                if (raw == null) return "ERR|包里没有这首：" + name;
+                if (!adpToWav(raw, wav)) return "ERR|解码失败";
+            }
+            songMp = new android.media.MediaPlayer();
+            songMp.setDataSource(wav.getAbsolutePath());
+            songMp.prepare();
+            songMp.start();
+            songName = name;
+            return "OK|" + (int) (songMp.getDuration() / 1000);
+        } catch (Exception e) {
+            stopSong();
+            return "ERR|" + e.getClass().getSimpleName() + " " + e.getMessage();
+        }
+    }
+
+    private byte[] readAsset(String path) {
+        java.io.InputStream is = null;
+        try {
+            is = ctx.getAssets().open(path);
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = is.read(buf)) > 0) bo.write(buf, 0, n);
+            return bo.toByteArray();
+        } catch (Exception e) {
+            return null;
+        } finally {
+            try { if (is != null) is.close(); } catch (Exception e) { }
+        }
+    }
+
+    private static final int[] ADP_STEP = {
+        7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66,
+        73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449,
+        494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272,
+        2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493,
+        10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767 };
+    private static final int[] ADP_IDX = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
+
+    private boolean adpToWav(byte[] raw, java.io.File out) {
+        java.io.FileOutputStream fo = null;
+        try {
+            if (raw == null || raw.length < 16) return false;
+            if (raw[0] != 'D' || raw[1] != 'A' || raw[2] != 'O' || raw[3] != '1') return false;
+            int sr = (raw[4] & 0xff) | ((raw[5] & 0xff) << 8) | ((raw[6] & 0xff) << 16) | ((raw[7] & 0xff) << 24);
+            int frames = (raw[8] & 0xff) | ((raw[9] & 0xff) << 8) | ((raw[10] & 0xff) << 16) | ((raw[11] & 0xff) << 24);
+            int total = frames * 2048;
+            short[] pcm = new short[total];
+            int o = 0, pos = 12;
+            for (int f = 0; f < frames; f++) {
+                if (pos + 4 > raw.length) break;
+                int pred = (short) ((raw[pos] & 0xff) | ((raw[pos + 1] & 0xff) << 8));
+                int idx = raw[pos + 2] & 0xff;
+                int end = Math.min(pos + 1028, raw.length);
+                for (int b = pos + 4; b < end; b++) {
+                    int by = raw[b] & 0xff;
+                    for (int k = 0; k < 2; k++) {
+                        int code = (k == 0) ? ((by >> 4) & 15) : (by & 15);
+                        if (idx < 0) idx = 0; if (idx > 88) idx = 88;
+                        int step = ADP_STEP[idx];
+                        int delta = step >> 3;
+                        if ((code & 4) != 0) delta += step;
+                        if ((code & 2) != 0) delta += step >> 1;
+                        if ((code & 1) != 0) delta += step >> 2;
+                        pred += ((code & 8) != 0) ? -delta : delta;
+                        if (pred > 32767) pred = 32767; else if (pred < -32768) pred = -32768;
+                        idx += ADP_IDX[code & 7];
+                        if (idx < 0) idx = 0; else if (idx > 88) idx = 88;
+                        if (o < total) pcm[o++] = (short) pred;
+                    }
+                }
+                pos += 1028;
+            }
+            out.getParentFile().mkdirs();
+            fo = new java.io.FileOutputStream(out);
+            int dataLen = o * 2;
+            fo.write(new byte[] { 'R', 'I', 'F', 'F' });
+            writeInt(fo, 36 + dataLen);
+            fo.write(new byte[] { 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ' });
+            writeInt(fo, 16);
+            writeShort(fo, 1);
+            writeShort(fo, 1);
+            writeInt(fo, sr);
+            writeInt(fo, sr * 2);
+            writeShort(fo, 2);
+            writeShort(fo, 16);
+            fo.write(new byte[] { 'd', 'a', 't', 'a' });
+            writeInt(fo, dataLen);
+            for (int i = 0; i < o; i++) writeShort(fo, pcm[i]);
+            fo.flush();
+            return true;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            try { if (fo != null) fo.close(); } catch (Exception e) { }
+        }
+    }
+
+    private static void writeInt(java.io.FileOutputStream fo, int v) throws java.io.IOException {
+        fo.write(v & 0xff); fo.write((v >> 8) & 0xff); fo.write((v >> 16) & 0xff); fo.write((v >> 24) & 0xff);
+    }
+
+    private static void writeShort(java.io.FileOutputStream fo, int v) throws java.io.IOException {
+        fo.write(v & 0xff); fo.write((v >> 8) & 0xff);
+    }
 
     // ==== 云端语音（2026-11-20 补，手机一直有网就不用靠电脑）====
     // 听：本地录 16k 单声道 PCM，存成 wav，传 GLM-ASR-2512 换文字（实测 0.4s、转写准）

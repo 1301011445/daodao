@@ -66,6 +66,7 @@
     border: 1px solid rgba(150,186,255,.42);
     box-shadow: 0 6px 18px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.10);
   }
+  #btnTalk.listening { background: linear-gradient(180deg, rgba(120,220,170,.55), rgba(60,170,130,.35)); border-color: rgba(150,255,210,.7); }
   #btnTalk:active { transform: translateY(1px); background: linear-gradient(180deg, rgba(126,166,255,.50), rgba(90,126,214,.34)); }
   /* 气泡加个小尾巴，指着说话的人，不然像屏幕贴了张便签 */
   #bubble::after {
@@ -1095,11 +1096,7 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
 
   cv.addEventListener('pointerdown', function (e) { e.preventDefault(); poke(); });
 
-  document.getElementById('btnTalk').addEventListener('pointerdown', function () {
-    askMode = 'chat';
-    try { askInput.placeholder = '跟道说句话……'; } catch (e) {}
-    openAsk();
-  });
+  // 「跟它说话」的点击行为挪到下面的语音块：轻点=语音对话，长按 0.55 秒=打字
 
   // 换个动作：挨个挑一个带场景的，切完立刻说一句它自己在干什么
   var ACT_NAMES = ['fly', 'sword', 'ride', 'tea', 'tv', 'skate', 'dance'];
@@ -1407,7 +1404,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='77';
+  var HTML_VER='78';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1685,27 +1682,47 @@ setInterval(daoSyncJoy, 60000);
   };
 
   // 「跟它说话」：点一下开输入框；按住 0.45 秒改成语音输入（松手识别）
-  var holding = false, holdTmr = null;
+  // 「跟它说话」：轻点＝直接开口说话（语音对话，再点一下结束并识别）
+  //               长按 0.55 秒＝改用打字（键盘输入），不会再一点就弹键盘
   var talkBtn = document.getElementById('btnTalk');
+  var holdTmr = null, longFired = false, listening = false;
+
+  function startListen() {
+    if (!(window.DaoNative && (DaoNative.listenCloud || DaoNative.listen))) {
+      tip('这台设备没有语音通道，长按可以打字');
+      return;
+    }
+    listening = true;
+    talkBtn.classList.add('listening');
+    try { if (DaoNative.listenCloud) DaoNative.listenCloud('mic'); else DaoNative.listen('mic'); } catch (e) {}
+    tip('我在听…说完再点一下');
+  }
+  function stopListen() {
+    listening = false;
+    talkBtn.classList.remove('listening');
+    try { if (DaoNative.stopListenCloud) DaoNative.stopListenCloud(); else if (DaoNative.stopListen) DaoNative.stopListen(); } catch (e) {}
+    tip('好，我听听…');
+  }
   talkBtn.addEventListener('pointerdown', function (e) {
     e.preventDefault();
+    longFired = false;
     holdTmr = setTimeout(function () {
       holdTmr = null;
-      holding = true;
-      if (window.DaoNative && DaoNative.listenCloud) { DaoNative.listenCloud('mic'); tip('我在听…松手结束'); }
-      else if (window.DaoNative && DaoNative.listen) { DaoNative.listen('mic'); tip('我在听…松手结束'); }
-      else tip('这台设备没有语音通道，先打字吧');
-    }, 450);
+      longFired = true;
+      if (listening) stopListen();
+      askMode = 'chat';
+      try { askInput.placeholder = '跟道说句话……'; } catch (err) {}
+      openAsk();
+    }, 550);
   });
-  function endTalk() {
+  talkBtn.addEventListener('pointerup', function (e) {
+    e.preventDefault();
     if (holdTmr) { clearTimeout(holdTmr); holdTmr = null; }
-    if (!holding) return;
-    holding = false;
-    if (window.DaoNative && DaoNative.stopListenCloud) DaoNative.stopListenCloud();
-    else if (window.DaoNative && DaoNative.stopListen) DaoNative.stopListen();
-  }
-  ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (k) {
-    talkBtn.addEventListener(k, endTalk);
+    if (longFired) return;             // 长按已经去打字的流程
+    if (listening) stopListen(); else startListen();
+  });
+  talkBtn.addEventListener('pointercancel', function () {
+    if (holdTmr) { clearTimeout(holdTmr); holdTmr = null; }
   });
 
   // ---------- 对话 ----------
@@ -1747,9 +1764,9 @@ setInterval(daoSyncJoy, 60000);
   // 曲子是 IMA ADPCM 压的（tools\音乐\手机曲库\adpcm.py），体积约原 wav 的 1/4，
   // WebView 的 file:// 不给 XHR 读 assets，所以走 DaoNative.assetB64 取字节再自己解
   var SONGS = [
-    { f: 'music/guitu.adp',    t: '归途的月光' },
-    { f: 'music/gongzuo.adp',  t: '把好日子扛在肩上' },
-    { f: 'music/shaonian.adp', t: '少年模样' }
+    { k: 'guitu',    f: 'music/guitu.adp',    t: '归途的月光' },
+    { k: 'gongzuo',  f: 'music/gongzuo.adp',  t: '把好日子扛在肩上' },
+    { k: 'shaonian', f: 'music/shaonian.adp', t: '少年模样' }
   ];
   var STEPS = [7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,
     73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,
@@ -1796,6 +1813,7 @@ setInterval(daoSyncJoy, 60000);
   }
 
   function stopMusic() {
+    try { if (window.DaoNative && DaoNative.stopSong) DaoNative.stopSong(); } catch (e) {}
     try { if (srcNode) { srcNode.stop(); srcNode = null; } } catch (e) {}
     playing = -1;
     if (win) win.remove();
@@ -1834,6 +1852,14 @@ setInterval(daoSyncJoy, 60000);
     try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
     playing = i;
     tip('载入《' + s.t + '》…');
+    // 先交给原生：读 assets、解 ADPCM、写 wav、MediaPlayer 放（真机上就是这条路）
+    if (window.DaoNative && DaoNative.playSongAsset) {
+      try {
+        var nr = String(DaoNative.playSongAsset(s.k || ''));
+        if (nr.indexOf('OK') === 0) { tip('正在放《' + s.t + '》，再点一下停'); return; }
+        tip(nr.replace(/^ERR\|/, ''));   // 原生不行就继续走下面的网页解码
+      } catch (e2) {}
+    }
     try {
       if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
       // 解一次缓存一次：同一首再点不用重新解码（4M 采样现解要一两秒）

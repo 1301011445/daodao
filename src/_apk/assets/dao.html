@@ -185,8 +185,8 @@
     <div class="minis">
       <button id="btnSwap"><span class="lb">换形象</span></button>
       <button id="btnAct"><span class="lb">换动作</span></button>
-      <button id="btnKnow"><span class="lb">看知识</span></button>
-      <button id="btnExplain"><span class="lb">讲题</span></button>
+      <button id="btnSong"><span class="lb">唱歌</span></button>
+      <button id="btnLib"><span class="lb">曲库</span></button>
     </div>
     <button id="btnTalk">跟它说话</button>
   </div>
@@ -477,7 +477,8 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
   }
 
   function resize() {
-    dpr = window.devicePixelRatio || 1;
+    // 高分屏按 3x 画会让画布像素多 9 倍，手机卡到掉帧；封到 1.5 肉眼几乎无差
+    dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     var sw = document.getElementById('stage').clientWidth;
     var sh = document.getElementById('stage').clientHeight;
     scale = Math.min((sw * 0.94) / CW, (sh * 0.94) / CH);
@@ -897,7 +898,13 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
     ctx.restore();
   }
 
+  var _idleGate = 0;
   function tick(now) {
+    // 空闲（不是走/跑/挥手/说话）时每两帧只画一帧：手机不发烫、点按才跟手
+    if (mode === 'idle' && waveLeft <= 0 && moodLeft <= 0) {
+      _idleGate++;
+      if (_idleGate % 2 === 0) { lastT = now; requestAnimationFrame(tick); return; }
+    } else { _idleGate = 0; }
     if (!lastT) lastT = now;
     var dt = Math.min(0.05, (now - lastT) / 1000);
     lastT = now;
@@ -1218,7 +1225,7 @@ var exprImgs = [];
 
   window.__daoUpdated = function (changed) {
     loadExtras();
-    if (changed) say('我又学了点新东西，点「看知识」能瞧见。');
+    if (changed) say('我又学了点新东西，回头跟你慢慢讲。');
   };
 
   function showKnow() {
@@ -1280,10 +1287,16 @@ var exprImgs = [];
   var askCloseBtn = document.getElementById('askClose');
   if (askCloseBtn) askCloseBtn.addEventListener('click', function () { closeAsk(); say('好，不说了。'); });
 
-  document.getElementById('btnKnow').addEventListener('pointerdown', function (e) { e.preventDefault(); showKnow(); });
+  document.getElementById('btnSong').addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    if (window.daoPlayNext) window.daoPlayNext(); else showKnow();
+  });
+  document.getElementById('btnLib').addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    if (window.daoMusicPanel) window.daoMusicPanel();
+  });
 
-  var be = document.getElementById('btnExplain');
-  if (be) be.addEventListener('pointerdown', function (e) { e.preventDefault(); askSide('explain'); });
+  // 「讲题」已从第二行撤掉；要讲题直接在输入框里说「讲讲这道题」
 
   // ---- 和电脑互通 / 查新版本 ----
   window.__daoMsg = function (id, status, msg) {
@@ -1334,7 +1347,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='71';
+  var HTML_VER='73';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1446,7 +1459,7 @@ setInterval(daoSyncJoy, 60000);
 })();
 
   // ===== 曲库：谱子渲好的 wav 打进 apk 的 assets/music，手机不连电脑也能放 =====
-  var DAO_MUSIC = [{ id: 'demo_01', name: 'demo_01_五声主题', sec: 19.2 }, { id: 'song_01', name: 'song_01_寄一封', sec: 91.43 }];
+  var DAO_MUSIC = [{ id: 'guitu', name: '归途的月光' }, { id: 'gongzuo', name: '把好日子扛在肩上' }, { id: 'shaonian', name: '少年模样' }];
   var daoAudio = null;
   var daoMIdx = -1;
   function daoMusicMark() {
@@ -1460,6 +1473,8 @@ setInterval(daoSyncJoy, 60000);
   function daoMusicPlay(idx) {
     var it = DAO_MUSIC[idx];
     if (!it) return;
+    // 三首真歌是 IMA ADPCM 打包的，统一交给本地播放器，别再按 music/*.wav 取
+    if (window.daoPlaySong) { window.daoPlaySong(idx); return; }
     try {
       if (daoAudio) { try { daoAudio.pause(); } catch (e) {} daoAudio = null; }
       daoAudio = new Audio('music/' + it.id + '.wav');
@@ -1578,6 +1593,11 @@ setInterval(daoSyncJoy, 60000);
   function speak(text) {
     if (!text) return;
     lastText = text;
+    // 说话前先把本地曲库停掉，避免对话里混进歌声
+    try { if (window.daoStopMusic) window.daoStopMusic(); } catch (e) {}
+    // 出声通道互斥：要说就先停歌，要放歌就先停话
+    try { if (window.daoStopMusic) window.daoStopMusic(); } catch (e) {}
+    try { if (window.DaoNative && DaoNative.stopAll) DaoNative.stopAll(); } catch (e) {}
     if (EDGE_IDX[voiceMode] !== undefined) {
       if (window.DaoNative && DaoNative.speakEdge) { try { DaoNative.speakEdge(text, EDGE_IDX[voiceMode]); return; } catch (e) {} }
       nativeSpeak(text); return;
@@ -1815,6 +1835,10 @@ setInterval(daoSyncJoy, 60000);
     var s = SONGS[i];
     if (playing === i) { stopMusic(); return; }
     stopMusic();
+    // 唱歌前先把朗读停掉，两路声音不能一起响
+    try { if (window.DaoNative && DaoNative.stopAll) DaoNative.stopAll(); } catch (e) {}
+    try { if (window.DaoNative && DaoNative.stopAll) DaoNative.stopAll(); } catch (e) {}
+    try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
     playing = i;
     tip('载入《' + s.t + '》…');
     try {
@@ -1865,6 +1889,10 @@ setInterval(daoSyncJoy, 60000);
   ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (k) {
     bChat.addEventListener(k, function () { if (tmr) { clearTimeout(tmr); tmr = null; } });
   });
+  window.daoStopMusic = stopMusic;
+  window.daoMusicPanel = musicPanel;
+  window.daoPlaySong = playSong;
+  window.daoPlayNext = function () { playSong((playing + 1) % (SONGS.length || 1)); };
 })();
 </script>
 

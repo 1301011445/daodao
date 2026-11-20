@@ -44,6 +44,13 @@ public class DaoActivity extends Activity {
         bridge = new DaoBridge(this, web);
         web.addJavascriptInterface(bridge, "DaoNative");
         bridge.rotateLauncherIcon();
+        // 启动就要一次麦克风：按住说话第一次点才弹框，用户常常以为没反应就松手了
+        try {
+            if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 9002);
+            }
+        } catch (Exception e) { }
 
         web.loadUrl("file:///android_asset/dao.html");
         setContentView(web);
@@ -57,7 +64,7 @@ public class DaoActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
         super.onRequestPermissionsResult(code, perms, res);
-        if (code == 9001 && bridge != null) {
+        if ((code == 9001 || code == 9002) && bridge != null) {
             if (res != null && res.length > 0 && res[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 bridge.startListenNow();
             } else {

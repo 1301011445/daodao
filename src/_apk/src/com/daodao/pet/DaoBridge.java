@@ -84,16 +84,27 @@ public class DaoBridge {
         final String t = (text == null) ? "" : text.trim();
         if (t.length() == 0) return;
         initTts();
+        stopAudio();
         ui.post(new Runnable() {
             public void run() {
                 try {
                     if (tts == null) return;
                     tts.setSpeechRate(0.95f);
-                    tts.speak(t, TextToSpeech.QUEUE_ADD, null, "dao" + System.currentTimeMillis());
+                    tts.speak(t, TextToSpeech.QUEUE_FLUSH, null, "dao" + System.currentTimeMillis());
                 } catch (Exception e) { }
             }
         });
     }
+
+    // 三条出声通道（系统 TTS / MediaPlayer / 网页 WebAudio）必须互斥：
+    // 不说话时叠着放，就是「对话时会冒出别的声音」
+    private void stopAudio() {
+        try { if (tts != null) tts.stop(); } catch (Exception e) { }
+        try { if (mp != null) { mp.stop(); mp.release(); mp = null; } } catch (Exception e) { try { if (mp != null) mp.release(); } catch (Exception e2) { } mp = null; }
+    }
+
+    @JavascriptInterface
+    public void stopAll() { stopAudio(); }
 
     @JavascriptInterface
     public void stopSpeak() { try { if (tts != null) tts.stop(); } catch (Exception e) { } }
@@ -108,14 +119,33 @@ public class DaoBridge {
     private java.io.File recWav;
     private android.media.MediaPlayer mp;
 
+    // 授权框只能在主线程弹：JS 桥接线程里直接 requestPermissions 会 throw，
+    // 表现就是「按住说话」点了没反应、后面什么都没有（v0.71 及以前就是这样）
+    private void askMicOnMain(final int code) {
+        if (!(ctx instanceof Activity)) { postVoice("麦克风没给权限"); return; }
+        final Activity act = (Activity) ctx;
+        act.runOnUiThread(new Runnable() {
+            public void run() {
+                try {
+                    act.requestPermissions(
+                        new String[]{android.Manifest.permission.RECORD_AUDIO}, code);
+                } catch (Exception e) {
+                    postVoice("麦克风没给权限");
+                }
+            }
+        });
+    }
+
     @JavascriptInterface
     public void listenCloud(String cbId) {
         voiceCb = (cbId == null) ? "" : cbId;
         try {
             if (ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 if (ctx instanceof Activity) {
-                    ((Activity) ctx).requestPermissions(
-                        new String[]{android.Manifest.permission.RECORD_AUDIO}, 9001);
+                final Activity act = (Activity) ctx;
+                // 授权框只能在主线程弹；这里是 JS 桥接线程，直接 requestPermissions 会抛异常，
+                // 现象就是「按住说话」点了毫无反应
+                act.runOnUiThread(new Runnable() { public void run() { try { act.requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 9001); } catch (Exception e2) { postVoice("麦克风没给权限"); } } });
                 } else {
                     postVoice("麦克风没给权限");
                 }
@@ -262,6 +292,7 @@ public class DaoBridge {
     // 云端合成：拿到 wav 存本地，用 MediaPlayer 放（系统 TTS 和它互不干扰）
     @JavascriptInterface
     public void speakCloud(final String text, final String voice) {
+        stopAudio();
         final String t = (text == null) ? "" : text.trim();
         if (t.length() == 0) return;
         new Thread(new Runnable() {
@@ -369,6 +400,7 @@ public class DaoBridge {
 
     @JavascriptInterface
     public void speakTencent(final String text, final int voiceType) {
+        stopAudio();
         final String t = (text == null) ? "" : text.trim();
         if (t.length() == 0) return;
         final String sid = sp.getString("tc_sid", "");
@@ -453,6 +485,7 @@ public class DaoBridge {
 
     @JavascriptInterface
     public void speakEdge(final String text, final int vIdx) {
+        stopAudio();
         final String t = (text == null) ? "" : text.trim();
         if (t.length() == 0) return;
         final String voice = EDGE_VOICES[(vIdx < 0 || vIdx >= EDGE_VOICES.length) ? 0 : vIdx];
@@ -497,7 +530,9 @@ public class DaoBridge {
         });
     }
 
-    public void tellNoMic() { postVoice("麦克风没给权限"); }
+    public void tellNoMic() {
+        postVoice("麦克风被拒了：进 设置 → 应用 → 道 权限 → 麦克风 打开，再按住说话");
+    }
 
     @JavascriptInterface
     public void listen(String cbId) {
@@ -505,8 +540,10 @@ public class DaoBridge {
         try {
             if (ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 if (ctx instanceof Activity) {
-                    ((Activity) ctx).requestPermissions(
-                        new String[]{android.Manifest.permission.RECORD_AUDIO}, 9001);
+                final Activity act = (Activity) ctx;
+                // 授权框只能在主线程弹；这里是 JS 桥接线程，直接 requestPermissions 会抛异常，
+                // 现象就是「按住说话」点了毫无反应
+                act.runOnUiThread(new Runnable() { public void run() { try { act.requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 9001); } catch (Exception e2) { postVoice("麦克风没给权限"); } } });
                 } else {
                     postVoice("麦克风没给权限");
                 }

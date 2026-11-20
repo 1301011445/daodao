@@ -77,12 +77,14 @@
       "标题": "手机端 v55 未在真机安装验证（巡检里最后上报仍是 v50）",
       "来源": "巡检",
       "严重度": "P2",
-      "状态": "solved",
+      "状态": "open",
       "发现时间": "2026-11-18 07:38",
-      "解决时间": "2026-11-18 17:55",
-      "解决说明": "adb 装到 E:\\AndroidTools\\sdk\\platform-tools；红米 12 Turbo（serial c1a4ca17，Android 15）USB 直连实装 v58（versionCode=58/58.0，install Success），启动 Launcher0 后程序自己回写 手机自检.txt：2026-11-18 17:50:07 | SC | html=58 | faces=14 | bad=无",
-      "scored": true,
-      "停滞天数": 0
+      "解决时间": "",
+      "解决说明": "",
+      "scored": false,
+      "停滞天数": 0,
+      "复发次数": 1,
+      "复发时间": "2026-11-20 18:46"
     },
     {
       "id": "Q-008",
@@ -538,6 +540,20 @@
       "复发次数": 0,
       "重复登记次数": 0,
       "键": "voice:firstword"
+    },
+    {
+      "id": "Q-050",
+      "标题": "GitHub 账号 Dao699 被判定 suspended，远端推送全部失败",
+      "来源": "第20条 GitHub 提交闭环",
+      "严重度": 1,
+      "状态": "open",
+      "发现时间": "2026-11-20 18:46",
+      "解决时间": "",
+      "解决说明": "本地提交 5b3bb04 成功；git push 返回 ERROR: Your account is suspended。需账号持有人去 support.github.com 申诉，代码侧无法绕过",
+      "scored": false,
+      "复发次数": 0,
+      "重复登记次数": 0,
+      "键": "github:account_suspended"
     }
   ]
 }

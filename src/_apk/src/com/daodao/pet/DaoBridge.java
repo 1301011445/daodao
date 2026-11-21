@@ -108,6 +108,27 @@ public class DaoBridge {
     @JavascriptInterface
     public void stopAll() { stopAudio(); }
 
+    // ==== 记事本：手机本地闹钟（电脑关机也能提醒）====
+    @JavascriptInterface
+    public void noteAlarm(final int id, final long whenMillis, final String text) {
+        try { NoteAlarm.schedule(ctx, id, whenMillis, text); } catch (Exception e) { }
+    }
+
+    @JavascriptInterface
+    public void noteCancel(final int id) {
+        try { NoteAlarm.cancel(ctx, id); } catch (Exception e) { }
+    }
+
+    @JavascriptInterface
+    public boolean noteCanNotify() {
+        try { return NoteAlarm.canNotify(ctx); } catch (Exception e) { return true; }
+    }
+
+    @JavascriptInterface
+    public void noteAskPermission() {
+        try { NoteAlarm.askPermission(ctx); } catch (Exception e) { }
+    }
+
     @JavascriptInterface
     public void stopSpeak() { try { if (tts != null) tts.stop(); } catch (Exception e) { } }
 

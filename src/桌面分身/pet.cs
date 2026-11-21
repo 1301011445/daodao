@@ -1035,6 +1035,31 @@ public class DesktopPet : Form
             if (tm.Count > 0) { sb.Append("明天有" + tm.Count + "件："); for (int i = 0; i < tm.Count; i++) sb.Append(tm[i] + (i == tm.Count - 1 ? "。" : "；")); }
             return sb.ToString();
         }
+        if (op == "setmail" || op == "getmail")
+        {
+            string cfg = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "通知.ini");
+            string to = "";
+            if (File.Exists(cfg))
+            {
+                string[] ls = File.ReadAllLines(cfg, Encoding.UTF8);
+                for (int i = 0; i < ls.Length; i++)
+                {
+                    string ln = ls[i].Trim();
+                    if (ln.StartsWith("#")) continue;
+                    int eq = ln.IndexOf('=');
+                    if (eq > 0 && ln.Substring(0, eq).Trim().ToLower() == "to") to = ln.Substring(eq + 1).Trim();
+                }
+            }
+            if (op == "getmail") return "OK|" + (to.Length == 0 ? "还没设收件邮箱" : to);
+            string want = q.ContainsKey("to") ? q["to"].Trim() : "";
+            if (want.Length == 0 || want.IndexOf('@') <= 1 || !want.Contains(".")) return "ERR|邮箱格式不对：" + want;
+            string content = "# 道 记事本的通知通道：到点除了本机说话，还发一封邮件到下面这个地址。\n" +
+                "# 发件账号（QQ 邮箱 + 授权码）在 F:\\Daodao\\.mail_config 里，这里只管收件人。\n" +
+                "# 收件人由手机持有人自己定，说「提醒发到 xxx@qq.com」就会写到这里；留空则只在本机说话。\n" +
+                "to=" + want + "\n";
+            try { File.WriteAllText(cfg, content, new UTF8Encoding(false)); } catch (Exception ex) { return "ERR|" + ex.Message; }
+            return "OK|" + want;
+        }
         if (op == "mailtest")
         {
             bool ok = TryMail("道的提醒测试", "这条是测试邮件，收到说明绑定好了。" + DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
@@ -1083,7 +1108,7 @@ public class DesktopPet : Form
         try
         {
             string dir = Path.GetDirectoryName(Application.ExecutablePath);
-            string to = "1301011445@qq.com";
+            string to = "";
             string cfg = Path.Combine(dir, "通知.ini");
             if (File.Exists(cfg))
             {
@@ -1102,6 +1127,7 @@ public class DesktopPet : Form
                 }
             }
             // QQ 的 465 是隐式 SSL，.NET 的 SmtpClient 只支持 587 STARTTLS，所以借用本机现成的最小 SMTP 脚本
+            if (to.Length == 0) return false;
             string script = Path.Combine(dir, @"tools\send_mail.ps1");
             if (!File.Exists(script)) return false;
             bodyFile = Path.Combine(dir, "邮件正文.txt");
@@ -8642,7 +8668,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 98;
+    public const int APP_VER = 99;
 
     public static void Start()
     {

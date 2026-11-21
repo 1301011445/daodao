@@ -1437,7 +1437,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='98';
+  var HTML_VER='99';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1731,10 +1731,41 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
       }
       fetch('http://' + pcIp + ':8848/note?op=add&text=' + encodeURIComponent(q[i]))
         .then(function (r) { return r.text(); })
-        .then(function (s) { if (s.indexOf('OK|') === 0) done.push(q[i]); one(i + 1); })
+        .then(function (s) {
+          if (s.indexOf('OK|') === 0) { done.push(q[i]); var f = s.split('|'); phoneAlarm(f[1], f[2], f[3]); one(i + 1); }
+          else { one(i + 1); }
+        })
         .catch(function () { try { localStorage.setItem(NOTE_Q, JSON.stringify(q.slice(i))); } catch (e) {} });
     }
     one(0);
+  }
+
+  var NOTE_MAIL_RE = /(提醒|通知).{0,4}发到|收件邮箱|发到哪个邮箱|邮箱设成|改成.{0,12}@/;
+  var MAIL_RE = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/;
+
+  function noteMail(text) {
+    var m = String(text).match(MAIL_RE);
+    var base = 'http://' + pcIp + ':8848/note?op=';
+    var url = m ? (base + 'setmail&to=' + encodeURIComponent(m[0]) + '&text=') : (base + 'getmail');
+    // setmail 的 text 参数不需要，去掉尾部的空 text
+    if (m) url = base + 'setmail&to=' + encodeURIComponent(m[0]);
+    fetch(url).then(function (r) { return r.text(); }).then(function (s) {
+      if (s.indexOf('OK|') === 0) {
+        var msg = m ? ('好，提醒发到 ' + s.substring(3)) : s.substring(3);
+        tip(msg); noteSay(msg);
+      } else {
+        tip('没设上：' + s);
+      }
+    }).catch(function () { tip('电脑没连上，等它回话再设'); });
+  }
+
+  function phoneAlarm(idStr, whenStr, text) {
+    try {
+      if (!(window.DaoNative && DaoNative.noteAlarm)) return;
+      var ms = new Date(String(whenStr).replace(/-/g, '/') + ':00').getTime();
+      if (!(ms > 0)) return;
+      DaoNative.noteAlarm(parseInt(idStr, 10) || 0, ms, text);
+    } catch (e) {}
   }
 
   function noteAdd(text) {
@@ -1744,6 +1775,7 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
         var f = s.split('|');
         tip('记下了：' + f[2] + ' ' + f[3]);
         noteSay('记下了，' + f[2] + '，' + f[3]);
+        phoneAlarm(f[1], f[2], f[3]);
       } else {
         tip('没记上：' + s);
       }
@@ -1766,12 +1798,21 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     if (/没听清|权限|没有语音识别|启动失败/.test(text)) { tip(text); return; }
     tip('你说：' + text);
     noteFlush();
+    if (NOTE_MAIL_RE.test(text)) { noteMail(text); return; }
     if (NOTE_READ_RE.test(text)) { noteRead(); return; }
     if (NOTE_RE.test(text)) { noteAdd(text); return; }
     if (EXPLAIN_RE.test(text) && window.daoExplain) { window.daoExplain(text); return; }
     chatAsk(text);
   };
   setTimeout(noteFlush, 800);
+  // 手机第一次用记事本前，先要一次通知权限（Android 13 起必须显式申请）
+  setTimeout(function () {
+    try {
+      if (window.DaoNative && DaoNative.noteCanNotify && DaoNative.noteAskPermission) {
+        if (!DaoNative.noteCanNotify()) DaoNative.noteAskPermission();
+      }
+    } catch (e) {}
+  }, 1500);
 
   // 「跟它说话」：轻点＝直接开口说话（语音对话，再点一下结束并识别）
   var streamed = false;

@@ -109,6 +109,8 @@ public class NoteAlarm {
                 if (Build.VERSION.SDK_INT >= 21) b.setPriority(Notification.PRIORITY_HIGH);
                 Intent open = new Intent(c, DaoActivity.class);
                 open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                open.putExtra(EXTRA_TEXT, text);
+                open.putExtra(EXTRA_ID, id);
                 int flags = PendingIntent.FLAG_UPDATE_CURRENT;
                 if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
                 b.setContentIntent(PendingIntent.getActivity(c, id, open, flags));

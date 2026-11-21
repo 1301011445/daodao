@@ -1,17 +1,20 @@
 package com.daodao.pet;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.WebViewClient;
 
 public class DaoActivity extends Activity {
 
     private WebView web;
     private DaoBridge bridge;
+    private String pendingAlarm = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -44,6 +47,26 @@ public class DaoActivity extends Activity {
         bridge = new DaoBridge(this, web);
         web.addJavascriptInterface(bridge, "DaoNative");
         bridge.rotateLauncherIcon();
+
+        // 从闹钟通知点进来时，带到点的那条事项；页面加载完再交给它说一遍
+        try {
+            Intent in0 = getIntent();
+            if (in0 != null) {
+                String t0 = in0.getStringExtra(NoteAlarm.EXTRA_TEXT);
+                if (t0 != null) pendingAlarm = t0;
+            }
+        } catch (Exception e) { }
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView v, String url) {
+                super.onPageFinished(v, url);
+                if (pendingAlarm != null && pendingAlarm.length() > 0) {
+                    String t = pendingAlarm;
+                    pendingAlarm = "";
+                    deliverAlarm(t);
+                }
+            }
+        });
         // 启动就要一次麦克风：按住说话第一次点才弹框，用户常常以为没反应就松手了
         try {
             if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
@@ -59,6 +82,33 @@ public class DaoActivity extends Activity {
     @Override
     public void onBackPressed() {
         moveTaskToBack(true);
+    }
+
+    @Override
+    protected void onNewIntent(Intent it) {
+        super.onNewIntent(it);
+        try {
+            setIntent(it);
+            String t = it == null ? null : it.getStringExtra(NoteAlarm.EXTRA_TEXT);
+            if (t != null && t.length() > 0) {
+                if (web != null) deliverAlarm(t);
+                else pendingAlarm = t;
+            }
+        } catch (Exception e) { }
+    }
+
+    // 把到点事项交给页面：页面里的 __daoAlarm 会显示出来并念一遍
+    private void deliverAlarm(final String text) {
+        if (web == null) return;
+        final String esc = text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ");
+        web.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    web.evaluateJavascript("(function(){try{if(window.__daoAlarm)window.__daoAlarm('" + esc + "');}catch(e){}})()", null);
+                } catch (Exception e) { }
+            }
+        });
     }
 
     @Override

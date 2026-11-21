@@ -1437,7 +1437,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='100';
+  var HTML_VER='101';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1802,10 +1802,24 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
   function noteRead() {
     fetch('http://' + pcIp + ':8848/note?op=today').then(function (r) { return r.text(); }).then(function (s) {
       var t = s.indexOf('OK|') === 0 ? s.substring(3) : '记事本打不开';
+      if (s.indexOf('OK|') === 0) { try { localStorage.setItem('dao_note_last', t); } catch (e) {} }
       tip(t);
       noteSay(t);
-    }).catch(function () { tip('电脑没连上，看不了记事本'); });
+    }).catch(function () {
+      var last = '';
+      try { last = localStorage.getItem('dao_note_last') || ''; } catch (e) {}
+      var t = last ? ('电脑没连上，这是上次记下的：' + last) : '电脑没连上，也还没有本地记录';
+      tip(t);
+      noteSay(t);
+    });
   }
+
+  // 手机本地闹钟响、点通知进来时，原生端会调这个函数，让它把这条念出来
+  window.__daoAlarm = function (t) {
+    if (!t) t = '到点了';
+    try { tip('到点了：' + t); } catch (e) {}
+    try { noteSay('到点了，' + t); } catch (e) {}
+  };
 
   window.__daoVoice = function (id, text) {
     if (!text) return;

@@ -1159,6 +1159,7 @@ public class DesktopPet : Form
     // 到点提醒：提前十分钟预告一次，到点说一遍并标记完成
     void CheckNotes()
     {
+        PumpMailRetry();
         string[] lines = NoteLines();
         if (lines.Length == 0) return;
         DateTime now = DateTime.Now;
@@ -1185,11 +1186,49 @@ public class DesktopPet : Form
         for (int i = 0; i < due.Count; i++)
         {
             Push("到点了，" + due[i]);
-            TryMail("道的提醒：" + due[i], "到点了：" + due[i] + "\n时间：" + DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
+            string ms = "道的提醒：" + due[i];
+            string mb = "到点了：" + due[i] + "\n时间：" + DateTime.Now.ToString("yyyy-MM-dd HH:mm");
+            if (!TryMail(ms, mb)) QueueMailRetry(ms, mb);
         }
     }
 
     // 邮件通道：在 通知.ini 里填好才能发（host/port/user/pass/to/ssl）
+    static readonly List<string[]> mailQ = new List<string[]>();
+
+    // 发信失败先记着，5 分钟后再试一次，最多 3 次
+    static void QueueMailRetry(string subject, string body)
+    {
+        lock (mailQ)
+        {
+            if (mailQ.Count >= 20) return;
+            mailQ.Add(new string[] { subject, body, DateTime.Now.AddMinutes(5).ToString("yyyy-MM-dd HH:mm:ss"), "0" });
+        }
+    }
+
+    static void PumpMailRetry()
+    {
+        List<string[]> batch = null;
+        lock (mailQ) { if (mailQ.Count == 0) return; batch = new List<string[]>(mailQ); }
+        for (int i = 0; i < batch.Count; i++)
+        {
+            string[] it = batch[i];
+            DateTime at = DateTime.MinValue;
+            try { at = DateTime.ParseExact(it[2], "yyyy-MM-dd HH:mm:ss", null); } catch { }
+            if (at == DateTime.MinValue || at > DateTime.Now) continue;
+            bool ok = TryMail(it[0], it[1]);
+            int tries = 0; try { tries = int.Parse(it[3]); } catch { }
+            lock (mailQ)
+            {
+                bool removed = mailQ.Remove(it);
+                if (!ok && removed && tries + 1 < 3)
+                {
+                    it[3] = (tries + 1).ToString();
+                    it[2] = DateTime.Now.AddMinutes(10).ToString("yyyy-MM-dd HH:mm:ss");
+                    mailQ.Add(it);
+                }
+            }
+        }
+    }
     static bool TryMail(string subject, string body)
     {
         string bodyFile = "";
@@ -8756,7 +8795,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 100;
+    public const int APP_VER = 101;
 
     public static void Start()
     {

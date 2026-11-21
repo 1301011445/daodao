@@ -1277,6 +1277,17 @@ var exprImgs = [];
     say(reply || '嗯……');
   };
 
+  // v0.91：讲题入口。输入框删掉后由第二块的语音分流调用，跨块只能用 window 开放的方法
+  window.daoExplain = function (text) {
+    if (!(window.DaoNative && DaoNative.explain)) { say('讲题得在手机上，我才能看。'); return; }
+    var id = 'q' + (++seq);
+    waitingIds[id] = 1;
+    bubble.classList.add('show');
+    bubble.textContent = '我看看这题……';
+    waveLeft = 1.8; mode = 'wave';
+    try { DaoNative.explain(text, id); } catch (e) { say('我这会儿算不过来。'); }
+  };
+
   window.__daoUpdated = function (changed) {
     loadExtras();
     if (changed) say('我又学了点新东西，回头跟你慢慢讲。');
@@ -1366,7 +1377,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='90';
+  var HTML_VER='91';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1626,10 +1637,15 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
   }
 
   // ---------- 听（原生识别） ----------
+  // v0.91：输入框删了之后「讲题」没了入口，这里按话里的意思分流：
+  //         说「这题怎么做 / 讲一下 / 帮我解」就走进讲题，其余照旧走聊天
+  var EXPLAIN_RE = /(这|那)[道个]?题|解题|怎么解|怎么算|讲讲|讲一下|帮我讲|解释一下|说下思路/;
+
   window.__daoVoice = function (id, text) {
     if (!text) return;
     if (/没听清|权限|没有语音识别|启动失败/.test(text)) { tip(text); return; }
     tip('你说：' + text);
+    if (EXPLAIN_RE.test(text) && window.daoExplain) { window.daoExplain(text); return; }
     chatAsk(text);
   };
 

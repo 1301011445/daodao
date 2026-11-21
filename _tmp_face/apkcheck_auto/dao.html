@@ -27,7 +27,8 @@
   #bg.show { opacity: 1; }
   canvas { display: block; position: relative; }
   #bubble {
-    position: absolute; left: 50%; top: auto; bottom: 41%; transform: translate(-50%, 6px);
+    /* 位置由 resize() 按立绘高度算：气泡底边压在人头顶上方，不再糊在脸上 */
+    position: absolute; left: 50%; top: auto; bottom: 52%; transform: translate(-50%, 6px);
     max-width: 80%; padding: 10px 15px;
     background: rgba(255,255,255,.95); color: #18202f;
     border-radius: 15px; font-size: 15px; line-height: 1.5;
@@ -41,22 +42,22 @@
     padding: 10px 14px calc(13px + env(safe-area-inset-bottom, 0px));
     display: flex; flex-direction: column; gap: 9px; width: 100%;
   }
-  #bar .minis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; width: 100%; }
+  #bar .minis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; width: 100%; }
   button {
     display: inline-block; margin: 0; border-radius: 999px;
-    background: rgba(118,158,255,.15); color: #cfdcff; font-size: 13.5px;
+    background: rgba(118,158,255,.15); color: #cfdcff; font-size: 15px;
     border: 1px solid rgba(130,170,255,.28); font-family: inherit;
   }
   button:active { background: rgba(118,158,255,.32); }
   #bar .minis button {
-    width: 100%; min-width: 0; min-height: 42px; padding: 0 2px;
+    width: 100%; min-width: 0; min-height: 48px; padding: 0 2px;
     display: flex; align-items: center; justify-content: center;
     border-radius: 16px;
     background: linear-gradient(180deg, rgba(126,166,255,.16), rgba(96,132,220,.10));
     border: 1px solid rgba(140,178,255,.28); box-shadow: 0 3px 10px rgba(0,0,0,.22);
   }
   #bar .minis button:active { transform: translateY(1px); background: linear-gradient(180deg, rgba(126,166,255,.34), rgba(96,132,220,.24)); }
-  #bar .minis button .lb { font-size: 13px; letter-spacing: 1px; color: #dbe6ff; }
+  #bar .minis button .lb { font-size: 14.5px; letter-spacing: 1px; color: #dbe6ff; }
   #btnTalk {
     flex: none; width: 100%; min-height: 50px;
     display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -65,6 +66,7 @@
     border: 1px solid rgba(150,186,255,.42);
     box-shadow: 0 6px 18px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.10);
   }
+  #btnTalk.listening { background: linear-gradient(180deg, rgba(120,220,170,.55), rgba(60,170,130,.35)); border-color: rgba(150,255,210,.7); }
   #btnTalk:active { transform: translateY(1px); background: linear-gradient(180deg, rgba(126,166,255,.50), rgba(90,126,214,.34)); }
   /* 气泡加个小尾巴，指着说话的人，不然像屏幕贴了张便签 */
   #bubble::after {
@@ -84,7 +86,7 @@
   }
   #ask.show { display: flex; }
   #askInput {
-    flex: 1; min-width: 0; padding: 11px 13px; border-radius: 12px; font-size: 15px;
+    flex: 1; min-width: 0; padding: 13px 14px; border-radius: 12px; font-size: 16.5px;
     background: rgba(255,255,255,.08); border: 1px solid rgba(130,170,255,.32);
     color: #e6edff; outline: none; font-family: inherit; user-select: text;
   }
@@ -157,7 +159,7 @@
   }
   #pcPanel.show { display: flex; }
   #pcPanel button {
-    width: auto; margin: 0; padding: 9px 14px; border-radius: 11px; font-size: 13px;
+    width: auto; margin: 0; padding: 13px 18px; border-radius: 11px; min-height: 46px; font-size: 15px;
     background: rgba(118,158,255,.26); border: 1px solid rgba(130,170,255,.30);
     color: #dfe8ff;
   }
@@ -173,8 +175,7 @@
     <div id="verTag">v40</div>
     <div id="whoTag"><span class="dotc"></span><span id="whoName">银发剑客</span><span class="tw">· 手办风</span></div>
     <div id="joyTag">愉悦 --</div>
-    <div id="musicTag">♪ 曲库</div>
-    <div id="musicPanel"></div>
+      <div id="musicPanel"></div>
     <div id="pcBtn">电脑</div>
     <div id="pcPanel">
       <button id="pcSync">同步记忆</button>
@@ -185,8 +186,7 @@
     <div class="minis">
       <button id="btnSwap"><span class="lb">换形象</span></button>
       <button id="btnAct"><span class="lb">换动作</span></button>
-      <button id="btnKnow"><span class="lb">看知识</span></button>
-      <button id="btnExplain"><span class="lb">讲题</span></button>
+      <button id="btnSong"><span class="lb">唱歌</span></button>
     </div>
     <button id="btnTalk">跟它说话</button>
   </div>
@@ -371,6 +371,12 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
     return doy % 6;
   }
 
+  // 八帧走路序列（image_edit 出图后按 8 等分切；只有少女这一形象有素材）
+  var walkSheet = new Image(), walkSheetOk = false, walkF = 0, WALK_SP = 6;
+  walkSheet.onload = function () { walkSheetOk = true; if (typeof redraw === 'function') redraw(); };
+  walkSheet.onerror = function () { walkSheetOk = false; };
+  walkSheet.src = 'walk8.png';
+
   var scenes = [], sceneIdx = 0;
   SCENE_FILES.forEach(function (n, k) {
     var sim = new Image();
@@ -380,6 +386,7 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
 
   // 动作：跟电脑端共用一套编号 1 飞 2 御剑 3 坐骑 4 跳舞 5 喝茶 6 电视 7 滑板 8 轮滑
   var actKind = 0, actAmt = 0;
+  var swayX = 0;   // 重心左右转移（走路交替落脚 / 跳舞重心摆动），不动画本身只加位移
   // 走动：人往前走，场景往后退，看着就像真的在场景里走了一大段
   var walkX = 0, camX = 0, walkDir = 1;
   function actOfMode(m) {
@@ -469,6 +476,10 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
   }
   var mode = 'idle', modeLeft = 4, mood = 0, moodLeft = 0, waveLeft = 0;
   var dx = 0, tilt = 0, hopY = 0, walkPhase = 0, lieAmt = 0;
+  // 2026-11-20 参照《The Animator's Survival Kit》的四姿势走路（contact/down/passing/up）：
+  // 贴图只提供腿的姿态，重量感必须靠身体自己的上下沉浮与挤压拉伸补出来
+  var animBob = 0, animSqY = 1, animSqX = 1;
+  var jumpT = -1, JUMP_DUR = 0.95;
   if (lockMode) { mode = lockMode; modeLeft = 99; }
   if (lockMode && actOfMode(lockMode)) {
     actKind = actOfMode(lockMode);
@@ -477,7 +488,8 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
   }
 
   function resize() {
-    dpr = window.devicePixelRatio || 1;
+    // 高分屏按 3x 画会让画布像素多 9 倍，手机卡到掉帧；封到 1.5 肉眼几乎无差
+    dpr = Math.min(window.devicePixelRatio || 1, (Math.min(window.innerWidth, window.innerHeight) < 700 ? 1.25 : 1.5));
     var sw = document.getElementById('stage').clientWidth;
     var sh = document.getElementById('stage').clientHeight;
     scale = Math.min((sw * 0.94) / CW, (sh * 0.94) / CH);
@@ -488,6 +500,10 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
     cv.height = Math.round(cssH * dpr);
     ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
     ctx.imageSmoothingEnabled = true;
+    // 气泡底边贴着立绘头顶：气泡往上长，脸永远露得出来
+    var stageH = document.getElementById('stage').clientHeight;
+    var headTop = stageH - (cv.offsetTop || 0);
+    bubble.style.bottom = Math.max(64, headTop + 10) + 'px';
     redraw();
   }
 
@@ -726,11 +742,16 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
       bob = bob * (1 - lieAmt) + 20 * lieAmt;
     }
 
+    // 走路/跑/跳/跳舞的身体力学：先沉浮，再挤压拉伸（脚底不动，所以只改纵向尺寸）
+    bob += animBob;
+    sy *= animSqY;
+    sx *= animSqX;
+
     var bedA = lieAmt > 0.45 ? (lieAmt - 0.45) / 0.55 : 0;
     if (bedA > 0) bedA = Math.min(1, bedA);
 
     ctx.save();
-    ctx.translate(CX + dx + walkX, footY + hopY + bob);
+    ctx.translate(CX + dx + walkX + swayX, footY + hopY + bob);
     ctx.rotate(tilt * Math.PI / 180);
     ctx.scale(sx, sy);
     drawActProps(false);
@@ -790,7 +811,7 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
       if (dIm.complete && dIm.naturalWidth) {
         var dW = TARGET_H * (dIm.naturalWidth / dIm.naturalHeight);
         var beat = t * 3.6;
-        var swayX = 9 * actAmt * Math.sin(beat);
+        var swayX = 4 * actAmt * Math.sin(beat);
         var swayY = -6 * actAmt * Math.abs(Math.sin(beat * 2));
         ctx.drawImage(dIm, -dW / 2 + swayX, -TARGET_H + swayY, dW, TARGET_H);
         ctx.restore();
@@ -818,12 +839,26 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
       return;
     }
 
+    // 有八帧走路素材的形象：直接换整张帧图，不再用切条变形伪造步态
+    if (walkSheetOk && species === WALK_SP && (mode === 'walk' || mode === 'run') &&
+        Math.abs(animSqY - 1) < 0.06) {
+      var fw = walkSheet.naturalWidth / 8, fh = walkSheet.naturalHeight;
+      var fwD = TARGET_H * (fw / fh);
+      var fi = walkF * fw;
+      ctx.save();
+      if (walkDir < 0) ctx.scale(-1, 1);                 // 朝左走就整帧镜像
+      ctx.drawImage(walkSheet, fi, 0, fw, fh, -fwD / 2, -TARGET_H, fwD, TARGET_H);
+      ctx.restore();
+      ctx.restore();
+      return;
+    }
+
     var strips = 26, stripH = TARGET_H / strips;
     var imgScale = img.naturalHeight / TARGET_H;
-    var amp = (mode === 'run') ? 4.4 : ((mode === 'walk') ? 2.6 : 0.9);
+    var amp = (mode === 'run') ? 2.2 : ((mode === 'walk') ? 1.1 : 0.9);
     var ph0 = t * ((mode === 'run') ? 11.0 : 7.2);
     // 跳舞不再靠加大切条幅度（那就是折叠），只留一点摆动，动感交给整体位移
-    if (actKind === 4 && actAmt > 0.25 && species !== 8) { amp += 1.4 * actAmt; ph0 = t * 6.4; }
+    if (actKind === 4 && actAmt > 0.25 && species !== 8) { amp += 0.8 * actAmt; ph0 = t * 6.4; }
     var i, off, fy, yy, sh, syp, shp;
     for (i = 0; i < strips; i++) {
       fy = (i + 0.5) / strips;
@@ -897,7 +932,32 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
     ctx.restore();
   }
 
+  var _idleGate = 0;
+  // 帧率读数：手机端用来量「迟钝」到底是多少帧，用户报数字就能定位
+  var fpsTag = null, _fpsN = 0, _fpsT0 = 0, _fpsVal = 0;
+  function fpsPaint(v) {
+    if (!fpsTag) {
+      fpsTag = document.createElement('div');
+      fpsTag.style.cssText = 'position:fixed;right:6px;top:46px;font-size:11px;line-height:1.2;'
+        + 'color:#8fa2bd;opacity:.8;z-index:9;pointer-events:none;font-family:system-ui';
+      document.body.appendChild(fpsTag);
+    }
+    fpsTag.textContent = v + ' fps';
+    fpsTag.style.color = v < 24 ? '#ff9a8a' : (v < 40 ? '#e8d48a' : '#8fa2bd');
+  }
   function tick(now) {
+    // 空闲（不是走/跑/挥手/说话）时每两帧只画一帧：手机不发烫、点按才跟手
+    if (mode === 'idle' && waveLeft <= 0 && moodLeft <= 0) {
+      _idleGate++;
+      if (_idleGate % 3 !== 0) { lastT = now; requestAnimationFrame(tick); return; }
+    } else { _idleGate = 0; }
+    _fpsN++;
+    if (!_fpsT0) _fpsT0 = now;
+    if (now - _fpsT0 >= 1000) {
+      _fpsVal = Math.round(_fpsN * 1000 / (now - _fpsT0));
+      _fpsN = 0; _fpsT0 = now;
+      fpsPaint(_fpsVal);
+    }
     if (!lastT) lastT = now;
     var dt = Math.min(0.05, (now - lastT) / 1000);
     lastT = now;
@@ -910,23 +970,76 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
 
     if (mode === 'walk') {
       walkPhase += dt;
-      dx = Math.sin(walkPhase * 1.6) * 16;
+      dx = 0;
+      // 一个 8 帧循环 = 两步：p 从 0 到 1，接触在 0/0.5，最低点在 0.125/0.625，最高点在 0.375/0.875
+      var pW = (t * 11 / 8) % 1;
+      // 主沉浮按两步一循环（4π），落地那一下再叠一层二次谐波（8π）：接触帧更"实"
+      animBob = -2.6 * Math.sin(4 * Math.PI * pW) - 0.75 * Math.sin(8 * Math.PI * pW) + 0.6;
+      animSqY = 1 - 0.016 * Math.sin(4 * Math.PI * pW) - 0.007 * Math.abs(Math.sin(8 * Math.PI * pW));
+      animSqX = 1 + 0.012 * Math.sin(4 * Math.PI * pW);
+      // 重心左右交替：每步换脚，幅度小（1px 级），只是让身体别像贴纸平移
+      swayX = 1.0 * Math.sin(4 * Math.PI * pW);
+      walkF = Math.floor(pW * 8) % 8;      // 八帧序列取当前帧
+      tilt = 2.4;                       // 走路带一点前倾，不是直挺挺地滑
     } else if (mode === 'run') {
       walkPhase += dt * 1.9;
-      dx = Math.sin(walkPhase * 1.6) * 26;
-      tilt = walkPhase % 3.14 < 1.57 ? 12 : -12;
+      dx = 0;
+      var pR = (t * 14 / 8) % 1;
+      animBob = -5.0 * Math.sin(4 * Math.PI * pR) - 1.4 * Math.sin(8 * Math.PI * pR) + 1.2;
+      animSqY = 1 - 0.030 * Math.sin(4 * Math.PI * pR) - 0.012 * Math.abs(Math.sin(8 * Math.PI * pR));
+      animSqX = 1 + 0.022 * Math.sin(4 * Math.PI * pR);
+      swayX = 1.8 * Math.sin(4 * Math.PI * pR);
+      tilt = 6.0;                       // 跑起来前倾更多，重心压在前面
     } else if (mode === 'wave') {
       tilt = Math.sin(t * 9) * 3.2;
       dx = 0;
     } else {
-      dx *= 0.9; tilt *= 0.9;
+      dx *= 0.9; tilt *= 0.9; swayX *= 0.9;
+      animBob *= 0.88; animSqY += (1 - animSqY) * 0.14; animSqX += (1 - animSqX) * 0.14;
+      if (Math.abs(animBob) < 0.02) animBob = 0;
     }
+
+    if (actKind === 4 && actAmt > 0.2) swayX = 5.2 * actAmt * Math.sin(t * 1.9);
 
     lieAmt = 0;   // v22：不再躺下睡觉，床和飘 Z 一起撤掉
 
     hopY = 0;
     if (mode === 'hop') {
-      hopY = -Math.abs(Math.sin(t * 6.2)) * 22;
+      if (jumpT < 0) jumpT = 0;
+      jumpT += dt;
+      var jp = jumpT;
+      if (jp < 0.16) {                       // 预备下蹲：挤压，重心下沉
+        var k1 = jp / 0.16;
+        animSqY = 1 - 0.11 * Math.sin(k1 * Math.PI * 0.5);
+        animSqX = 1 + 0.07 * Math.sin(k1 * Math.PI * 0.5);
+        animBob = 3.0 * k1;
+      } else if (jp < 0.28) {                // 蹬地：拉伸、离地
+        var k2 = (jp - 0.16) / 0.12;
+        animSqY = 0.89 + 0.17 * k2;
+        animSqX = 1.07 - 0.11 * k2;
+        animBob = 3.0 - 6.0 * k2;
+        hopY = -8 * k2;
+      } else if (jp < 0.62) {                // 腾空：抛物线，顶点约 44px
+        var k3 = (jp - 0.28) / 0.34;
+        hopY = -8 - 36 * Math.sin(Math.PI * k3);
+        animSqY = 1.06 - 0.05 * Math.sin(Math.PI * k3);
+        animSqX = 0.96 + 0.04 * Math.sin(Math.PI * k3);
+        animBob = -3.0;
+      } else if (jp < 0.78) {                // 落地缓冲：压到最低再起
+        var k4 = (jp - 0.62) / 0.16;
+        hopY = -8 + 8 * Math.min(1, k4 * 2);
+        animSqY = 0.86 + 0.10 * k4;
+        animSqX = 1.10 - 0.07 * k4;
+        animBob = k4 < 0.5 ? (2.5 * Math.sin(k4 * Math.PI * 2)) : 0;
+      } else if (jp < JUMP_DUR) {            // 回正
+        var k5 = (jp - 0.78) / (JUMP_DUR - 0.78);
+        animSqY = 0.96 + 0.04 * k5 + 0.035 * Math.sin(Math.PI * k5);   // 过冲：先比 1 大一点再落回
+        animSqX = 1.03 - 0.03 * k5 - 0.020 * Math.sin(Math.PI * k5);
+      } else {
+        jumpT = -1; animSqY = 1; animSqX = 1; animBob = 0; hopY = 0;
+      }
+    } else if (jumpT >= 0) {
+      jumpT = -1; animSqY = 1; animSqX = 1; animBob = 0;
     }
 
     // 走动：人往前走，场景往后退；走到画面边上了就转身往回走
@@ -955,8 +1068,13 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
 
     // 飞、御剑、骑坐骑这几个是离地的，得抬起来再轻轻飘
     if (mode === 'fly' || mode === 'sword' || mode === 'ride') {
-      hopY -= 16 * actAmt;
-      tilt = Math.sin(t * 1.4) * 4.5 * actAmt;
+      // 跳舞/动作：随拍点往下沉一点，左右只留很小的重心移，别再整条带子甩
+      var beatA = t * 3.6;
+      var bB = Math.abs(Math.sin(beatA));
+      animBob = actAmt * (0.9 - 1.7 * bB);
+      animSqY = 1 - 0.035 * actAmt * bB;
+      hopY -= 6 * actAmt;
+      tilt = Math.sin(beatA) * 1.8 * actAmt;
     }
 
     if (modeLeft <= 0) {
@@ -1025,11 +1143,7 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
 
   cv.addEventListener('pointerdown', function (e) { e.preventDefault(); poke(); });
 
-  document.getElementById('btnTalk').addEventListener('pointerdown', function () {
-    askMode = 'chat';
-    try { askInput.placeholder = '跟道说句话……'; } catch (e) {}
-    openAsk();
-  });
+  // 「跟它说话」的点击行为挪到下面的语音块：轻点=语音对话，长按 0.55 秒=打字
 
   // 换个动作：挨个挑一个带场景的，切完立刻说一句它自己在干什么
   var ACT_NAMES = ['fly', 'sword', 'ride', 'tea', 'tv', 'skate', 'dance'];
@@ -1218,7 +1332,7 @@ var exprImgs = [];
 
   window.__daoUpdated = function (changed) {
     loadExtras();
-    if (changed) say('我又学了点新东西，点「看知识」能瞧见。');
+    if (changed) say('我又学了点新东西，回头跟你慢慢讲。');
   };
 
   function showKnow() {
@@ -1280,10 +1394,13 @@ var exprImgs = [];
   var askCloseBtn = document.getElementById('askClose');
   if (askCloseBtn) askCloseBtn.addEventListener('click', function () { closeAsk(); say('好，不说了。'); });
 
-  document.getElementById('btnKnow').addEventListener('pointerdown', function (e) { e.preventDefault(); showKnow(); });
+  document.getElementById('btnSong').addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    if (window.daoMusicPanel) window.daoMusicPanel();
+    else if (window.daoPlayNext) window.daoPlayNext();
+  });
 
-  var be = document.getElementById('btnExplain');
-  if (be) be.addEventListener('pointerdown', function (e) { e.preventDefault(); askSide('explain'); });
+  // 「讲题」已从第二行撤掉；要讲题直接在输入框里说「讲讲这道题」
 
   // ---- 和电脑互通 / 查新版本 ----
   window.__daoMsg = function (id, status, msg) {
@@ -1334,7 +1451,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '62';
+  var HTML_VER='85';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1446,7 +1563,7 @@ setInterval(daoSyncJoy, 60000);
 })();
 
   // ===== 曲库：谱子渲好的 wav 打进 apk 的 assets/music，手机不连电脑也能放 =====
-  var DAO_MUSIC = [{ id: 'demo_01', name: 'demo_01_五声主题', sec: 19.2 }, { id: 'song_01', name: 'song_01_寄一封', sec: 91.43 }];
+  var DAO_MUSIC = [{ id: 'guitu', name: '归途的月光' }, { id: 'gongzuo', name: '把好日子扛在肩上' }, { id: 'shaonian', name: '少年模样' }];
   var daoAudio = null;
   var daoMIdx = -1;
   function daoMusicMark() {
@@ -1460,17 +1577,10 @@ setInterval(daoSyncJoy, 60000);
   function daoMusicPlay(idx) {
     var it = DAO_MUSIC[idx];
     if (!it) return;
-    try {
-      if (daoAudio) { try { daoAudio.pause(); } catch (e) {} daoAudio = null; }
-      daoAudio = new Audio('music/' + it.id + '.wav');
-      daoAudio.onended = function () { daoMIdx = -1; daoMusicMark(); say('这首放完了'); };
-      daoAudio.onerror = function () { say('这首没打进包里，回头补上'); };
-      var pr = daoAudio.play();
-      if (pr && pr.catch) { pr.catch(function () { say('手机没让出声，点一下屏幕再试'); }); }
-      daoMIdx = idx;
-      daoMusicMark();
-      say('放一首：' + it.name);
-    } catch (e) { say('这台手机放不了音频'); }
+    // 三首真歌是 IMA ADPCM 打包的，统一交给本地播放器，别再按 music/*.wav 取
+    if (window.daoPlaySong) { window.daoPlaySong(idx); return; }
+    // 包里只剩 adp 版，没有 wav 兜底了：本地播放器没就位就直接说清楚
+    say('曲库还没就位，等页面加载完再点');
   }
   (function () {
     var tag = document.getElementById('musicTag');
@@ -1497,5 +1607,345 @@ setInterval(daoSyncJoy, 60000);
     });
   })();
 </script>
+<script>
+/* 道 · 手机端语音工具栏（2026-11-20 补）
+   为什么单独加一条：原页面只有打字，没有说话也没有听。这里不碰原有布局，只加一条浮动栏。
+   能力来源：DaoNative.speak / listen（原生 TTS + 系统语音识别），电脑端 /say、/do、/music。 */
+(function () {
+  if (window.__daoBar) return;
+  window.__daoBar = 1;
+
+  var lastText = '';
+  var pcIp = localStorage.getItem('dao_pc_ip') || '192.168.2.115';
+
+  function el(tag, css, txt) {
+    var d = document.createElement(tag);
+    if (css) d.setAttribute('style', css);
+    if (txt) d.textContent = txt;
+    return d;
+  }
+
+
+  function tip(msg) {
+    var t = el('div',
+      'position:fixed;left:50%;transform:translateX(-50%);bottom:84px;z-index:10000;' +
+      'max-width:80vw;padding:9px 14px;border-radius:12px;background:rgba(0,0,0,.78);color:#fff;' +
+      'font-size:15px;line-height:1.45;font-family:system-ui,sans-serif;');
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(function () { try { t.remove(); } catch (e) {} }, 2600);
+  }
+
+  // ---------- 跨网记忆同步（不挑 WiFi，走公网） ----------
+  window.__daoSync = function (msg) {
+    if (!msg) return;
+    if (msg.indexOf('失败') >= 0) return;              // 网络不好就不吵人，下次自己再对
+    if (msg.indexOf('最新') >= 0 && msg.indexOf('还没发过') < 0) return;
+    tip(msg);
+  };
+  setTimeout(function () { try { if (window.DaoNative && DaoNative.syncNow) DaoNative.syncNow(); } catch (e) {} }, 1500);
+setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNative.warmUp(); } catch (e) {} }, 800);
+
+  // ---------- 说话：先用电脑的声音，连不上再退回手机自带 TTS ----------
+  // 电脑端 /tts 返回的是 Edge 合成的 mp3，音色比手机自带 TTS 自然；
+  // 拿不到（没连 WiFi、电脑没开）就立退回原生，不让用户干等
+  // 手机自己直连 Edge 朗读（不要密钥、不要额度）；连不上才退回电脑、再退回系统 TTS
+  var voiceMode = localStorage.getItem('dao_voice_mode') || 'edge';
+  var EDGE_IDX = { edge: 0, edge1: 1, edge2: 3 };
+  function nativeSpeak(text) {
+    if (window.DaoNative && DaoNative.speak) { try { DaoNative.speak(text); return; } catch (e) {} }
+    if (window.speechSynthesis) {
+      try {
+        var u = new SpeechSynthesisUtterance(text);
+        u.lang = 'zh-CN'; u.rate = 0.95;
+        speechSynthesis.speak(u);
+      } catch (e) {}
+    }
+  }
+  function speak(text) {
+    if (!text) return;
+    lastText = text;
+    // 说话前先把本地曲库停掉，避免对话里混进歌声
+    try { if (window.daoStopMusic) window.daoStopMusic(); } catch (e) {}
+    try { if (window.DaoNative && DaoNative.stopAll) DaoNative.stopAll(); } catch (e) {}
+    if (EDGE_IDX[voiceMode] !== undefined) {
+      if (window.DaoNative && DaoNative.speakEdge) { try { DaoNative.speakEdge(text, EDGE_IDX[voiceMode]); return; } catch (e) {} }
+      nativeSpeak(text); return;
+    }
+    if (voiceMode === 'tencent') {
+      if (window.DaoNative && DaoNative.speakTencent) {
+        try { DaoNative.speakTencent(text, 0); return; } catch (e) {}
+      }
+      nativeSpeak(text); return;
+    }
+    if (voiceMode === 'cloud') {
+      if (window.DaoNative && DaoNative.speakCloud) { try { DaoNative.speakCloud(text, 'female'); return; } catch (e) {} }
+      nativeSpeak(text); return;
+    }
+    if (voiceMode !== 'pc') { nativeSpeak(text); return; }
+    var done = false;
+    var timer = setTimeout(function () { if (!done) { done = true; nativeSpeak(text); } }, 9000);
+    try {
+      var x = new XMLHttpRequest();
+      x.open('POST', 'http://' + pcIp + ':8848/tts', true);
+      x.responseType = 'blob';
+      x.timeout = 12000;
+      x.onload = function () {
+        if (done) return;
+        if (x.status === 200 && x.response && x.response.size > 2048) {
+          done = true; clearTimeout(timer);
+          try {
+            var url = URL.createObjectURL(x.response);
+            var a = new Audio(url);
+            a.onended = function () { try { URL.revokeObjectURL(url); } catch (e) {} };
+            a.play().catch(function () { nativeSpeak(text); });
+            return;
+          } catch (e) {}
+        }
+        done = true; clearTimeout(timer); nativeSpeak(text);
+      };
+      x.onerror = function () { if (!done) { done = true; clearTimeout(timer); nativeSpeak(text); } };
+      x.ontimeout = function () { if (!done) { done = true; clearTimeout(timer); nativeSpeak(text); } };
+      x.send(text);
+    } catch (e) { if (!done) { done = true; clearTimeout(timer); nativeSpeak(text); } }
+  }
+
+  // ---------- 听（原生识别） ----------
+  window.__daoVoice = function (id, text) {
+    if (!text) return;
+    if (/没听清|权限|没有语音识别|启动失败/.test(text)) { tip(text); return; }
+    tip('你说：' + text);
+    chatAsk(text);
+  };
+
+  // 「跟它说话」：点一下开输入框；按住 0.45 秒改成语音输入（松手识别）
+  // 「跟它说话」：轻点＝直接开口说话（语音对话，再点一下结束并识别）
+  //               长按 0.55 秒＝改用打字（键盘输入），不会再一点就弹键盘
+  var streamed = false;
+  var talkBtn = document.getElementById('btnTalk');
+  var holdTmr = null, longFired = false, listening = false;
+
+  function startListen() {
+    if (!(window.DaoNative && (DaoNative.listenCloud || DaoNative.listen))) {
+      tip('这台设备没有语音通道，长按可以打字');
+      return;
+    }
+    listening = true;
+    try { if (window.DaoNative && DaoNative.stopAll) DaoNative.stopAll(); } catch (e) {}
+    talkBtn.classList.add('listening');
+    try { if (DaoNative.listenCloud) DaoNative.listenCloud('mic'); else DaoNative.listen('mic'); } catch (e) {}
+    tip('我在听…说完再点一下');
+  }
+  function stopListen() {
+    listening = false;
+    talkBtn.classList.remove('listening');
+    try { if (DaoNative.stopListenCloud) DaoNative.stopListenCloud(); else if (DaoNative.stopListen) DaoNative.stopListen(); } catch (e) {}
+    tip('好，我听听…');
+  }
+  talkBtn.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    longFired = false;
+    holdTmr = setTimeout(function () {
+      holdTmr = null;
+      longFired = true;
+      if (listening) stopListen();
+      askMode = 'chat';
+      try { askInput.placeholder = '跟道说句话……'; } catch (err) {}
+      openAsk();
+    }, 550);
+  });
+  talkBtn.addEventListener('pointerup', function (e) {
+    e.preventDefault();
+    if (holdTmr) { clearTimeout(holdTmr); holdTmr = null; }
+    if (longFired) return;             // 长按已经去打字的流程
+    if (listening) stopListen(); else startListen();
+  });
+  talkBtn.addEventListener('pointercancel', function () {
+    if (holdTmr) { clearTimeout(holdTmr); holdTmr = null; }
+  });
+
+  // ---------- 对话 ----------
+  function chatAsk(q) {
+    q = (q || '').trim();
+    if (!q) return;
+    // 「忘掉 xxx」「删掉 xxx」：走分布式删除，不是只在本地删
+    var mm = q.match(/^(忘掉|删掉|忘记)(?:这件事)?[：: ]*(.+)$/);
+    if (mm && mm[2]) {
+      if (window.DaoNative && DaoNative.forget) { DaoNative.forget(mm[2].trim()); tip('好，这条从两端都删掉'); }
+      else tip('这台设备删不了记忆');
+      return;
+    }
+    if (window.DaoNative && (DaoNative.chatStream || DaoNative.chat)) {
+      streamed = true;                       // 原生会边出字边说，页面别再重复念一遍
+      tip('我在听你说…');
+      if (DaoNative.chatStream) { try { DaoNative.chatStream(q, 'bar'); return; } catch (e) {} }
+      DaoNative.chat(q, 'bar');
+      return;
+    }
+    tip('这台设备连不上对话通道');
+  }
+
+  // 桥回来的回答：读出来 + 贴一句字幕（不改原页面自己的处理）
+  var oldReply = window.__daoReply;
+  window.__daoReply = function (id, reply, mood) {
+    try { if (typeof oldReply === 'function') oldReply.apply(null, arguments); } catch (e) {}
+    if (id === 'bar' && reply) {
+      tip(reply);
+      if (streamed) { streamed = false; return; }   // 流式路径：音频已由原生按句放完
+      speak(reply);
+    }
+  };
+
+
+  // ---------- 唱歌：让电脑端开口 ----------
+  function hit(path, body) {
+    return fetch('http://' + pcIp + ':8848' + path, {
+      method: body === undefined ? 'GET' : 'POST',
+      body: body
+    }).then(function (r) { return r.text(); }).catch(function () { return 'ERR'; });
+  }
+
+  // ---------- 本地曲库：手机自己出声，不靠电脑 ----------
+  // 曲子是 IMA ADPCM 压的（tools\音乐\手机曲库\adpcm.py），体积约原 wav 的 1/4，
+  // WebView 的 file:// 不给 XHR 读 assets，所以走 DaoNative.assetB64 取字节再自己解
+  var SONGS = [
+    { k: 'guitu',    f: 'music/guitu.adp',    t: '归途的月光' },
+    { k: 'gongzuo',  f: 'music/gongzuo.adp',  t: '把好日子扛在肩上' },
+    { k: 'shaonian', f: 'music/shaonian.adp', t: '少年模样' }
+  ];
+  var STEPS = [7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,
+    73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,
+    494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,
+    2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,
+    10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767];
+  var IDXT = [-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8];
+  var actx = null, srcNode = null, playing = -1, playingBuf = null, songBufCache = {};
+
+  function b64ToBuf(b64) {
+    var bin = atob(b64), n = bin.length, u8 = new Uint8Array(n);
+    for (var i = 0; i < n; i++) u8[i] = bin.charCodeAt(i);
+    return u8.buffer;
+  }
+
+  function decodeAdp(ab) {
+    var dv = new DataView(ab);
+    var m = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
+    if (m !== 'DAO1') throw new Error('不是曲库文件');
+    var sr = dv.getUint32(4, true), nf = dv.getUint32(8, true);
+    var pcm = new Float32Array(nf * 2048), o = 0, pos = 12;
+    for (var f = 0; f < nf; f++) {
+      var pred = dv.getInt16(pos, true), idx = dv.getUint8(pos + 2);
+      var end = Math.min(pos + 1028, dv.byteLength);
+      for (var b = pos + 4; b < end; b++) {
+        var by = dv.getUint8(b);
+        for (var k = 0; k < 2; k++) {
+          var code = k === 0 ? (by >> 4) & 15 : by & 15;
+          var step = STEPS[idx];
+          var delta = step >> 3;
+          if (code & 4) delta += step;
+          if (code & 2) delta += step >> 1;
+          if (code & 1) delta += step >> 2;
+          pred += (code & 8) ? -delta : delta;
+          if (pred > 32767) pred = 32767; else if (pred < -32768) pred = -32768;
+          idx += IDXT[code & 7];
+          if (idx < 0) idx = 0; else if (idx > 88) idx = 88;
+          pcm[o++] = pred / 32768.0;
+        }
+      }
+      pos += 1028;
+    }
+    return { sr: sr, pcm: pcm.subarray(0, o) };
+  }
+
+  function stopMusic() {
+    try { if (window.DaoNative && DaoNative.stopSong) DaoNative.stopSong(); } catch (e) {}
+    try { if (srcNode) { srcNode.stop(); srcNode = null; } } catch (e) {}
+    playing = -1;
+    if (win) win.remove();
+  }
+
+  var win = null;
+  function musicPanel() {
+    if (win) { stopMusic(); return; }
+    win = el('div',
+      'position:fixed;left:12px;right:12px;bottom:74px;z-index:10001;padding:12px;border-radius:16px;' +
+      'background:rgba(14,20,40,.96);color:#e8eeff;font-family:system-ui,sans-serif;font-size:16px;' +
+      'box-shadow:0 8px 30px rgba(0,0,0,.45);');
+    var hd = el('div', 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;');
+    hd.appendChild(el('div', 'font-size:15px;opacity:.8;', '道自己的歌（手机本地放）'));
+    var x = el('div', 'padding:4px 10px;font-size:20px;line-height:1;', '×');
+    x.addEventListener('click', stopMusic);
+    hd.appendChild(x);
+    win.appendChild(hd);
+    SONGS.forEach(function (s, i) {
+      var r = el('div',
+        'display:flex;align-items:center;min-height:52px;padding:0 12px;margin-top:8px;' +
+        'border-radius:12px;background:rgba(118,158,255,.16);');
+      r.textContent = s.t;
+      r.addEventListener('click', function () { playSong(i); });
+      win.appendChild(r);
+    });
+    document.body.appendChild(win);
+  }
+
+  function playSong(i) {
+    var s = SONGS[i];
+    if (playing === i) { stopMusic(); return; }
+    stopMusic();
+    // 唱歌前先把朗读停掉，两路声音不能一起响
+    try { if (window.DaoNative && DaoNative.stopAll) DaoNative.stopAll(); } catch (e) {}
+    try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
+    playing = i;
+    tip('载入《' + s.t + '》…');
+    // 先交给原生：读 assets、解 ADPCM、写 wav、MediaPlayer 放（真机上就是这条路）
+    if (window.DaoNative && DaoNative.playSongAsset) {
+      try {
+        var nr = String(DaoNative.playSongAsset(s.k || ''));
+        if (nr.indexOf('OK') === 0) { tip('正在放《' + s.t + '》，再点一下停'); return; }
+        tip(nr.replace(/^ERR\|/, ''));   // 原生不行就继续走下面的网页解码
+      } catch (e2) {}
+    }
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      // 解一次缓存一次：同一首再点不用重新解码（4M 采样现解要一两秒）
+      var buf = songBufCache[s.f];
+      if (!buf) {
+        var b64 = (window.DaoNative && DaoNative.assetB64) ? DaoNative.assetB64(s.f) : '';
+        if (!b64) { tip('拿不到曲库文件'); return; }
+        var d = decodeAdp(b64ToBuf(b64));
+        buf = actx.createBuffer(1, d.pcm.length, d.sr);
+        buf.getChannelData(0).set(d.pcm);
+        songBufCache = {}; songBufCache[s.f] = buf;   // 只留最近一首，别把内存吃满
+      }
+      playingBuf = buf;
+      srcNode = actx.createBufferSource();
+      srcNode.buffer = buf;
+      srcNode.connect(actx.destination);
+      srcNode.onended = function () { if (playing === i) { playing = -1; } };
+      srcNode.start(0);
+      tip('正在放《' + s.t + '》，再点一下暂停');
+    } catch (e) { tip('放不了：' + e.message); playing = -1; }
+  }
+
+
+  // 长按右上角「电脑」设电脑 IP（换 WiFi 时用）
+  var tmr = null;
+  var pcBtnEl = document.getElementById('pcBtn');
+  pcBtnEl.addEventListener('pointerdown', function () {
+    tmr = setTimeout(function () {
+      var ip = window.prompt('电脑端 IP（同一 WiFi）', pcIp);
+      if (ip) { pcIp = ip.trim(); localStorage.setItem('dao_pc_ip', pcIp); tip('已记下 ' + pcIp); }
+    }, 1200);
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (k) {
+    pcBtnEl.addEventListener(k, function () { if (tmr) { clearTimeout(tmr); tmr = null; } });
+  });
+  window.daoStopMusic = stopMusic;
+  window.daoMusicPanel = musicPanel;
+  window.daoPlaySong = playSong;
+  window.daoPlayNext = function () { playSong((playing + 1) % (SONGS.length || 1)); };
+})();
+</script>
+
 </body>
 </html>

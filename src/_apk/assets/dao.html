@@ -78,22 +78,6 @@
     0%, 100% { opacity: .35; transform: scale(.82); }
     50%      { opacity: 1;   transform: scale(1.10); }
   }
-  #ask {
-    position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 10px 14px;
-    background: rgba(10,16,32,.96); display: none; gap: 8px;
-    border-top: 1px solid rgba(130,170,255,.22);
-    z-index: 20;
-  }
-  #ask.show { display: flex; }
-  #askInput {
-    flex: 1; min-width: 0; padding: 13px 14px; border-radius: 12px; font-size: 16.5px;
-    background: rgba(255,255,255,.08); border: 1px solid rgba(130,170,255,.32);
-    color: #e6edff; outline: none; font-family: inherit; user-select: text;
-  }
-  #askSend {
-    width: auto; margin: 0; padding: 11px 18px; border-radius: 12px;
-    background: rgba(118,158,255,.30); flex: none;
-  }
   #hint {
     position: absolute; left: 0; right: 0; bottom: 6px; text-align: center;
     font-size: 12px; color: rgba(190,205,235,.42); pointer-events: none;
@@ -148,11 +132,6 @@
     background: rgba(16,24,46,.86); border: 1px solid rgba(130,170,255,.30); color: #dfe8ff;
   }
   #musicPanel .mt.on { background: rgba(118,158,255,.40); border-color: rgba(160,195,255,.62); }
-  #askClose {
-    width: 40px; margin: 0; padding: 11px 0; border-radius: 12px; flex: none;
-    background: rgba(255,255,255,.10); border: 1px solid rgba(130,170,255,.28);
-    color: #cfdcff; font-size: 16px; line-height: 1;
-  }
   #pcPanel {
     position: absolute; right: 10px; top: 52px; display: none; flex-direction: column;
     gap: 8px; z-index: 25;
@@ -189,11 +168,6 @@
       <button id="btnSong"><span class="lb">唱歌</span></button>
     </div>
     <button id="btnTalk">跟它说话</button>
-  </div>
-  <div id="ask">
-    <input id="askInput" type="text" placeholder="跟道说句话……" autocomplete="off">
-    <button id="askSend">发送</button>
-    <button id="askClose" aria-label="收起输入">×</button>
   </div>
 </div>
 <script>
@@ -1274,8 +1248,7 @@ var exprImgs = [];
   var extraLines = [];
   var waitingIds = {};
   var seq = 0;
-  var askBox = document.getElementById('ask');
-  var askInput = document.getElementById('askInput');
+  /* v0.88：用户不想打字，输入框与长按打字整条路已删除，这里不再有 askBox/askInput */
 
   function allLines() { return LINES.concat(extraLines); }
 
@@ -1287,55 +1260,10 @@ var exprImgs = [];
     } catch (e) {}
   }
 
-  var askMode = 'chat';
-
-  function askSide(md) {
-    askMode = md;
-    try {
-      askInput.placeholder = (md === 'explain') ? '把题目贴进来，我给你讲思路' : '跟道说句话……';
-    } catch (e) {}
-    openAsk();
-  }
-
-  function openAsk() {
-    if (!askBox) return;
-    askBox.classList.add('show');
-    try { askInput.value = ''; askInput.focus(); } catch (e) {}
-  }
-
-  // 收起就真收：先失焦把系统键盘按下去，再藏输入条。
-  // v15：不用打完字才能退——点右边那个 ×，或者在屏幕上左右划一下就行
-  function closeAsk() {
-    if (!askBox) return;
-    try { askInput.blur(); } catch (e) {}
-    askBox.classList.remove('show');
-    try { if (window.DaoNative && DaoNative.hideKeyboard) DaoNative.hideKeyboard(); } catch (e) {}
-  }
-
-  // v87：第二段脚本（长按「跟它说话」的打字流程）看不到这里的私有函数，
-  // 之前直接调 openAsk() 就报 ReferenceError，长按打字整条路径一直是坏的。显式开放入口。
-  window.daoAskSide = askSide;
-  window.daoAskOpen = openAsk;
-  window.daoAskClose = closeAsk;
-  window.daoAskInput = askInput;
-
   function setMoodByCode(m) {
     if (!m) { mood = 0; moodLeft = 0; return; }
     mood = (m === 7 || m === 8) ? (m === 8 ? 1 : 4) : m;
     moodLeft = 3.4;
-  }
-
-  function askBrain(text, md) {
-    if (parseDayCmd(text)) return;   // 定今天的话，本地就办了
-    if (!window.DaoNative) { say('我这会儿没有大脑，得回电脑上才行。'); return; }
-    md = md || 'chat';
-    var id = 'q' + (++seq);
-    waitingIds[id] = 1;
-    bubble.classList.add('show');
-    bubble.textContent = (md === 'explain') ? '我看看这题……' : '……';
-    waveLeft = 1.8; mode = 'wave';
-    if (md === 'explain' && window.DaoNative.explain) DaoNative.explain(text, id);
-    else DaoNative.chat(text, id);
   }
 
   window.__daoReply = function (id, reply, m) {
@@ -1354,34 +1282,7 @@ var exprImgs = [];
     if (changed) say('我又学了点新东西，回头跟你慢慢讲。');
   };
 
-  function showKnow() {
-    if (!window.DaoNative) { say('知识库要在手机 App 里才看得到。'); return; }
-    var d = {};
-    try { d = JSON.parse(DaoNative.getKnowledge()); } catch (e) {}
-    var cnt = d.count || 0, ln = d.lines || 0, today = d.today || '';
-    var txt = '我已经学了 ' + cnt + ' 条，话也多了 ' + ln + ' 句。';
-    if (today) txt += '今天学到：' + today;
-    else txt += '今天还没学到新的，等会儿我再去看看。';
-    say(txt);
-    waveLeft = 1.4; mode = 'wave';
-  }
-
-  if (askBox) {
-    document.getElementById('askSend').addEventListener('click', function () {
-      var v = askInput.value.trim();
-      if (!v) return;
-      closeAsk(); askBrain(v, askMode);
-    });
-    askInput.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') {
-        var v = askInput.value.trim();
-        if (!v) return;
-        closeAsk(); askBrain(v, askMode);
-      }
-    });
-  }
-
-  // 左右一划就退出输入：手指按下记起点，抬起时横向位移够大、纵向别乱晃，就算划走
+  // 左右一划就收起面板：手指按下记起点，抬起时横向位移够大、纵向别乱晃，就算划走
   (function () {
     var sx = 0, sy = 0, tracking = false;
     function start(e) {
@@ -1396,13 +1297,11 @@ var exprImgs = [];
       if (!t) return;
       var dx = t.clientX - sx, dy = t.clientY - sy;
       if (Math.abs(dx) > 46 && Math.abs(dy) < 46) {
-        var open = askBox && askBox.classList.contains('show');
         var panel = pcPanel && pcPanel.classList.contains('show');
-        if (open) { closeAsk(); say('好，不说了。'); }
         if (panel) pcPanel.classList.remove('show');
       }
     }
-    var zones = [document.getElementById('stage'), askBox];
+    var zones = [document.getElementById('stage')];
     for (var i = 0; i < zones.length; i++) {
       if (!zones[i]) continue;
       zones[i].addEventListener('touchstart', start, { passive: true });
@@ -1410,16 +1309,13 @@ var exprImgs = [];
     }
   })();
 
-  var askCloseBtn = document.getElementById('askClose');
-  if (askCloseBtn) askCloseBtn.addEventListener('click', function () { closeAsk(); say('好，不说了。'); });
-
   document.getElementById('btnSong').addEventListener('pointerdown', function (e) {
     e.preventDefault();
     if (window.daoMusicPanel) window.daoMusicPanel();
     else if (window.daoPlayNext) window.daoPlayNext();
   });
 
-  // 「讲题」已从第二行撤掉；要讲题直接在输入框里说「讲讲这道题」
+  // 「讲题」已从第二行撤掉；v0.88 起输入框也删了，讲题只能靠语音说
 
   // ---- 和电脑互通 / 查新版本 ----
   window.__daoMsg = function (id, status, msg) {
@@ -1470,7 +1366,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='87';
+  var HTML_VER='89';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1742,7 +1638,7 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
   //               长按 0.55 秒＝改用打字（键盘输入），不会再一点就弹键盘
   var streamed = false;
   var talkBtn = document.getElementById('btnTalk');
-  var holdTmr = null, longFired = false, listening = false;
+  var listening = false;
 
   function startListen() {
     if (!(window.DaoNative && (DaoNative.listenCloud || DaoNative.listen))) {
@@ -1761,25 +1657,10 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     try { if (DaoNative.stopListenCloud) DaoNative.stopListenCloud(); else if (DaoNative.stopListen) DaoNative.stopListen(); } catch (e) {}
     tip('好，我听听…');
   }
-  talkBtn.addEventListener('pointerdown', function (e) {
-    e.preventDefault();
-    longFired = false;
-    holdTmr = setTimeout(function () {
-      holdTmr = null;
-      longFired = true;
-      if (listening) stopListen();
-      if (window.daoAskSide) { window.daoAskSide('chat'); }          // v87：走第一段脚本开放出来的入口
-      else if (window.daoAskOpen) { window.daoAskOpen(); }
-    }, 550);
-  });
+  // v0.88：打字功能按用户要求删除，长按不再有任何作用，「跟它说话」只剩轻点说话
   talkBtn.addEventListener('pointerup', function (e) {
     e.preventDefault();
-    if (holdTmr) { clearTimeout(holdTmr); holdTmr = null; }
-    if (longFired) return;             // 长按已经去打字的流程
     if (listening) stopListen(); else startListen();
-  });
-  talkBtn.addEventListener('pointercancel', function () {
-    if (holdTmr) { clearTimeout(holdTmr); holdTmr = null; }
   });
 
   // ---------- 对话 ----------

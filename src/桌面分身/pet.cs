@@ -941,6 +941,138 @@ public class DesktopPet : Form
         catch { return now.AddHours(1); }
     }
 
+    // 重复提醒：每天 / 每周X / 每月X号 → "D" / "W1..W7" / "M23"
+    static string StripRepeat(ref string s)
+    {
+        string rep = "";
+        try
+        {
+            if (s.IndexOf("每天") >= 0 || s.IndexOf("每日") >= 0)
+            {
+                rep = "D";
+                s = s.Replace("每天", " ").Replace("每日", " ");
+                return rep;
+            }
+            Match w = Regex.Match(s, @"每(?:周|星期|礼拜)([一二三四五六日天1-7])?");
+            if (w.Success)
+            {
+                string d = w.Groups[1].Value;
+                int n = 1;
+                if (d == "一") n = 1; else if (d == "二") n = 2; else if (d == "三") n = 3; else if (d == "四") n = 4;
+                else if (d == "五") n = 5; else if (d == "六") n = 6; else if (d == "日" || d == "天") n = 7;
+                else if (d.Length > 0) { try { n = int.Parse(d); } catch { n = 1; } }
+                if (n < 1 || n > 7) n = 1;
+                rep = "W" + n;
+                s = s.Substring(0, w.Index) + " " + s.Substring(w.Index + w.Length);
+                return rep;
+            }
+            Match m = Regex.Match(s, @"每(?:个)?月([0-9]{1,2}|[一二三四五六七八九十]{1,3})[日号]?");
+            if (m.Success)
+            {
+                int day = CnNum(m.Groups[1].Value);
+                if (day >= 1 && day <= 31) rep = "M" + day;
+                s = s.Substring(0, m.Index) + " " + s.Substring(m.Index + m.Length);
+                return rep;
+            }
+        }
+        catch { }
+        return rep;
+    }
+
+    // 下一次是什么时候
+    static DateTime NextWhen(DateTime dt, string rep)
+    {
+        try
+        {
+            if (rep == null || rep.Length == 0) return dt;
+            char c = rep[0];
+            if (c == 'D') return dt.AddDays(1);
+            if (c == 'W')
+            {
+                int n = 1;
+                try { n = int.Parse(rep.Substring(1)); } catch { n = 1; }
+                DateTime d = dt.AddDays(1);
+                for (int i = 0; i < 8; i++)
+                {
+                    if ((int)d.DayOfWeek == (n % 7)) break;
+                    d = d.AddDays(1);
+                }
+                return d;
+            }
+            if (c == 'M')
+            {
+                int day = 1;
+                try { day = int.Parse(rep.Substring(1)); } catch { day = 1; }
+                DateTime d = dt.AddMonths(1);
+                int dim = DateTime.DaysInMonth(d.Year, d.Month);
+                if (day > dim) day = dim;
+                return new DateTime(d.Year, d.Month, day, dt.Hour, dt.Minute, 0);
+            }
+        }
+        catch { }
+        return dt;
+    }
+
+    // 把「今天的这个点」对齐到重复规则的下一次
+    static DateTime AlignToRepeat(DateTime when, string rep)
+    {
+        try
+        {
+            DateTime now = DateTime.Now;
+            if (rep[0] == 'D')
+            {
+                if (when <= now) return when.AddDays(1);
+                return when;
+            }
+            if (rep[0] == 'W')
+            {
+                int n = 1;
+                try { n = int.Parse(rep.Substring(1)); } catch { n = 1; }
+                DateTime d = when.Date;
+                for (int i = 0; i < 8; i++)
+                {
+                    if ((int)d.DayOfWeek == (n % 7)) break;
+                    d = d.AddDays(1);
+                }
+                DateTime r = d.AddHours(when.Hour).AddMinutes(when.Minute);
+                if (r <= now) r = r.AddDays(7);
+                return r;
+            }
+            if (rep[0] == 'M')
+            {
+                int day = 1;
+                try { day = int.Parse(rep.Substring(1)); } catch { day = 1; }
+                DateTime d = new DateTime(when.Year, when.Month, 1);
+                int dim = DateTime.DaysInMonth(d.Year, d.Month);
+                d = new DateTime(d.Year, d.Month, day > dim ? dim : day, when.Hour, when.Minute, 0);
+                while (d <= now)
+                {
+                    d = d.AddMonths(1);
+                    dim = DateTime.DaysInMonth(d.Year, d.Month);
+                    if (day > dim) d = new DateTime(d.Year, d.Month, dim, when.Hour, when.Minute, 0);
+                }
+                return d;
+            }
+        }
+        catch { }
+        return when;
+    }
+
+    // 人话里的重复说法
+    static string RepText(string rep)
+    {
+        if (rep == null || rep.Length == 0) return "";
+        if (rep[0] == 'D') return "每天";
+        if (rep[0] == 'W')
+        {
+            string[] wd = { "", "周一", "周二", "周三", "周四", "周五", "周六", "周日" };
+            int n = 1; try { n = int.Parse(rep.Substring(1)); } catch { n = 1; }
+            return "每" + wd[n < 1 || n > 7 ? 1 : n];
+        }
+        if (rep[0] == 'M') return "每月" + rep.Substring(1) + "号";
+        return "";
+    }
+
     public static string NoteApi(string query)
     {
         Dictionary<string, string> q = ParseQuery(query);
@@ -964,7 +1096,7 @@ public class DesktopPet : Form
                 if (f.Length >= 5 && f[0] == id)
                 {
                     hit = true;
-                    if (op == "done") keep.Add(f[0] + "\t" + f[1] + "\t1\t" + f[3] + "\t" + f[4]);
+                    if (op == "done") keep.Add(f[0] + "\t" + f[1] + "\t1\t" + f[3] + "\t" + f[4] + (f.Length >= 6 ? "\t" + f[5] : ""));
                     continue;
                 }
                 if (lines[i].Trim().Length > 0) keep.Add(lines[i]);
@@ -981,6 +1113,7 @@ public class DesktopPet : Form
             string trig = "记一下|记一条|记下|帮我记|帮我记一下|提醒我|待办|记住";
             string snip = rest;
             try { snip = Regex.Replace(rest, "^(" + trig + ")[,，:：\\s]*", ""); } catch { }
+            string rep = StripRepeat(ref snip);
             DateTime when;
             string what;
             if (q.ContainsKey("when") && q["when"].Length > 0)
@@ -991,6 +1124,7 @@ public class DesktopPet : Form
             }
             else when = ParseWhen(snip, out what);
             if (what.Length == 0) what = snip.Trim();
+            if (rep.Length > 0) when = AlignToRepeat(when, rep);   // 先按重复规则把日期对齐到下一次
             int maxId = 0;
             for (int i = 0; i < lines.Length; i++)
             {
@@ -1000,12 +1134,13 @@ public class DesktopPet : Form
                 if (id2 > maxId) maxId = id2;
             }
             string newLine = (maxId + 1) + "\t" + when.ToString("yyyy-MM-dd HH:mm") + "\t0\t0\t" + what.Replace("\t", " ").Replace("\n", " ");
+            if (rep.Length > 0) newLine += "\t" + rep;
             List<string> all = new List<string>();
             for (int i = 0; i < lines.Length; i++) if (lines[i].Trim().Length > 0) all.Add(lines[i]);
             all.Add(newLine);
             try { File.WriteAllLines(NoteFile(), all.ToArray(), new UTF8Encoding(false)); } catch (Exception ex) { return "ERR|" + ex.Message; }
             // 登记成功先在屏幕上回应一句，不吵
-            try { DesktopPet me = Self; if (me != null) me.BeginInvoke(new MethodInvoker(delegate() { me.Say("记下了，" + when.ToString("M月d日H点m分") + "，" + what); })); } catch { }
+            try { DesktopPet me = Self; if (me != null) me.BeginInvoke(new MethodInvoker(delegate() { me.Say("记下了，" + (rep.Length > 0 ? RepText(rep) + "，从" : "") + when.ToString("M月d日H点m分") + "，" + what); })); } catch { }
             return "OK|" + (maxId + 1) + "|" + when.ToString("yyyy-MM-dd HH:mm") + "|" + what;
         }
         if (op == "today" || op == "read")
@@ -1024,9 +1159,10 @@ public class DesktopPet : Form
                 try { dt = DateTime.ParseExact(f[1], "yyyy-MM-dd HH:mm", null); } catch { }
                 if (dt == DateTime.MinValue) { td.Add(f[4]); continue; }
                 string hm = dt.Hour + "点" + (dt.Minute == 0 ? "" : dt.Minute + "分");
-                if (dt.Date < today) od.Add("逾期：" + f[4]);
-                else if (dt.Date == today) td.Add(hm + " " + f[4]);
-                else if (dt.Date == today.AddDays(1)) tm.Add(hm + " " + f[4]);
+                string mark = f.Length >= 6 && f[5].Trim().Length > 0 ? "（" + RepText(f[5].Trim()) + "）" : "";
+                if (dt.Date < today) od.Add("逾期：" + f[4] + mark);
+                else if (dt.Date == today) td.Add(hm + " " + f[4] + mark);
+                else if (dt.Date == today.AddDays(1)) tm.Add(hm + " " + f[4] + mark);
             }
             if (od.Count + td.Count + tm.Count == 0) return "OK|记事本上现在没有待办的事。";
             StringBuilder sb = new StringBuilder("OK|");
@@ -1177,9 +1313,16 @@ public class DesktopPet : Form
             try { dt = DateTime.ParseExact(f[1], "yyyy-MM-dd HH:mm", null); } catch { }
             if (dt == DateTime.MinValue) { outp.Add(ln); continue; }
             if (f[2] == "1") { outp.Add(ln); continue; }
-            if (dt <= now) { f[2] = "1"; changed = true; due.Add(f[4]); }
+            string rep = f.Length >= 6 ? f[5].Trim() : "";
+            if (dt <= now)
+            {
+                changed = true;
+                due.Add(f[4]);
+                if (rep.Length > 0) { f[1] = NextWhen(dt, rep).ToString("yyyy-MM-dd HH:mm"); f[3] = "0"; }
+                else f[2] = "1";
+            }
             else if (f[3] == "0" && (dt - now).TotalMinutes <= 10) { f[3] = "1"; changed = true; soon.Add(f[4]); }
-            outp.Add(f[0] + "\t" + f[1] + "\t" + f[2] + "\t" + f[3] + "\t" + f[4]);
+            outp.Add(f[0] + "\t" + f[1] + "\t" + f[2] + "\t" + f[3] + "\t" + f[4] + (rep.Length > 0 ? "\t" + rep : ""));
         }
         if (changed) { try { File.WriteAllLines(NoteFile(), outp.ToArray(), new UTF8Encoding(false)); } catch { } }
         for (int i = 0; i < soon.Count; i++) Push("提醒你，十分钟后要" + soon[i]);
@@ -8795,7 +8938,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 102;
+    public const int APP_VER = 104;
 
     public static void Start()
     {

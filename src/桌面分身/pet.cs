@@ -109,6 +109,7 @@ public class DesktopPet : Form
     System.Windows.Forms.Timer memTimer;
     System.Windows.Forms.Timer briefTimer;
     System.Windows.Forms.Timer learnTimer;
+    System.Windows.Forms.Timer noteTimer;
     bool mouseDown = false;
     bool movedFlag = false;
     Point dragStart;
@@ -838,9 +839,257 @@ public class DesktopPet : Form
         catch { }
     }
 
-    // 外面叫它随口说一句闲话
-    public static void PushChat()
+    // ===== 记事本：主人说一声就登记，到点自己开口提醒 =====
+    // 文件格式：每行 id \t 时间(yyyy-MM-dd HH:mm) \t 完成(0/1) \t 已预告(0/1) \t 内容
+    static string NoteFile() { try { return Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "记事本.txt"); } catch { return "记事本.txt"; } }
+
+    static string[] NoteLines()
     {
+        try
+        {
+            string p = NoteFile();
+            if (!File.Exists(p)) return new string[0];
+            return File.ReadAllLines(p, Encoding.UTF8);
+        }
+        catch { return new string[0]; }
+    }
+
+    static Dictionary<string, string> ParseQuery(string query)
+    {
+        Dictionary<string, string> q = new Dictionary<string, string>();
+        if (query == null || query.Length == 0) return q;
+        string[] kv = query.Split('&');
+        for (int i = 0; i < kv.Length; i++)
+        {
+            if (kv[i].Length == 0) continue;
+            string k = kv[i], v = "";
+            int eq = k.IndexOf('=');
+            if (eq >= 0) { v = k.Substring(eq + 1); k = k.Substring(0, eq); }
+            try { q[k] = Uri.UnescapeDataString(v.Replace('+', ' ')); } catch { q[k] = v; }
+        }
+        return q;
+    }
+
+    static int CnNum(string s)
+    {
+        if (s == null || s.Length == 0) return -1;
+        Dictionary<string, int> m = new Dictionary<string, int>();
+        m["零"] = 0; m["一"] = 1; m["二"] = 2; m["两"] = 2; m["三"] = 3; m["四"] = 4;
+        m["五"] = 5; m["六"] = 6; m["七"] = 7; m["八"] = 8; m["九"] = 9; m["十"] = 10;
+        m["十一"] = 11; m["十二"] = 12; m["十三"] = 13; m["十四"] = 14; m["十五"] = 15;
+        m["十六"] = 16; m["十七"] = 17; m["十八"] = 18; m["十九"] = 19; m["二十"] = 20;
+        m["二十一"] = 21; m["二十二"] = 22; m["二十三"] = 23; m["半"] = 30;
+        if (m.ContainsKey(s)) return m[s];
+        try { return int.Parse(s); } catch { return -1; }
+    }
+
+    // 从一句话里读出时间：「明天九点」「下午三点半」「11月22号早上7:30」「2026-11-22 09:00」
+    static DateTime ParseWhen(string raw, out string rest)
+    {
+        rest = raw == null ? "" : raw.Trim();
+        DateTime now = DateTime.Now;
+        DateTime day = now.Date;
+        bool hasDay = false;
+        string s = rest;
+        try
+        {
+            Match m1 = Regex.Match(s, @"(\d{4})-(\d{1,2})-(\d{1,2})\s*(\d{1,2})[:：](\d{1,2})?");
+            if (m1.Success)
+            {
+                int y = int.Parse(m1.Groups[1].Value), mo = int.Parse(m1.Groups[2].Value), da = int.Parse(m1.Groups[3].Value);
+                int hh = int.Parse(m1.Groups[4].Value), mi = m1.Groups[5].Success ? int.Parse(m1.Groups[5].Value) : 0;
+                rest = (s.Substring(0, m1.Index) + " " + s.Substring(m1.Index + m1.Length)).Trim();
+                return new DateTime(y, mo, da, hh, mi, 0);
+            }
+            if (s.IndexOf("大后天") >= 0) { day = day.AddDays(3); hasDay = true; s = s.Replace("大后天", " "); }
+            else if (s.IndexOf("后天") >= 0) { day = day.AddDays(2); hasDay = true; s = s.Replace("后天", " "); }
+            else if (s.IndexOf("明天") >= 0) { day = day.AddDays(1); hasDay = true; s = s.Replace("明天", " "); }
+            else if (s.IndexOf("今天") >= 0) { hasDay = true; s = s.Replace("今天", " "); }
+            Match m2 = Regex.Match(s, @"(\d{1,2})月(\d{1,2})[日号]");
+            if (m2.Success)
+            {
+                int mo = int.Parse(m2.Groups[1].Value), da = int.Parse(m2.Groups[2].Value);
+                int y = now.Year;
+                DateTime cand = new DateTime(y, mo, da);
+                if (cand.Date < now.Date) cand = cand.AddYears(1);
+                day = cand.Date; hasDay = true;
+                s = s.Substring(0, m2.Index) + " " + s.Substring(m2.Index + m2.Length);
+            }
+            string[] cnNums = { "十一", "十二", "十", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十" };
+            Match m3 = Regex.Match(s, @"(凌晨|早上|上午|中午|下午|傍晚|晚上|晚间)?\s*(\d{1,2}|[零一二三四五六七八九十]{1,3})\s*(?:点|时|[:：])\s*(半|\d{1,2}|[零一二三四五六七八九十]{1,3})?");
+            if (!m3.Success)
+            {
+                // 没有时间就默认一小时后
+                rest = rest.Trim();
+                return now.AddHours(1);
+            }
+            string part = m3.Groups[1].Value;
+            int hh2 = CnNum(m3.Groups[2].Value);
+            int mi2 = 0;
+            string mm = m3.Groups[3].Value;
+            if (mm == "半") mi2 = 30;
+            else if (mm.Length > 0) { int t2 = CnNum(mm.Replace("分", "")); if (t2 > 0) mi2 = t2; }
+            if (hh2 < 0) hh2 = 9;
+            if ((part == "下午" || part == "傍晚" || part == "晚上" || part == "晚间") && hh2 < 12) hh2 += 12;
+            if (part == "中午" && hh2 < 12) hh2 = 12;
+            if (hh2 > 23) hh2 = 23;
+            DateTime when = day.AddHours(hh2).AddMinutes(mi2);
+            if (!hasDay && when <= now) when = when.AddDays(1);
+            rest = (s.Substring(0, m3.Index) + " " + s.Substring(m3.Index + m3.Length)).Trim();
+            return when;
+        }
+        catch { return now.AddHours(1); }
+    }
+
+    public static string NoteApi(string query)
+    {
+        Dictionary<string, string> q = ParseQuery(query);
+        string op = q.ContainsKey("op") ? q["op"] : "list";
+        string[] lines = NoteLines();
+        if (op == "list")
+        {
+            StringBuilder sb = new StringBuilder("OK\n");
+            for (int i = 0; i < lines.Length; i++) { if (lines[i].Trim().Length > 0) sb.AppendLine(lines[i]); }
+            return sb.ToString().TrimEnd();
+        }
+        if (op == "done" || op == "del")
+        {
+            string id = q.ContainsKey("id") ? q["id"] : "";
+            if (id.Length == 0) return "ERR|没有 id";
+            List<string> keep = new List<string>();
+            bool hit = false;
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string[] f = lines[i].Split('\t');
+                if (f.Length >= 5 && f[0] == id)
+                {
+                    hit = true;
+                    if (op == "done") keep.Add(f[0] + "\t" + f[1] + "\t1\t" + f[3] + "\t" + f[4]);
+                    continue;
+                }
+                if (lines[i].Trim().Length > 0) keep.Add(lines[i]);
+            }
+            if (!hit) return "ERR|没有这条";
+            try { File.WriteAllLines(NoteFile(), keep.ToArray(), new UTF8Encoding(false)); } catch (Exception ex) { return "ERR|" + ex.Message; }
+            return "OK";
+        }
+        if (op == "add")
+        {
+            string text = q.ContainsKey("text") ? q["text"].Trim() : "";
+            if (text.Length == 0) return "ERR|没有内容";
+            string rest = text;
+            string trig = "记一下|记一条|记下|帮我记|帮我记一下|提醒我|待办|记住";
+            string snip = rest;
+            try { snip = Regex.Replace(rest, "^(" + trig + ")[,，:：\\s]*", ""); } catch { }
+            DateTime when;
+            string what;
+            if (q.ContainsKey("when") && q["when"].Length > 0)
+            {
+                DateTime.TryParse(q["when"], out when);
+                what = snip.Trim();
+                if (when == DateTime.MinValue) when = ParseWhen(snip, out what);
+            }
+            else when = ParseWhen(snip, out what);
+            if (what.Length == 0) what = snip.Trim();
+            int maxId = 0;
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string[] f = lines[i].Split('\t');
+                int id2 = 0;
+                if (f.Length >= 1) int.TryParse(f[0], out id2);
+                if (id2 > maxId) maxId = id2;
+            }
+            string newLine = (maxId + 1) + "\t" + when.ToString("yyyy-MM-dd HH:mm") + "\t0\t0\t" + what.Replace("\t", " ").Replace("\n", " ");
+            List<string> all = new List<string>();
+            for (int i = 0; i < lines.Length; i++) if (lines[i].Trim().Length > 0) all.Add(lines[i]);
+            all.Add(newLine);
+            try { File.WriteAllLines(NoteFile(), all.ToArray(), new UTF8Encoding(false)); } catch (Exception ex) { return "ERR|" + ex.Message; }
+            // 登记成功先在屏幕上回应一句，不吵
+            try { DesktopPet me = Self; if (me != null) me.BeginInvoke(new MethodInvoker(delegate() { me.Say("记下了，" + when.ToString("M月d日H点m分") + "，" + what); })); } catch { }
+            return "OK|" + (maxId + 1) + "|" + when.ToString("yyyy-MM-dd HH:mm") + "|" + what;
+        }
+        if (op == "mailtest")
+        {
+            bool ok = TryMail("道的提醒测试", "这条是测试邮件，收到说明绑定好了。" + DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
+            return ok ? "MAILOK" : "MAILFAIL|通知.ini 没配好或发信被拒";
+        }
+        return "ERR|不懂这个 op";
+    }
+
+    // 到点提醒：提前十分钟预告一次，到点说一遍并标记完成
+    void CheckNotes()
+    {
+        string[] lines = NoteLines();
+        if (lines.Length == 0) return;
+        DateTime now = DateTime.Now;
+        List<string> outp = new List<string>();
+        List<string> soon = new List<string>();
+        List<string> due = new List<string>();
+        bool changed = false;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string ln = lines[i];
+            if (ln.Trim().Length == 0) continue;
+            string[] f = ln.Split('\t');
+            if (f.Length < 5) { outp.Add(ln); continue; }
+            DateTime dt = DateTime.MinValue;
+            try { dt = DateTime.ParseExact(f[1], "yyyy-MM-dd HH:mm", null); } catch { }
+            if (dt == DateTime.MinValue) { outp.Add(ln); continue; }
+            if (f[2] == "1") { outp.Add(ln); continue; }
+            if (dt <= now) { f[2] = "1"; changed = true; due.Add(f[4]); }
+            else if (f[3] == "0" && (dt - now).TotalMinutes <= 10) { f[3] = "1"; changed = true; soon.Add(f[4]); }
+            outp.Add(f[0] + "\t" + f[1] + "\t" + f[2] + "\t" + f[3] + "\t" + f[4]);
+        }
+        if (changed) { try { File.WriteAllLines(NoteFile(), outp.ToArray(), new UTF8Encoding(false)); } catch { } }
+        for (int i = 0; i < soon.Count; i++) Push("提醒你，十分钟后要" + soon[i]);
+        for (int i = 0; i < due.Count; i++)
+        {
+            Push("到点了，" + due[i]);
+            TryMail("道的提醒：" + due[i], "到点了：" + due[i] + "\n时间：" + DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
+        }
+    }
+
+    // 邮件通道：在 通知.ini 里填好才能发（host/port/user/pass/to/ssl）
+    static bool TryMail(string subject, string body)
+    {
+        try
+        {
+            string p = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "通知.ini");
+            if (!File.Exists(p)) return false;
+            Dictionary<string, string> c = new Dictionary<string, string>();
+            string[] ls = File.ReadAllLines(p, Encoding.UTF8);
+            for (int i = 0; i < ls.Length; i++)
+            {
+                int eq = ls[i].IndexOf('=');
+                if (eq <= 0) continue;
+                string k = ls[i].Substring(0, eq).Trim().ToLower();
+                string v = ls[i].Substring(eq + 1).Trim();
+                c[k] = v;
+            }
+            string host = c.ContainsKey("host") ? c["host"] : "";
+            string to = c.ContainsKey("to") ? c["to"] : "";
+            string user = c.ContainsKey("user") ? c["user"] : "";
+            string pass = c.ContainsKey("pass") ? c["pass"] : "";
+            int port = 465;
+            if (c.ContainsKey("port")) int.TryParse(c["port"], out port);
+            if (host.Length == 0 || to.Length == 0) return false;
+            System.Net.Mail.MailMessage m = new System.Net.Mail.MailMessage();
+            m.From = new System.Net.Mail.MailAddress(user.Length > 0 ? user : to, "道");
+            m.To.Add(to);
+            m.Subject = subject;
+            m.Body = body;
+            System.Net.Mail.SmtpClient sc = new System.Net.Mail.SmtpClient(host, port);
+            sc.EnableSsl = !(c.ContainsKey("ssl") && c["ssl"] == "0");
+            sc.Timeout = 15000;
+            if (user.Length > 0) sc.Credentials = new NetworkCredential(user, pass);
+            sc.Send(m);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    // 外面叫它随口说一句闲话
+    public static void PushChat()    {
         try
         {
             DesktopPet me = Self;
@@ -1787,6 +2036,16 @@ public class DesktopPet : Form
                 CheckUpdate(false);
             };
             ut.Start();
+        }
+        catch { }
+
+        // 记事本：每 20 秒看一次有没有到点的登记，到点就说话、顺手发邮件
+        try
+        {
+            noteTimer = new System.Windows.Forms.Timer();
+            noteTimer.Interval = 20000;
+            noteTimer.Tick += delegate(object nt, EventArgs ne) { CheckNotes(); };
+            noteTimer.Start();
         }
         catch { }
 
@@ -8342,7 +8601,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 95;
+    public const int APP_VER = 96;
 
     public static void Start()
     {
@@ -8777,6 +9036,12 @@ static class SyncServer
                 {
                     // 跨网记忆同步的调试入口：Pull 一次再 Push 一次，把结果摊在文本里
                     SendText(ns, DesktopPet.SyncNetText());
+                }
+                else if (path.StartsWith("/note"))
+                {
+                    int qi = path.IndexOf('?');
+                    string qs = qi >= 0 ? path.Substring(qi + 1) : "";
+                    SendText(ns, DesktopPet.NoteApi(qs));
                 }
                 else if (path.StartsWith("/selfcheck"))
                 {

@@ -1437,7 +1437,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='95';
+  var HTML_VER='96';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1700,11 +1700,27 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
   // v0.91：输入框删了之后「讲题」没了入口，这里按话里的意思分流：
   //         说「这题怎么做 / 讲一下 / 帮我解」就走进讲题，其余照旧走聊天
   var EXPLAIN_RE = /(这|那)[道个]?题|解题|怎么解|怎么算|讲讲|讲一下|帮我讲|解释一下|说下思路/;
+  // v0.96：记事本入口。说「记一下…」「提醒我…」就登记到电脑上的 记事本.txt，到点它会自己开口
+  var NOTE_RE = /^(记一下|记一条|记下|帮我记|提醒我|待办|记住)/;
+
+  function noteAdd(text) {
+    var url = 'http://' + pcIp + ':8848/note?op=add&text=' + encodeURIComponent(text);
+    fetch(url).then(function (r) { return r.text(); }).then(function (s) {
+      if (s.indexOf('OK|') === 0) {
+        var f = s.split('|');
+        tip('记下了：' + f[2] + ' ' + f[3]);
+        try { if (window.DaoNative && DaoNative.speak) DaoNative.speak('记下了，' + f[2] + '，' + f[3]); } catch (e) {}
+      } else {
+        tip('没记上：' + s);
+      }
+    }).catch(function () { tip('电脑没连上，等它回话再说一次'); });
+  }
 
   window.__daoVoice = function (id, text) {
     if (!text) return;
     if (/没听清|权限|没有语音识别|启动失败/.test(text)) { tip(text); return; }
     tip('你说：' + text);
+    if (NOTE_RE.test(text)) { noteAdd(text); return; }
     if (EXPLAIN_RE.test(text) && window.daoExplain) { window.daoExplain(text); return; }
     chatAsk(text);
   };

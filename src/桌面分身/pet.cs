@@ -1008,6 +1008,33 @@ public class DesktopPet : Form
             try { DesktopPet me = Self; if (me != null) me.BeginInvoke(new MethodInvoker(delegate() { me.Say("记下了，" + when.ToString("M月d日H点m分") + "，" + what); })); } catch { }
             return "OK|" + (maxId + 1) + "|" + when.ToString("yyyy-MM-dd HH:mm") + "|" + what;
         }
+        if (op == "today" || op == "read")
+        {
+            // 念一遍待办：逾期的、今天的、明天的分开说
+            DateTime now = DateTime.Now;
+            DateTime today = now.Date;
+            List<string> od = new List<string>();
+            List<string> td = new List<string>();
+            List<string> tm = new List<string>();
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string[] f = lines[i].Split('\t');
+                if (f.Length < 5 || f[2] == "1") continue;
+                DateTime dt = DateTime.MinValue;
+                try { dt = DateTime.ParseExact(f[1], "yyyy-MM-dd HH:mm", null); } catch { }
+                if (dt == DateTime.MinValue) { td.Add(f[4]); continue; }
+                string hm = dt.Hour + "点" + (dt.Minute == 0 ? "" : dt.Minute + "分");
+                if (dt.Date < today) od.Add("逾期：" + f[4]);
+                else if (dt.Date == today) td.Add(hm + " " + f[4]);
+                else if (dt.Date == today.AddDays(1)) tm.Add(hm + " " + f[4]);
+            }
+            if (od.Count + td.Count + tm.Count == 0) return "OK|记事本上现在没有待办的事。";
+            StringBuilder sb = new StringBuilder("OK|");
+            if (od.Count > 0) { sb.Append("有" + od.Count + "件逾期了："); for (int i = 0; i < od.Count; i++) sb.Append(od[i] + (i == od.Count - 1 ? "。" : "；")); }
+            if (td.Count > 0) { sb.Append("今天有" + td.Count + "件："); for (int i = 0; i < td.Count; i++) sb.Append(td[i] + (i == td.Count - 1 ? "。" : "；")); }
+            if (tm.Count > 0) { sb.Append("明天有" + tm.Count + "件："); for (int i = 0; i < tm.Count; i++) sb.Append(tm[i] + (i == tm.Count - 1 ? "。" : "；")); }
+            return sb.ToString();
+        }
         if (op == "mailtest")
         {
             bool ok = TryMail("道的提醒测试", "这条是测试邮件，收到说明绑定好了。" + DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
@@ -8601,7 +8628,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 96;
+    public const int APP_VER = 97;
 
     public static void Start()
     {

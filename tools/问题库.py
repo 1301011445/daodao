@@ -171,13 +171,16 @@ def register(title, 来源='', 严重度='P2', 说明='', key=''):
             '说明': '已在册，重复登记 %d 次' % hit['重复登记次数']}
 
 
-def close(pid, note=''):
+def close(pid, note='', 复现=''):
+    """关一个问题。复现=怎么复现出来的（命令/步骤/输入），
+    空着也允许关，但 纠错体检.py 会把它算成「没有复现用例」——2026-11-21 起要求填。"""
     d = load()
     for i in d['问题']:
         if i.get('id') == pid:
             i['状态'] = 'solved'
             i['解决时间'] = _now()
             i['解决说明'] = note
+            i['复现'] = 复现
             save(d)
             return True
     return False

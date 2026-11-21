@@ -42,7 +42,7 @@
     padding: 10px 14px calc(13px + env(safe-area-inset-bottom, 0px));
     display: flex; flex-direction: column; gap: 9px; width: 100%;
   }
-  #bar .minis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; width: 100%; }
+  #bar .minis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; width: 100%; }
   button {
     display: inline-block; margin: 0; border-radius: 999px;
     background: rgba(118,158,255,.15); color: #cfdcff; font-size: 15px;
@@ -153,7 +153,7 @@
     color: #e6edff; font-size: 15px;
   }
   #noteHd b { font-weight: 600; letter-spacing: .6px; }
-  #noteHd button { background: none; border: 0; color: #9fb0d0; font-size: 20px; padding: 0 4px; line-height: 1; }
+  #noteHd button { background: none; border: 0; color: #9fb0d0; font-size: 20px; padding: 0; line-height: 1; min-width: 44px; min-height: 44px; border-radius: 12px; }
   #noteList { flex: 1; overflow: auto; padding: 4px 12px 8px; }
   #noteList .empty { color: #8b9ab8; font-size: 13px; text-align: center; padding: 30px 0 36px; }
   #noteList .grp { color: #8fa4c8; font-size: 12px; letter-spacing: 1px; margin: 12px 4px 2px; }
@@ -166,9 +166,9 @@
   #noteList .tm { min-width: 62px; font-size: 12.5px; color: #9fb2d6; line-height: 1.35; }
   #noteList .tx { flex: 1; font-size: 14px; color: #e8eeff; line-height: 1.45; word-break: break-all; }
   #noteList .tx small { display: block; margin-top: 3px; font-size: 11.5px; color: #7f90ad; }
-  #noteList .op { display: flex; gap: 6px; }
+  #noteList .op { display: flex; gap: 10px; }
   #noteList .op button {
-    width: 36px; height: 34px; border-radius: 10px; font-size: 15px; line-height: 1;
+    width: 44px; height: 40px; border-radius: 12px; font-size: 16px; line-height: 1;
     border: 1px solid rgba(130,170,255,.30); background: rgba(118,158,255,.16); color: #dbe6ff;
   }
   #noteList .op .ok { color: #a8e0b8; border-color: rgba(120,220,150,.34); background: rgba(90,200,130,.14); }
@@ -1470,7 +1470,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='106';
+  var HTML_VER='107';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;

@@ -194,7 +194,7 @@ def build():
         t += bars * 4 * BEAT
     return notes, mel_meta, secs
 
-def verify(notes, mel):
+def verify(notes, mel, secs=None):
     ok = True
     print('══ 词曲协同 ══')
     for i, m in enumerate(mel):
@@ -207,7 +207,28 @@ def verify(notes, mel):
         w1, w5 = beats[0], beats[4]
         ok_word = (abs(w1 % 4) < 1e-9 or abs(w1 % 2) < 1e-9) and abs(w5 % 2) < 1e-9
         end = (ph[-1]['t'] - m['t']) / float(BEAT) + ph[-1]['dur'] / float(BEAT)
-        at_junction = (i == 3 or i == 11 or i == 19)     # 段末句，下一段是副歌
+        # 2026-11-21：段末句不再按句序号硬编码 i==3/11/19，改成从段结构推：
+        # 「这一句是所在段的最后一句」且「后面第一个歌词段是副歌」。
+        # 段落增减、中间插间奏、句子挪位都不会错判。
+        at_junction = False
+        if secs:
+            si = -1
+            for sj, s in enumerate(secs):
+                if s['t0'] <= m['t'] < s['t1']:
+                    si = sj
+                    break
+            if si >= 0:
+                is_last = True
+                for i3, m3 in enumerate(mel):
+                    if i3 > i and secs[si]['t0'] <= m3['t'] < secs[si]['t1']:
+                        is_last = False
+                        break
+                nxt = ''
+                for s in secs[si + 1:]:
+                    if s['kind'] == 'lyric':
+                        nxt = s['tag']
+                        break
+                at_junction = is_last and nxt[:1] == 'C'
         need = 1.0 if at_junction else 1.5
         ok_end = ph[-1]['dur'] / float(BEAT) >= need and (
             abs(end % 2) < 1e-6 if not at_junction else (abs(end - 7) < 1e-6))
@@ -227,7 +248,7 @@ def main():
     out = os.path.join(HERE, 'out')
     os.makedirs(out, exist_ok=True)
     notes, mel, secs = build()
-    assert verify(notes, mel), '词曲协同不过，不许出片'
+    assert verify(notes, mel, secs), '词曲协同不过，不许出片'
     wav = os.path.join(out, '把好日子扛在肩上.wav')
     mid = os.path.join(out, '把好日子扛在肩上.mid')
     arr.TEMPO = TEMPO          # 渲染模块用自己的全局 TEMPO(84)，必须覆盖成 112

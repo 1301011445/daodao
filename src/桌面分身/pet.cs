@@ -2345,14 +2345,30 @@ public class DesktopPet : Form
         return "+2%";
     }
 
+    // v0.107：句末语调。问句/反问结尾要抬，感叹结尾稍抬，陈述句不动。
+    // 原来所有句子一个调门，问人"吃了吗"跟陈述"我在这儿"一个音，听着像播报。
     string CurPitch()
     {
-        if (moodKind == 4) return "+10Hz";
-        if (moodKind == 2) return "+6Hz";
-        if (moodKind == 3) return "-8Hz";
-        if (moodKind == 6) return "-5Hz";
-        if (moodKind == 5) return "+3Hz";
-        return "+0Hz";
+        return CurPitch("");
+    }
+
+    string CurPitch(string text)
+    {
+        int hz = 0;
+        if (moodKind == 4) hz = 10;
+        else if (moodKind == 2) hz = 6;
+        else if (moodKind == 3) hz = -8;
+        else if (moodKind == 6) hz = -5;
+        else if (moodKind == 5) hz = 3;
+        string t = (text == null) ? "" : text.Trim();
+        if (t.Length > 0)
+        {
+            char last = t[t.Length - 1];
+            if (last == '？' || last == '?' || last == '吗' || last == '呢' || last == '吧') hz += 3;
+            else if (last == '！' || last == '!') hz += 2;
+        }
+        if (hz == 0) return "+0Hz";
+        return (hz > 0 ? "+" : "") + hz + "Hz";
     }
 
     // 在现有语速档位上加减几个百分点；格式不是 +N% 就原样返回，别把参数弄坏
@@ -3674,7 +3690,7 @@ public class DesktopPet : Form
             // 也把「第一个字出来」的时间往后拖；-1 保留一点松弛感但出口更快
             if (zc <= 10) rate = NudgeRate(rate, -1);
             else if (zc >= 26) rate = NudgeRate(rate, 4);
-            string pitch = CurPitch();
+            string pitch = CurPitch(t2);
             string seed = t2 + "|" + voice + "|" + (hasFx ? fx : "") + "|" + rate + "|" + pitch;
             string key = Math.Abs(seed.GetHashCode()).ToString();
             string mp3 = Path.Combine(dir, key + (hasFx ? ".wav" : ".mp3"));
@@ -6628,7 +6644,8 @@ public class DesktopPet : Form
         {
             if (moodKind == 1) exprKind = 1;
             else if (moodKind == 2) exprKind = 1;   // 2 是「高兴」，以前错配到生气脸，一高兴反而皱眉
-            else if (moodKind == 3) exprKind = 3;
+            else if (moodKind == 3) exprKind = 0;   // v0.107：难过不再切整图（sad 整图跟立绘差太多，像换了张脸），
+                                                    // 改成只走语速 -14% 和低头动作，脸还是同一张
             else if (moodKind == 4) exprKind = 1;   // 4 是「兴奋」，配开心脸才和 +16% 的语速对得上
             else if (moodKind == 6) exprKind = 4;
         }
@@ -6838,7 +6855,10 @@ public class DesktopPet : Form
             if (stepping && fy > 0.38f && fy < 0.63f)
             {
                 float w2 = (float)Math.Sin(Math.PI * (fy - 0.38f) / 0.25f);
-                if (w2 > 0f) off -= 2.4f * w2 * (float)Math.Sin(ph * 0.9f - 0.4f);
+                // v0.107：原来这段是 2.4*Sin(ph*0.9-0.4)，跟腿不同频（0.9 倍）、还带固定相位，
+                // 走快了手臂就在"甩"，像钟摆不跟步子。改成 armAmp 驱动 + armPh（腿的反相），
+                // 幅度也跟跑/走/站三档走同一套参数。
+                off -= (armAmp * 0.34f) * w2 * (float)Math.Sin(armPh);
             }
             // 招手：只晃上半身
             if (waving && fy < 0.68f)
@@ -9198,7 +9218,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 106;
+    public const int APP_VER = 107;
 
     public static void Start()
     {

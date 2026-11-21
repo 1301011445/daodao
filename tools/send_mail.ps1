@@ -12,6 +12,7 @@ param(
     [string]$To = '1301011445@qq.com',
     [string]$Subject = '',
     [string]$Body = '',
+    [string]$BodyFile = '',
     [switch]$Quiet
 )
 
@@ -44,6 +45,9 @@ if ($lines.Count -ge 3 -and -not [string]::IsNullOrWhiteSpace($lines[2])) {
     if ($parts.Count -ge 2 -and $parts[1]) { $port = [int]$parts[1] }
 }
 
+if (-not [string]::IsNullOrWhiteSpace($BodyFile) -and (Test-Path -LiteralPath $BodyFile)) {
+    $Body = [IO.File]::ReadAllText($BodyFile, [Text.Encoding]::UTF8)
+}
 if ([string]::IsNullOrWhiteSpace($Subject)) {
     $Subject = '道 · 每日情况 ' + (Get-Date -Format 'yyyy-MM-dd HH:mm')
 }

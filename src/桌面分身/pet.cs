@@ -1079,40 +1079,54 @@ public class DesktopPet : Form
     // 邮件通道：在 通知.ini 里填好才能发（host/port/user/pass/to/ssl）
     static bool TryMail(string subject, string body)
     {
+        string bodyFile = "";
         try
         {
-            string p = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "通知.ini");
-            if (!File.Exists(p)) return false;
-            Dictionary<string, string> c = new Dictionary<string, string>();
-            string[] ls = File.ReadAllLines(p, Encoding.UTF8);
-            for (int i = 0; i < ls.Length; i++)
+            string dir = Path.GetDirectoryName(Application.ExecutablePath);
+            string to = "1301011445@qq.com";
+            string cfg = Path.Combine(dir, "通知.ini");
+            if (File.Exists(cfg))
             {
-                int eq = ls[i].IndexOf('=');
-                if (eq <= 0) continue;
-                string k = ls[i].Substring(0, eq).Trim().ToLower();
-                string v = ls[i].Substring(eq + 1).Trim();
-                c[k] = v;
+                string[] ls = File.ReadAllLines(cfg, Encoding.UTF8);
+                for (int i = 0; i < ls.Length; i++)
+                {
+                    string ln = ls[i].Trim();
+                    if (ln.StartsWith("#")) continue;
+                    int eq = ln.IndexOf('=');
+                    if (eq <= 0) continue;
+                    if (ln.Substring(0, eq).Trim().ToLower() == "to")
+                    {
+                        string v = ln.Substring(eq + 1).Trim();
+                        if (v.Length > 0) to = v;
+                    }
+                }
             }
-            string host = c.ContainsKey("host") ? c["host"] : "";
-            string to = c.ContainsKey("to") ? c["to"] : "";
-            string user = c.ContainsKey("user") ? c["user"] : "";
-            string pass = c.ContainsKey("pass") ? c["pass"] : "";
-            int port = 465;
-            if (c.ContainsKey("port")) int.TryParse(c["port"], out port);
-            if (host.Length == 0 || to.Length == 0) return false;
-            System.Net.Mail.MailMessage m = new System.Net.Mail.MailMessage();
-            m.From = new System.Net.Mail.MailAddress(user.Length > 0 ? user : to, "道");
-            m.To.Add(to);
-            m.Subject = subject;
-            m.Body = body;
-            System.Net.Mail.SmtpClient sc = new System.Net.Mail.SmtpClient(host, port);
-            sc.EnableSsl = !(c.ContainsKey("ssl") && c["ssl"] == "0");
-            sc.Timeout = 15000;
-            if (user.Length > 0) sc.Credentials = new NetworkCredential(user, pass);
-            sc.Send(m);
-            return true;
+            // QQ 的 465 是隐式 SSL，.NET 的 SmtpClient 只支持 587 STARTTLS，所以借用本机现成的最小 SMTP 脚本
+            string script = Path.Combine(dir, @"tools\send_mail.ps1");
+            if (!File.Exists(script)) return false;
+            bodyFile = Path.Combine(dir, "邮件正文.txt");
+            string html = (body == null ? "" : body).Replace("\r\n", "\n").Replace("\n", "<br>");
+            File.WriteAllText(bodyFile, "<p>" + html + "</p>", new UTF8Encoding(false));
+            string win = Environment.GetEnvironmentVariable("SystemRoot");
+            string ps = Path.Combine(win, @"System32\WindowsPowerShell\v1.0\powershell.exe");
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.FileName = ps;
+            psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" -To \"" + to + "\" -Subject \"" + subject.Replace("\"", "'") + "\" -BodyFile \"" + bodyFile + "\" -Quiet";
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            psi.WindowStyle = ProcessWindowStyle.Hidden;
+            Process pr = Process.Start(psi);
+            if (pr == null) return false;
+            pr.WaitForExit(25000);
+            bool ok = pr.HasExited && pr.ExitCode == 0;
+            try { pr.Dispose(); } catch { }
+            return ok;
         }
         catch { return false; }
+        finally
+        {
+            try { if (bodyFile.Length > 0 && File.Exists(bodyFile)) File.Delete(bodyFile); } catch { }
+        }
     }
 
     // 外面叫它随口说一句闲话
@@ -8628,7 +8642,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 97;
+    public const int APP_VER = 98;
 
     public static void Start()
     {

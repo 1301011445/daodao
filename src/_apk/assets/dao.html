@@ -1137,8 +1137,11 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
     fly: '飞一段。', sword: '踩剑上，御风走。', ride: '上来，带你跑一程。',
     tea: '喝口热的，慢慢来。', tv: '我坐会儿电视。', skate: '踩上板，溜一段。', dance: '给我来点节拍。'
   };
+  var actRot = 0;
   document.getElementById('btnAct').addEventListener('pointerdown', function () {
-    var m = ACT_NAMES[Math.floor(Math.random() * ACT_NAMES.length)];
+    // v0.92：从随机改成按顺序轮，点一次一定换一个，不会连着抽到同一个像没反应
+    actRot = (actRot + 1) % ACT_NAMES.length;
+    var m = ACT_NAMES[actRot];
     mode = m; modeLeft = 5 + Math.random() * 4;
     actKind = actOfMode(m); actAmt = 1;
     sceneIdx = sceneForAct(actKind);
@@ -1377,7 +1380,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='91';
+  var HTML_VER='92';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;

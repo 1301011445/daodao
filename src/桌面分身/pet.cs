@@ -1275,6 +1275,57 @@ public class DesktopPet : Form
             try { File.WriteAllText(cfg, content, new UTF8Encoding(false)); } catch (Exception ex) { return "ERR|" + ex.Message; }
             return "OK|" + joined;
         }
+        if (op == "doneby" || op == "delby")
+        {
+            // 说「这条做完了 / 把开会删掉」：按关键字找到那条待办，标记完成或删掉
+            string raw = q.ContainsKey("text") ? q["text"].Trim() : (q.ContainsKey("key") ? q["key"].Trim() : "");
+            if (raw.Length == 0) return "ERR|要告诉我哪一条";
+            string key = raw;
+            try
+            {
+                key = Regex.Replace(key, "把|帮我|请|这条|那条|一下|标记|已经|算|做完了|完成了|办完了|弄完了|搞定|删掉|删除|去掉|取消|别再提醒|不用提醒|了|吧|。|，", "");
+            }
+            catch { }
+            key = key.Trim();
+            int hitId = 0, hitAt = -1;
+            string hitText = "";
+            if (key.Length == 0) return "ERR|没说清楚是哪一条";
+            // 「第 2 条」这种直接按序号来
+            Match num = Regex.Match(raw, @"第\s*([0-9]{1,3}|[一二三四五六七八九十]{1,3})\s*条");
+            int wantId = num.Success ? CnNum(num.Groups[1].Value) : -1;
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string[] f = lines[i].Split('\t');
+                if (f.Length < 5) continue;
+                if (op == "doneby" && f[2] == "1") continue;   // 已完成的不用再标；删的话允许删已完成的记录
+                bool ok = false;
+                if (wantId > 0) { int fid = 0; int.TryParse(f[0], out fid); ok = fid == wantId; }
+                else ok = f[4].IndexOf(key, StringComparison.OrdinalIgnoreCase) >= 0;
+                if (!ok) continue;
+                int fid2 = 0;
+                int.TryParse(f[0], out fid2);
+                hitId = fid2;
+                hitAt = i; hitText = f[4];
+                break;
+            }
+            if (hitAt < 0) return "ERR|记事本里没找到「" + (key.Length > 0 ? key : raw) + "」这条待办";
+            List<string> keep2 = new List<string>();
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (i == hitAt)
+                {
+                    if (op == "doneby")
+                    {
+                        string[] f = lines[i].Split('\t');
+                        keep2.Add(f[0] + "\t" + f[1] + "\t1\t" + f[3] + "\t" + f[4] + (f.Length >= 6 ? "\t" + f[5] : ""));
+                    }
+                    continue;
+                }
+                if (lines[i].Trim().Length > 0) keep2.Add(lines[i]);
+            }
+            try { File.WriteAllLines(NoteFile(), keep2.ToArray(), new UTF8Encoding(false)); } catch (Exception ex) { return "ERR|" + ex.Message; }
+            return "OK|" + hitId + "|" + hitText;
+        }
         if (op == "mailtest")
         {
             bool ok = TryMail("道的提醒测试", "这条是测试邮件，收到说明绑定好了。" + DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
@@ -8938,7 +8989,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 104;
+    public const int APP_VER = 105;
 
     public static void Start()
     {

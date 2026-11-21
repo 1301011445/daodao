@@ -1442,7 +1442,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='104';
+  var HTML_VER='105';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1748,6 +1748,28 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
   var NOTE_MAIL_RE = /(提醒|通知|消息).{0,6}发到|收件邮箱|发到哪个邮箱|邮箱设成|改成.{0,12}@|也发到|加上.{0,10}@|多发.{0,10}@|清空收件|取消收件|别发邮件|不发邮件|收件人|哪个邮箱发|用什么邮箱发/;
   var MAIL_RE = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
 
+  var NOTE_DONE_RE = /(做完了|办完了|弄完了|完成了|搞定了|已经弄好|已经做完|这条好了|那件事做完了)/;
+  var NOTE_DEL_RE = /(删掉|删除|去掉这条|取消这条|别提醒|不用提醒了)/;
+
+  function noteBy(op, text) {
+    var base = 'http://' + pcIp + ':8848/note?op=' + op + '&text=' + encodeURIComponent(text);
+    fetch(base).then(function (r) { return r.text(); }).then(function (s) {
+      var msg;
+      if (s.indexOf('OK|') === 0) {
+        var f = s.split('|'), id = parseInt(f[1], 10) || 0;
+        msg = (op === 'doneby' ? '好，这条算做完了：' : '好，删掉了：') + (f[2] || '');
+        try { if (window.DaoNative && DaoNative.noteCancel && id) DaoNative.noteCancel(id); } catch (e) {}
+        noteSync();
+      } else {
+        msg = s.indexOf('ERR|') === 0 ? ('没改成：' + s.substring(4)) : ('没改成：' + s);
+      }
+      tip(msg); noteSay(msg);
+    }).catch(function () { tip('电脑没连上，等它回话再改'); });
+  }
+
+  function noteDone(text) { noteBy('doneby', text); }
+  function noteDel(text) { noteBy('delby', text); }
+
   function noteMail(text) {
     var s = String(text);
     var mails = s.match(MAIL_RE) || [];
@@ -1898,6 +1920,8 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     noteFlush();
     if (/精确闹钟|闹钟不准|提醒不准|闹钟权限/.test(text)) { noteAlarmSetting(); return; }
     if (NOTE_MAIL_RE.test(text)) { noteMail(text); return; }
+    if (NOTE_DONE_RE.test(text)) { noteDone(text); return; }
+    if (NOTE_DEL_RE.test(text)) { noteDel(text); return; }
     if (NOTE_READ_RE.test(text)) { noteRead(); return; }
     if (NOTE_RE.test(text)) { noteAdd(text); return; }
     if (EXPLAIN_RE.test(text) && window.daoExplain) { window.daoExplain(text); return; }

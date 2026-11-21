@@ -1129,7 +1129,7 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
 
   cv.addEventListener('pointerdown', function (e) { e.preventDefault(); poke(); });
 
-  // 「跟它说话」的点击行为挪到下面的语音块：轻点=语音对话，长按 0.55 秒=打字
+  // 「跟它说话」的点击行为在下面的语音块：轻点=语音对话
 
   // 换个动作：挨个挑一个带场景的，切完立刻说一句它自己在干什么
   var ACT_NAMES = ['fly', 'sword', 'ride', 'tea', 'tv', 'skate', 'dance'];
@@ -1366,7 +1366,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='89';
+  var HTML_VER='90';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1633,16 +1633,14 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     chatAsk(text);
   };
 
-  // 「跟它说话」：点一下开输入框；按住 0.45 秒改成语音输入（松手识别）
   // 「跟它说话」：轻点＝直接开口说话（语音对话，再点一下结束并识别）
-  //               长按 0.55 秒＝改用打字（键盘输入），不会再一点就弹键盘
   var streamed = false;
   var talkBtn = document.getElementById('btnTalk');
   var listening = false;
 
   function startListen() {
     if (!(window.DaoNative && (DaoNative.listenCloud || DaoNative.listen))) {
-      tip('这台设备没有语音通道，长按可以打字');
+      tip('这台设备没有语音通道，装到手机上就能跟我说');
       return;
     }
     listening = true;

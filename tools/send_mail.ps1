@@ -1,15 +1,19 @@
-﻿# send_mail.ps1 — 把一轮的体检/更新情况发到指定邮箱（smtp.qq.com 465 隐式 SSL）
-# 2026-11-16 新增（用户要求：每日情况发送到 1301011445@qq.com）
-# 为什么不用 Net.Mail.SmtpClient：它只走 587 STARTTLS，QQ 那条通道握手就被断；
-#   465 隐式 SSL 是通的，所以这里手写一个最小 SMTP 客户端。
-# 配置：F:\Daodao\.mail_config（UTF-8，三行）
-#   第 1 行：发件邮箱
-#   第 2 行：该邮箱的 SMTP 授权码（QQ 邮箱 → 设置 → 账户 → POP3/SMTP 服务 里生成）
-#   第 3 行：SMTP 服务器:端口（可省，默认 smtp.qq.com:465）
+﻿# send_mail.ps1 — 把消息发到指定邮箱（支持 QQ / 163 / 126 / Gmail / Outlook / 企业邮箱等多家通道）
+# 为什么不用 Net.Mail.SmtpClient：它只走 587 STARTTLS，QQ 那条通道握手就被断；这里手写最小 SMTP 客户端，
+#   465（隐式 SSL）和 587（STARTTLS）两种通道都支持。
+# 配置：F:\Daodao\.mail_config（UTF-8）。两种写法都认：
+#   A. key=value（推荐）
+#        user=发件邮箱
+#        pass=该邮箱的 SMTP 授权码/应用专用密码
+#        smtp=（可省，留空按发件域名自动选服务器）
+#        port=（可省，留空按通道默认 465/587）
+#        ssl=（可省，1=隐式 SSL，2=STARTTLS；留空按端口猜：465→隐式，587→STARTTLS）
+#   B. 旧的三行位置写法：第1行发件邮箱、第2行授权码、第3行 smtp服务器:端口（可省）
+# 收件人：-To 支持多个，用逗号/分号隔开，例如 "a@qq.com,b@163.com"
 # 退出码：0 已发；1 发送失败；2 还没配授权码（跳过，不算故障）
 
 param(
-    [string]$To = '1301011445@qq.com',
+    [string]$To = '',
     [string]$Subject = '',
     [string]$Body = '',
     [string]$BodyFile = '',
@@ -19,31 +23,98 @@ param(
 $ErrorActionPreference = 'Stop'
 $cfg = 'F:\Daodao\.mail_config'
 
+# 发件域名 → SMTP 服务器（ssl 模式：1=隐式 465，2=STARTTLS 587）
+$presets = @{
+    'qq.com'          = @('smtp.qq.com', 465, 1)
+    'foxmail.com'     = @('smtp.qq.com', 465, 1)
+    'exmail.qq.com'   = @('smtp.exmail.qq.com', 465, 1)
+    '163.com'         = @('smtp.163.com', 465, 1)
+    '126.com'         = @('smtp.126.com', 465, 1)
+    'yeah.net'        = @('smtp.yeah.net', 465, 1)
+    'sina.com'        = @('smtp.sina.com', 465, 1)
+    'sina.cn'         = @('smtp.sina.com', 465, 1)
+    'sohu.com'        = @('smtp.sohu.com', 465, 1)
+    '139.com'         = @('smtp.139.com', 465, 1)
+    'aliyun.com'      = @('smtp.aliyun.com', 465, 1)
+    'gmail.com'       = @('smtp.gmail.com', 465, 1)
+    'googlemail.com'  = @('smtp.gmail.com', 465, 1)
+    'outlook.com'     = @('smtp-mail.outlook.com', 587, 2)
+    'hotmail.com'     = @('smtp-mail.outlook.com', 587, 2)
+    'live.com'        = @('smtp-mail.outlook.com', 587, 2)
+    'msn.com'         = @('smtp-mail.outlook.com', 587, 2)
+    'yahoo.com'       = @('smtp.mail.yahoo.com', 465, 1)
+    'icloud.com'      = @('smtp.mail.me.com', 587, 2)
+    'me.com'          = @('smtp.mail.me.com', 587, 2)
+    'protonmail.com'  = @('smtp.protonmail.com', 587, 2)
+    'zoho.com'        = @('smtp.zoho.com', 465, 1)
+    'yandex.com'      = @('smtp.yandex.com', 465, 1)
+}
+
 if (-not (Test-Path -LiteralPath $cfg)) {
     if (-not $Quiet) { '没找到 .mail_config，邮件没发（配置好授权码后自动生效）' }
     exit 2
 }
 
-$lines = @(Get-Content -LiteralPath $cfg -Encoding UTF8)
-if ($lines.Count -lt 2) {
-    if (-not $Quiet) { '.mail_config 行数不够，邮件没发' }
-    exit 2
+$lines = @(Get-Content -LiteralPath $cfg -Encoding UTF8 | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' -and -not $_.StartsWith('#') })
+$kv = @{}
+$pos = @()
+foreach ($ln in $lines) {
+    $eq = $ln.IndexOf('=')
+    if ($eq -gt 0) {
+        $k = $ln.Substring(0, $eq).Trim().ToLower()
+        $v = $ln.Substring($eq + 1).Trim()
+        if ($v.Length -ge 2 -and $v.StartsWith('"') -and $v.EndsWith('"')) { $v = $v.Substring(1, $v.Length - 2) }
+        $kv[$k] = $v
+    } else { $pos += $ln }
 }
 
-$from = $lines[0].Trim()
-$pass = $lines[1].Trim()
+$from = $kv['user']; if (-not $from) { $from = $kv['from'] }
+$pass = $kv['pass']; if (-not $pass) { $pass = $kv['auth'] }
+if (-not $from -and $pos.Count -ge 1) { $from = $pos[0] }
+if (-not $pass -and $pos.Count -ge 2) { $pass = $pos[1] }
+
+if ([string]::IsNullOrWhiteSpace($from)) {
+    if (-not $Quiet) { '.mail_config 里没有发件邮箱，邮件没发' }
+    exit 2
+}
 if ([string]::IsNullOrWhiteSpace($pass)) {
     if (-not $Quiet) { '.mail_config 里授权码是空的，邮件没发' }
     exit 2
 }
 
-$srv = 'smtp.qq.com'
-$port = 465
-if ($lines.Count -ge 3 -and -not [string]::IsNullOrWhiteSpace($lines[2])) {
-    $parts = $lines[2].Trim().Split(':')
+$srv = $kv['smtp']; $port = 0; $mode = 0
+if ($kv['port']) { try { $port = [int]$kv['port'] } catch { $port = 0 } }
+if ($kv['ssl']) { try { $mode = [int]$kv['ssl'] } catch { $mode = 0 } }
+
+# 旧位置写法第 3 行 smtp服务器:端口
+if (-not $srv -and $pos.Count -ge 3 -and $pos[2]) {
+    $parts = $pos[2].Split(':')
     if ($parts[0]) { $srv = $parts[0] }
-    if ($parts.Count -ge 2 -and $parts[1]) { $port = [int]$parts[1] }
+    if ($parts.Count -ge 2 -and $parts[1]) { try { $port = [int]$parts[1] } catch { } }
 }
+
+$dom = ($from.Split('@')[-1]).ToLower()
+if (-not $srv) {
+    if ($presets.ContainsKey($dom)) {
+        $srv = $presets[$dom][0]
+        if (-not $port) { $port = $presets[$dom][1] }
+        if (-not $mode) { $mode = $presets[$dom][2] }
+    } else {
+        $srv = 'smtp.' + $dom   # 自建/企业邮箱多半是 smtp.<域名>
+    }
+}
+if (-not $port) { $port = 465 }
+if (-not $mode) { $mode = if ($port -eq 587) { 2 } else { 1 } }
+
+# ---- 收件人：支持多个（逗号/分号/空格/顿号分隔）----
+$To = ($To -replace '[；;、\s]+', ',')
+$toList = @($To.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+$goodTo = @($toList | Where-Object { $_ -match '^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$' })
+if ($goodTo.Count -eq 0) {
+    if (-not $Quiet) { "收件人地址不对：$To" }
+    exit 1
+}
+$To = ($goodTo -join ',')
 
 if (-not [string]::IsNullOrWhiteSpace($BodyFile) -and (Test-Path -LiteralPath $BodyFile)) {
     $Body = [IO.File]::ReadAllText($BodyFile, [Text.Encoding]::UTF8)
@@ -90,11 +161,20 @@ $ssl = $null
 try {
     $tcp = New-Object System.Net.Sockets.TcpClient
     $tcp.Connect($srv, $port)
-    $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false, { param($s, $c, $ch, $e) return $true })
-    $ssl.AuthenticateAsClient($srv)
 
-    $reader = New-Object System.IO.StreamReader($ssl, [Text.Encoding]::ASCII)
-    $writer = New-Object System.IO.StreamWriter($ssl, [Text.Encoding]::ASCII)
+    $authcb = [System.Net.Security.RemoteCertificateValidationCallback] { param($s, $c, $ch, $e) return $true }
+    if ($mode -eq 1) {
+        # 465 隐式 SSL：先握手再说话
+        $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false, $authcb)
+        $ssl.AuthenticateAsClient($srv)
+    } else {
+        # 587：先明文 EHLO，再 STARTTLS 升到加密
+        $ssl = $null
+    }
+
+    $stream = if ($ssl) { $ssl } else { $tcp.GetStream() }
+    $reader = New-Object System.IO.StreamReader($stream, [Text.Encoding]::ASCII)
+    $writer = New-Object System.IO.StreamWriter($stream, [Text.Encoding]::ASCII)
     $writer.NewLine = "`r`n"
     $writer.AutoFlush = $true
 
@@ -104,6 +184,21 @@ try {
     $writer.WriteLine('EHLO daodao.local')
     $r = Read-Reply $reader
     if ($r.Code -ne '250') { throw "EHLO 失败：$($r.Text)" }
+
+    if ($mode -eq 2) {
+        $writer.WriteLine('STARTTLS')
+        $r = Read-Reply $reader
+        if ($r.Code -ne '220') { throw "STARTTLS 被拒：$($r.Text)" }
+        $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false, $authcb)
+        $ssl.AuthenticateAsClient($srv)
+        $reader = New-Object System.IO.StreamReader($ssl, [Text.Encoding]::ASCII)
+        $writer = New-Object System.IO.StreamWriter($ssl, [Text.Encoding]::ASCII)
+        $writer.NewLine = "`r`n"
+        $writer.AutoFlush = $true
+        $writer.WriteLine('EHLO daodao.local')
+        $r = Read-Reply $reader
+        if ($r.Code -ne '250') { throw "STARTTLS 后 EHLO 失败：$($r.Text)" }
+    }
 
     $writer.WriteLine('AUTH LOGIN')
     $r = Read-Reply $reader
@@ -119,16 +214,20 @@ try {
     $r = Read-Reply $reader
     if ($r.Code -ne '250') { throw "发件人被拒：$($r.Text)" }
 
-    $writer.WriteLine("RCPT TO:<$To>")
-    $r = Read-Reply $reader
-    if ($r.Code -ne '250') { throw "收件人被拒：$($r.Text)" }
+    $rcptFail = @()
+    foreach ($one in $goodTo) {
+        $writer.WriteLine("RCPT TO:<$one>")
+        $rr = Read-Reply $reader
+        if ($rr.Code -ne '250' -and $rr.Code -ne '251') { $rcptFail += "$one（$($rr.Code)）" }
+    }
+    if ($goodTo.Count -eq $rcptFail.Count) { throw "收件人全被拒：$($rcptFail -join '、')" }
 
     $writer.WriteLine('DATA')
     $r = Read-Reply $reader
     if ($r.Code -ne '354') { throw "DATA 被拒：$($r.Text)" }
 
     $writer.WriteLine("From: =?UTF-8?B?" + $fromNameB64 + "?= <$from>")
-    $writer.WriteLine("To: <$To>")
+    $writer.WriteLine("To: $($goodTo -join ', ')")
     $writer.WriteLine("Subject: =?UTF-8?B?" + $subjB64 + "?=")
     $writer.WriteLine('MIME-Version: 1.0')
     $writer.WriteLine('Content-Type: text/html; charset="utf-8"')
@@ -143,14 +242,18 @@ try {
 
     $writer.WriteLine('QUIT')
     $writer.Flush()
-    $ssl.Dispose()
+    if ($ssl) { $ssl.Dispose() }
     $tcp.Close()
 
-    if (-not $Quiet) { "邮件已发：$To" }
+    if (-not $Quiet) {
+        $msg = "邮件已发（$srv`:$port，$($goodTo.Count) 个收件人）：$To"
+        if ($rcptFail.Count -gt 0) { $msg += "；被拒：$($rcptFail -join '、')" }
+        $msg
+    }
     exit 0
 } catch {
     if ($ssl) { try { $ssl.Dispose() } catch { } }
     if ($tcp) { try { $tcp.Close() } catch { } }
-    if (-not $Quiet) { "发信失败：$($_.Exception.Message)" }
+    if (-not $Quiet) { "发信失败（$srv`:$port）：$($_.Exception.Message)" }
     exit 1
 }

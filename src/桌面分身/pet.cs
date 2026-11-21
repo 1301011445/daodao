@@ -1035,7 +1035,7 @@ public class DesktopPet : Form
             if (tm.Count > 0) { sb.Append("明天有" + tm.Count + "件："); for (int i = 0; i < tm.Count; i++) sb.Append(tm[i] + (i == tm.Count - 1 ? "。" : "；")); }
             return sb.ToString();
         }
-        if (op == "setmail" || op == "getmail")
+        if (op == "setmail" || op == "getmail" || op == "mailinfo")
         {
             string cfg = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "通知.ini");
             string to = "";
@@ -1051,14 +1051,93 @@ public class DesktopPet : Form
                 }
             }
             if (op == "getmail") return "OK|" + (to.Length == 0 ? "还没设收件邮箱" : to);
+            if (op == "mailinfo")
+            {
+                // 只报发件账号和通道，不吐授权码
+                string user = "", srv = "", prt = "";
+                string mc = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), ".mail_config");
+                if (File.Exists(mc))
+                {
+                    string[] ml = File.ReadAllLines(mc, Encoding.UTF8);
+                    string p0 = "", p1 = "", p2 = "";
+                    for (int i = 0; i < ml.Length; i++)
+                    {
+                        string ln = ml[i].Trim();
+                        if (ln.Length == 0 || ln.StartsWith("#")) continue;
+                        int eq = ln.IndexOf('=');
+                        if (eq > 0)
+                        {
+                            string k = ln.Substring(0, eq).Trim().ToLower();
+                            string v = ln.Substring(eq + 1).Trim();
+                            if (k == "user" || k == "from") user = v;
+                            if (k == "smtp") srv = v;
+                            if (k == "port") prt = v;
+                        }
+                        else if (p0.Length == 0) p0 = ln;
+                        else if (p1.Length == 0) p1 = ln;
+                        else if (p2.Length == 0) p2 = ln;
+                    }
+                    if (user.Length == 0) user = p0;
+                    if (srv.Length == 0 && p2.Length > 0) { int c = p2.IndexOf(':'); srv = c > 0 ? p2.Substring(0, c) : p2; if (c > 0) prt = p2.Substring(c + 1); }
+                }
+                if (user.Length == 0) return "OK|发件账号还没配（.mail_config 缺内容）";
+                string chan = srv.Length > 0 ? (srv + (prt.Length > 0 ? ":" + prt : "")) : "自动（按发件域名选）";
+                return "OK|发件 " + user + "｜通道 " + chan;
+            }
+            // 收件人支持多个：逗号/分号/顿号/空格分隔，A. 覆盖 B. add=1 追加 C. clear=1 清空
+            if (q.ContainsKey("clear") && q["clear"] == "1")
+            {
+                string c2 = HeaderMailCfg();
+                try { File.WriteAllText(cfg, c2, new UTF8Encoding(false)); } catch (Exception ex) { return "ERR|" + ex.Message; }
+                return "OK|收件人清空了，以后只在本机说话";
+            }
             string want = q.ContainsKey("to") ? q["to"].Trim() : "";
-            if (want.Length == 0 || want.IndexOf('@') <= 1 || !want.Contains(".")) return "ERR|邮箱格式不对：" + want;
-            string content = "# 道 记事本的通知通道：到点除了本机说话，还发一封邮件到下面这个地址。\n" +
-                "# 发件账号（QQ 邮箱 + 授权码）在 F:\\Daodao\\.mail_config 里，这里只管收件人。\n" +
-                "# 收件人由手机持有人自己定，说「提醒发到 xxx@qq.com」就会写到这里；留空则只在本机说话。\n" +
-                "to=" + want + "\n";
+            List<string> seg = new List<string>();
+            string cur = "";
+            for (int i = 0; i < want.Length; i++)
+            {
+                char ch = want[i];
+                if (ch == ',' || ch == ';' || ch == '，' || ch == '；' || ch == '、' || ch == ' ' || ch == '\t')
+                {
+                    if (cur.Length > 0) { seg.Add(cur); cur = ""; }
+                }
+                else cur += ch;
+            }
+            if (cur.Length > 0) seg.Add(cur);
+            List<string> got = new List<string>();
+            for (int i = 0; i < seg.Count; i++)
+            {
+                string one = seg[i].Trim();
+                int at = one.IndexOf('@');
+                if (at <= 0) continue;
+                if (one.IndexOf('.', at) <= at + 1) continue;
+                if (one.IndexOf(' ') >= 0) continue;
+                bool dup = false;
+                for (int k = 0; k < got.Count; k++) if (got[k].ToLower() == one.ToLower()) dup = true;
+                if (!dup) got.Add(one);
+            }
+            if (got.Count == 0) return "ERR|邮箱格式不对：" + want;
+            bool isAdd = q.ContainsKey("add") && q["add"] == "1";
+            if (isAdd && to.Length > 0)
+            {
+                string[] olds = to.Replace('；', ',').Replace(';', ',').Split(',');
+                for (int i = 0; i < olds.Length; i++)
+                {
+                    string one = olds[i].Trim();
+                    if (one.Length == 0) continue;
+                    bool dup = false;
+                    for (int k = 0; k < got.Count; k++) if (got[k].ToLower() == one.ToLower()) dup = true;
+                    if (!dup) got.Add(one);
+                }
+            }
+            string joined = "";
+            for (int i = 0; i < got.Count; i++) joined += (i == 0 ? "" : ",") + got[i];
+            string content = "# 道 记事本的通知通道：到点除了本机说话，还发一封邮件到下面这些地址。\n" +
+                "# 发件账号在 F:\\Daodao\\.mail_config（可换任意服务商：qq/163/126/gmail/outlook/企业邮箱 等），这里只管收件人。\n" +
+                "# 收件人由手机持有人自己定，可以多个，用英文逗号隔开；说「提醒发到 a@x.com」覆盖，说「也发到/加上 b@y.com」追加。\n" +
+                "to=" + joined + "\n";
             try { File.WriteAllText(cfg, content, new UTF8Encoding(false)); } catch (Exception ex) { return "ERR|" + ex.Message; }
-            return "OK|" + want;
+            return "OK|" + joined;
         }
         if (op == "mailtest")
         {
@@ -1066,6 +1145,15 @@ public class DesktopPet : Form
             return ok ? "MAILOK" : "MAILFAIL|通知.ini 没配好或发信被拒";
         }
         return "ERR|不懂这个 op";
+    }
+
+    // 通知.ini 的空模板（备注 + 空收件人）
+    static string HeaderMailCfg()
+    {
+        return "# 道 记事本的通知通道：到点除了本机说话，还发一封邮件到下面这些地址。\n" +
+            "# 发件账号在 F:\\Daodao\\.mail_config（可换任意服务商：qq/163/126/gmail/outlook/企业邮箱 等），这里只管收件人。\n" +
+            "# 收件人由手机持有人自己定，可以多个，用英文逗号隔开；说「提醒发到 a@x.com」覆盖，说「也发到/加上 b@y.com」追加。\n" +
+            "to=\n";
     }
 
     // 到点提醒：提前十分钟预告一次，到点说一遍并标记完成
@@ -8668,7 +8756,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 99;
+    public const int APP_VER = 100;
 
     public static void Start()
     {

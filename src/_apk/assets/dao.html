@@ -1437,7 +1437,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='99';
+  var HTML_VER='100';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1740,22 +1740,36 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     one(0);
   }
 
-  var NOTE_MAIL_RE = /(提醒|通知).{0,4}发到|收件邮箱|发到哪个邮箱|邮箱设成|改成.{0,12}@/;
-  var MAIL_RE = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/;
+  var NOTE_MAIL_RE = /(提醒|通知|消息).{0,6}发到|收件邮箱|发到哪个邮箱|邮箱设成|改成.{0,12}@|也发到|加上.{0,10}@|多发.{0,10}@|清空收件|取消收件|别发邮件|不发邮件|收件人|哪个邮箱发|用什么邮箱发/;
+  var MAIL_RE = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
 
   function noteMail(text) {
-    var m = String(text).match(MAIL_RE);
+    var s = String(text);
+    var mails = s.match(MAIL_RE) || [];
     var base = 'http://' + pcIp + ':8848/note?op=';
-    var url = m ? (base + 'setmail&to=' + encodeURIComponent(m[0]) + '&text=') : (base + 'getmail');
-    // setmail 的 text 参数不需要，去掉尾部的空 text
-    if (m) url = base + 'setmail&to=' + encodeURIComponent(m[0]);
-    fetch(url).then(function (r) { return r.text(); }).then(function (s) {
-      if (s.indexOf('OK|') === 0) {
-        var msg = m ? ('好，提醒发到 ' + s.substring(3)) : s.substring(3);
-        tip(msg); noteSay(msg);
+    var url, adding = false;
+    if (mails.length > 0) {
+      adding = /也发|加上|再加|顺便发|多发/.test(s);
+      url = base + 'setmail&to=' + encodeURIComponent(mails.join(',')) + (adding ? '&add=1' : '');
+    } else if (/清空|取消收件|别发|不发/.test(s)) {
+      url = base + 'setmail&clear=1';
+    } else if (/哪个邮箱发|用什么邮箱发|发件|谁发的/.test(s)) {
+      url = base + 'mailinfo';
+    } else {
+      url = base + 'getmail';
+    }
+    fetch(url).then(function (r) { return r.text(); }).then(function (res) {
+      var msg;
+      if (res.indexOf('OK|') === 0) {
+        msg = res.substring(3);
+        if (mails.length > 0 && !adding) msg = '好，提醒发到 ' + msg;
+        else if (mails.length > 0 && adding) msg = '好，也发到 ' + msg;
+        else if (url.indexOf('mailinfo') > 0) msg = msg;
+        else if (url.indexOf('getmail') > 0) msg = msg === '还没设收件邮箱' ? '现在还没设收件邮箱，只在本机说话' : ('现在发到 ' + msg);
       } else {
-        tip('没设上：' + s);
+        msg = '没设上：' + res;
       }
+      tip(msg); noteSay(msg);
     }).catch(function () { tip('电脑没连上，等它回话再设'); });
   }
 

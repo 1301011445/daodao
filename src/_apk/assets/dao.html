@@ -371,6 +371,12 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
     return doy % 6;
   }
 
+  // 八帧走路序列（image_edit 出图后按 8 等分切；只有少女这一形象有素材）
+  var walkSheet = new Image(), walkSheetOk = false, walkF = 0, WALK_SP = 6;
+  walkSheet.onload = function () { walkSheetOk = true; if (typeof redraw === 'function') redraw(); };
+  walkSheet.onerror = function () { walkSheetOk = false; };
+  walkSheet.src = 'walk8.png';
+
   var scenes = [], sceneIdx = 0;
   SCENE_FILES.forEach(function (n, k) {
     var sim = new Image();
@@ -745,8 +751,17 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
     if (bedA > 0) bedA = Math.min(1, bedA);
 
     ctx.save();
-    ctx.translate(CX + dx + walkX + swayX, footY + hopY + bob);
+    // 2026-11-21：坐标兜底。任何一个位移量变成 NaN/Infinity，会让整条变换矩阵失效，
+    // 表现就是"人物凭空消失"，还很难查。这里拦一道，坏值时退回正常站姿位置。
+    var txL = CX + dx + walkX + swayX, tyL = footY + hopY + bob;
+    if (!isFinite(txL) || !isFinite(tyL)) {
+      try { console.warn('dao: 变换含非法值', CX, dx, walkX, swayX, footY, hopY, bob); } catch (e) {}
+      txL = CX; tyL = footY;
+    }
+    ctx.translate(txL, tyL);
+    if (!isFinite(tilt)) tilt = 0;
     ctx.rotate(tilt * Math.PI / 180);
+    if (!isFinite(sx) || !isFinite(sy) || sx === 0 || sy === 0) { sx = 1; sy = 1; }
     ctx.scale(sx, sy);
     drawActProps(false);
 
@@ -805,9 +820,12 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
       if (dIm.complete && dIm.naturalWidth) {
         var dW = TARGET_H * (dIm.naturalWidth / dIm.naturalHeight);
         var beat = t * 3.6;
-        var swayX = 4 * actAmt * Math.sin(beat);
+        // 2026-11-21 修：这里原来写的是 var swayX，var 会提升到整个 redraw() 作用域，
+        // 把外层那个 swayX 遮蔽成 undefined；除了剑客跳舞这一支，其它形象/动作走到
+        // translate(CX+dx+walkX+swayX,...) 时 x 变成 NaN，整幅人物就再也画不出来。
+        var dSway = 4 * actAmt * Math.sin(beat);
         var swayY = -6 * actAmt * Math.abs(Math.sin(beat * 2));
-        ctx.drawImage(dIm, -dW / 2 + swayX, -TARGET_H + swayY, dW, TARGET_H);
+        ctx.drawImage(dIm, -dW / 2 + dSway, -TARGET_H + swayY, dW, TARGET_H);
         ctx.restore();
         return;
       }
@@ -829,6 +847,20 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
       var pim2 = curPose[poseP];
       var pwid = TARGET_H * (pim2.naturalWidth / pim2.naturalHeight);
       ctx.drawImage(pim2, -pwid / 2, -TARGET_H, pwid, TARGET_H);
+      ctx.restore();
+      return;
+    }
+
+    // 有八帧走路素材的形象：直接换整张帧图，不再用切条变形伪造步态
+    if (walkSheetOk && species === WALK_SP && (mode === 'walk' || mode === 'run') &&
+        Math.abs(animSqY - 1) < 0.06) {
+      var fw = walkSheet.naturalWidth / 8, fh = walkSheet.naturalHeight;
+      var fwD = TARGET_H * (fw / fh);
+      var fi = walkF * fw;
+      ctx.save();
+      if (walkDir < 0) ctx.scale(-1, 1);                 // 朝左走就整帧镜像
+      ctx.drawImage(walkSheet, fi, 0, fw, fh, -fwD / 2, -TARGET_H, fwD, TARGET_H);
+      ctx.restore();
       ctx.restore();
       return;
     }
@@ -959,6 +991,7 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
       animSqX = 1 + 0.012 * Math.sin(4 * Math.PI * pW);
       // 重心左右交替：每步换脚，幅度小（1px 级），只是让身体别像贴纸平移
       swayX = 1.0 * Math.sin(4 * Math.PI * pW);
+      walkF = Math.floor(pW * 8) % 8;      // 八帧序列取当前帧
       tilt = 2.4;                       // 走路带一点前倾，不是直挺挺地滑
     } else if (mode === 'run') {
       walkPhase += dt * 1.9;
@@ -1430,7 +1463,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='84';
+  var HTML_VER='86';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;

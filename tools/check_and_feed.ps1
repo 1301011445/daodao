@@ -91,7 +91,10 @@ if ((Test-Path -LiteralPath $apk) -and (Test-Path -LiteralPath $bt)) {
     } catch { }
 }
 if ($apkVer -ne '未读' -and $ver -ne '?') {
-    $num = ($apkVer -split '\.')[0]
+    # 2026-11-21 修：apk 的 versionName 是 "0.86" 这种带前导 0. 的写法，
+     # 原来用 ($apkVer -split '\.')[0] 取到的是 "0"，跟 exe 的 "86" 一比就误报"版本不一致"。
+     # 这里把前导 "0." 去掉，只留主版本号再比。
+     $num = ($apkVer -replace '^\s*0\.', '').Trim()
     if ($num -ne $ver) { [void]$issues.Add("两端版本不一致：exe v$ver / apk v$apkVer") }
 }
 

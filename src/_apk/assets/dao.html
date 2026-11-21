@@ -633,6 +633,17 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
         ctx.beginPath(); ctx.ellipse(0, 5, TARGET_H * 0.46, 5, 0, 0, 6.284); ctx.fill();
         ctx.fillStyle = 'rgba(255,255,255,' + 0.55 * a + ')';
         ctx.beginPath(); ctx.ellipse(0, 4, TARGET_H * 0.30, 2.2, 0, 0, 6.284); ctx.fill();
+        // v0.93：光下面补一把真的剑，人踩在剑身上，不再是"空踩一团光"
+        var swLen = TARGET_H * 0.46, swY = 9;
+        ctx.fillStyle = 'rgba(214,238,255,' + 0.95 * a + ')';
+        ctx.beginPath(); ctx.ellipse(0, swY, swLen, 3.4, -0.05, 0, 6.284); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,' + a + ')';
+        ctx.beginPath(); ctx.ellipse(0, swY - 0.6, swLen * 0.92, 1.4, -0.05, 0, 6.284); ctx.fill();
+        // 剑柄：左端一小段粗一点，带护手
+        ctx.fillStyle = 'rgba(120,96,72,' + 0.95 * a + ')';
+        ctx.beginPath(); ctx.ellipse(-swLen - 2, swY + 1.4, TARGET_H * 0.055, 3.0, -0.05, 0, 6.284); ctx.fill();
+        ctx.fillStyle = 'rgba(176,150,108,' + 0.9 * a + ')';
+        ctx.beginPath(); ctx.rect(-swLen - 6, swY - 5, 3.2, 10); ctx.fill();
       } else if (actKind === 3) {
         // 坐骑：一只侧身的小兽，一头一尾
         ctx.fillStyle = 'rgba(122,96,70,' + 0.92 * a + ')';
@@ -645,18 +656,60 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
       }
     } else {
       if (actKind === 5) {
-        // 喝茶：手里一只杯子，杯口有一点热气的亮
-        x = 12; y = -TARGET_H * 0.40;
+        // 喝茶：右手边一杯热茶，杯口冒热气（v0.93：位置挪到手边，不再挂在腰侧）
+        x = TARGET_H * 0.155; y = -TARGET_H * 0.44;
         ctx.fillStyle = 'rgba(250,250,248,' + a + ')';
-        ctx.beginPath(); ctx.rect(x - 6, y - 8, 12, 15); ctx.fill();
+        ctx.beginPath(); ctx.rect(x - 7, y - 9, 14, 17); ctx.fill();
         ctx.strokeStyle = 'rgba(205,200,192,' + a + ')'; ctx.lineWidth = 1.3;
-        ctx.beginPath(); ctx.rect(x - 6, y - 8, 12, 15); ctx.stroke();
+        ctx.beginPath(); ctx.rect(x - 7, y - 9, 14, 17); ctx.stroke();
         ctx.fillStyle = 'rgba(116,70,42,' + a + ')';
-        ctx.beginPath(); ctx.ellipse(x, y - 7, 5, 1.6, 0, 0, 6.284); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(x, y - 8, 6, 1.8, 0, 0, 6.284); ctx.fill();
+        // v0.93：杯口往上飘两缕热气，一眼能看出是"热茶"而不是拿个白块
+        for (i = 0; i < 2; i++) {
+          ctx.strokeStyle = 'rgba(255,255,255,' + 0.30 * a + ')'; ctx.lineWidth = 1.1;
+          var st0 = x - 2 + i * 4, st1 = y - 10;
+          ctx.beginPath();
+          ctx.moveTo(st0, st1);
+          for (var seg = 1; seg <= 3; seg++) {
+            ctx.lineTo(st0 + Math.sin(t * 3 + i * 1.7 + seg) * 2.4, st1 - seg * 5 - ((t * 9) % 5));
+          }
+          ctx.stroke();
+        }
+      } else if (actKind === 6) {
+        // v0.93：看电视原来什么都没画（只有一个姿势），这里补一台亮着的小电视
+        var tvW = TARGET_H * 0.30, tvH = tvW * 0.72;
+        var tvX = TARGET_H * 0.34, tvY = -TARGET_H * 0.30;
+        ctx.fillStyle = 'rgba(38,40,50,' + 0.95 * a + ')';
+        ctx.beginPath(); ctx.rect(tvX - tvW / 2, tvY - tvH / 2, tvW, tvH); ctx.fill();
+        var flick = 0.52 + 0.14 * Math.sin(t * 9.3) + 0.06 * Math.sin(t * 21.7);
+        ctx.fillStyle = 'rgba(150,205,235,' + flick * a + ')';
+        ctx.beginPath(); ctx.rect(tvX - tvW / 2 + 3, tvY - tvH / 2 + 3, tvW - 6, tvH - 6); ctx.fill();
+        // 屏幕里一条扫过去的高光，像在放画面
+        var scanY = tvY - tvH / 2 + 4 + ((t * 26) % (tvH - 8));
+        ctx.fillStyle = 'rgba(255,255,255,' + 0.28 * a + ')';
+        ctx.beginPath(); ctx.rect(tvX - tvW / 2 + 3, scanY, tvW - 6, 2.2); ctx.fill();
+        // 底座
+        ctx.fillStyle = 'rgba(38,40,50,' + 0.9 * a + ')';
+        ctx.beginPath(); ctx.rect(tvX - 3, tvY + tvH / 2, 6, TARGET_H * 0.045); ctx.fill();
+        ctx.beginPath(); ctx.rect(tvX - 10, tvY + tvH / 2 + TARGET_H * 0.045, 20, 3); ctx.fill();
       } else if (actKind === 7 || actKind === 8) {
-        // 滑板、轮滑：脚下一条板
-        ctx.fillStyle = 'rgba(58,58,68,' + a + ')';
-        ctx.beginPath(); ctx.ellipse(0, 3, TARGET_H * 0.26, 3.4, 0, 0, 6.284); ctx.fill();
+        // 滑板、轮滑：身后三道速度线 + 脚下一条板沿（v0.93）
+        // 教训：脚底正下方那一小条在画面里被压得几乎看不见，椭圆/圆角矩形都白画，改成往上让线露出来
+        var spW = 20 + 16 * Math.sin(t * 5.2);
+        for (i = 0; i < 3; i++) {
+          var spY = -TARGET_H * (0.055 + i * 0.045);
+          ctx.strokeStyle = 'rgba(214,232,255,' + (0.55 - i * 0.13) * a + ')';
+          ctx.lineWidth = 2.4 - i * 0.5;
+          ctx.beginPath();
+          ctx.moveTo(-TARGET_H * 0.18, spY);
+          ctx.lineTo(-TARGET_H * 0.18 - spW - i * 7, spY - 1.2);
+          ctx.stroke();
+        }
+        // 板沿：贴脚底一条，浅色描一道，够看出"脚踩在板上"
+        ctx.fillStyle = 'rgba(206,220,240,' + a + ')';
+        ctx.beginPath(); ctx.ellipse(0, -1, TARGET_H * 0.30, 3.2, -0.05, 0, 6.284); ctx.fill();
+        ctx.fillStyle = 'rgba(88,98,120,' + a + ')';
+        ctx.beginPath(); ctx.ellipse(0, -4.4, TARGET_H * 0.26, 1.4, -0.05, 0, 6.284); ctx.fill();
       } else if (actKind === 4) {
         // 跳舞：三个往上飘的音符
         for (i = 0; i < 3; i++) {
@@ -773,7 +826,8 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
     if (curPose && curPose.length >= 5 && lieAmt < 0.40) {
       if (waveLeft > 0) poseP = 1;
       else if (mode === 'walk' || mode === 'run') poseP = 2;
-      else if (actKind >= 4 && actKind <= 5) poseP = 3;
+      else if (actKind === 4) poseP = 3;
+      else if (actKind === 5) poseP = 0;   // v0.93：喝茶不要用举双手那个跳舞姿势，站定就对了，杯子画在手上
       else if (actKind === 6) poseP = 4;
       else poseP = 0;
     }
@@ -821,6 +875,9 @@ var POSES = ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJUAAAEsCAYAAADKEPFG
       var pim2 = curPose[poseP];
       var pwid = TARGET_H * (pim2.naturalWidth / pim2.naturalHeight);
       ctx.drawImage(pim2, -pwid / 2, -TARGET_H, pwid, TARGET_H);
+      // v0.93：这一支是提前 return 的，函数末尾那次 drawActProps(true) 永远走不到，
+      // 于是电视 / 茶杯热气 / 滑板这些身前道具对有姿势图的形象全都画不出来。这里补上。
+      drawActProps(true);
       ctx.restore();
       return;
     }
@@ -1380,7 +1437,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='92';
+  var HTML_VER='93';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;

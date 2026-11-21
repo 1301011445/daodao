@@ -1073,6 +1073,27 @@ public class DesktopPet : Form
         return "";
     }
 
+    // 标完成：普通条目直接置 done；重复条目（D/W/M）滚到下一次，不然这条就永远死了
+    static string RollDone(string[] f)
+    {
+        string rep = f.Length >= 6 ? f[5].Trim() : "";
+        string when = f[1], done = "1", warned = f[3];
+        if (rep.Length > 0)
+        {
+            DateTime dt = DateTime.MinValue;
+            try { dt = DateTime.ParseExact(f[1], "yyyy-MM-dd HH:mm", null); } catch { }
+            if (dt != DateTime.MinValue)
+            {
+                DateTime now = DateTime.Now;
+                DateTime nx = NextWhen(dt, rep);
+                for (int k = 0; k < 40 && nx <= now; k++) nx = NextWhen(nx, rep);
+                when = nx.ToString("yyyy-MM-dd HH:mm");
+            }
+            done = "0"; warned = "0";
+        }
+        return f[0] + "\t" + when + "\t" + done + "\t" + warned + "\t" + f[4] + (rep.Length > 0 ? "\t" + rep : "");
+    }
+
     public static string NoteApi(string query)
     {
         Dictionary<string, string> q = ParseQuery(query);
@@ -1096,7 +1117,7 @@ public class DesktopPet : Form
                 if (f.Length >= 5 && f[0] == id)
                 {
                     hit = true;
-                    if (op == "done") keep.Add(f[0] + "\t" + f[1] + "\t1\t" + f[3] + "\t" + f[4] + (f.Length >= 6 ? "\t" + f[5] : ""));
+                    if (op == "done") keep.Add(RollDone(f));
                     continue;
                 }
                 if (lines[i].Trim().Length > 0) keep.Add(lines[i]);
@@ -1141,7 +1162,7 @@ public class DesktopPet : Form
             try { File.WriteAllLines(NoteFile(), all.ToArray(), new UTF8Encoding(false)); } catch (Exception ex) { return "ERR|" + ex.Message; }
             // 登记成功先在屏幕上回应一句，不吵
             try { DesktopPet me = Self; if (me != null) me.BeginInvoke(new MethodInvoker(delegate() { me.Say("记下了，" + (rep.Length > 0 ? RepText(rep) + "，从" : "") + when.ToString("M月d日H点m分") + "，" + what); })); } catch { }
-            return "OK|" + (maxId + 1) + "|" + when.ToString("yyyy-MM-dd HH:mm") + "|" + what;
+            return "OK|" + (maxId + 1) + "|" + when.ToString("yyyy-MM-dd HH:mm") + "|" + what + (rep.Length > 0 ? "|" + RepText(rep) : "");
         }
         if (op == "today" || op == "read")
         {
@@ -1289,6 +1310,8 @@ public class DesktopPet : Form
             key = key.Trim();
             int hitId = 0, hitAt = -1;
             string hitText = "";
+            int bestDone = 2;
+            DateTime bestTime = DateTime.MaxValue;
             if (key.Length == 0) return "ERR|没说清楚是哪一条";
             // 「第 2 条」这种直接按序号来
             Match num = Regex.Match(raw, @"第\s*([0-9]{1,3}|[一二三四五六七八九十]{1,3})\s*条");
@@ -1302,13 +1325,21 @@ public class DesktopPet : Form
                 if (wantId > 0) { int fid = 0; int.TryParse(f[0], out fid); ok = fid == wantId; }
                 else ok = f[4].IndexOf(key, StringComparison.OrdinalIgnoreCase) >= 0;
                 if (!ok) continue;
+                // 同名的不止一条时挑「离现在最近还没做的」，按文件行序会改错条
+                DateTime dt2 = DateTime.MaxValue;
+                try { dt2 = DateTime.ParseExact(f[1], "yyyy-MM-dd HH:mm", null); } catch { }
+                int dn = f[2] == "1" ? 1 : 0;
                 int fid2 = 0;
                 int.TryParse(f[0], out fid2);
-                hitId = fid2;
-                hitAt = i; hitText = f[4];
-                break;
+                if (hitAt < 0 || dn < bestDone || (dn == bestDone && dt2 < bestTime))
+                {
+                    hitId = fid2;
+                    hitAt = i; hitText = f[4];
+                    bestDone = dn; bestTime = dt2;
+                }
             }
             if (hitAt < 0) return "ERR|记事本里没找到「" + (key.Length > 0 ? key : raw) + "」这条待办";
+            string hitNew = "";
             List<string> keep2 = new List<string>();
             for (int i = 0; i < lines.Length; i++)
             {
@@ -1317,17 +1348,45 @@ public class DesktopPet : Form
                     if (op == "doneby")
                     {
                         string[] f = lines[i].Split('\t');
-                        keep2.Add(f[0] + "\t" + f[1] + "\t1\t" + f[3] + "\t" + f[4] + (f.Length >= 6 ? "\t" + f[5] : ""));
+                        string nl = RollDone(f);
+                        keep2.Add(nl);
+                        hitNew = nl;
                     }
                     continue;
                 }
                 if (lines[i].Trim().Length > 0) keep2.Add(lines[i]);
             }
             try { File.WriteAllLines(NoteFile(), keep2.ToArray(), new UTF8Encoding(false)); } catch (Exception ex) { return "ERR|" + ex.Message; }
-            return "OK|" + hitId + "|" + hitText;
+            // 重复项做完后会滚到下一次，把新时间一起回给页面，它能接着说「下次什么时候」
+            string extra = "";
+            if (hitNew.Length > 0)
+            {
+                string[] nf = hitNew.Split('\t');
+                if (nf.Length >= 6 && nf[2] == "0") extra = "|" + nf[1] + "|" + RepText(nf[5].Trim());
+            }
+            return "OK|" + hitId + "|" + hitText + extra;
         }
         if (op == "mailtest")
         {
+            // 先看有没有收件人，空着就直说，别让人以为是通道坏了
+            string to = "";
+            try
+            {
+                string cfg = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "通知.ini");
+                if (File.Exists(cfg))
+                {
+                    string[] ls = File.ReadAllLines(cfg, Encoding.UTF8);
+                    for (int i = 0; i < ls.Length; i++)
+                    {
+                        string ln = ls[i].Trim();
+                        if (ln.StartsWith("#")) continue;
+                        int eq = ln.IndexOf('=');
+                        if (eq > 0 && ln.Substring(0, eq).Trim().ToLower() == "to") to = ln.Substring(eq + 1).Trim();
+                    }
+                }
+            }
+            catch { }
+            if (to.Length == 0) return "MAILFAIL|还没设收件邮箱，先说一句「提醒发到 xxx@qq.com」";
             bool ok = TryMail("道的提醒测试", "这条是测试邮件，收到说明绑定好了。" + DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
             return ok ? "MAILOK" : "MAILFAIL|通知.ini 没配好或发信被拒";
         }
@@ -1363,13 +1422,32 @@ public class DesktopPet : Form
             DateTime dt = DateTime.MinValue;
             try { dt = DateTime.ParseExact(f[1], "yyyy-MM-dd HH:mm", null); } catch { }
             if (dt == DateTime.MinValue) { outp.Add(ln); continue; }
-            if (f[2] == "1") { outp.Add(ln); continue; }
             string rep = f.Length >= 6 ? f[5].Trim() : "";
+            if (f[2] == "1")
+            {
+                // 重复项被标成「完成」就等于永久哑掉；这里兜底救回来，标完成＝这一轮做完了
+                if (rep.Length > 0)
+                {
+                    DateTime now0 = DateTime.Now;
+                    DateTime nw = NextWhen(dt, rep);
+                    for (int k = 0; k < 40 && nw <= now0; k++) nw = NextWhen(nw, rep);
+                    f[1] = nw.ToString("yyyy-MM-dd HH:mm"); f[2] = "0"; f[3] = "0";
+                    changed = true;
+                    outp.Add(f[0] + "\t" + f[1] + "\t" + f[2] + "\t" + f[3] + "\t" + f[4] + "\t" + rep);
+                    continue;
+                }
+                outp.Add(ln); continue;
+            }
             if (dt <= now)
             {
                 changed = true;
                 due.Add(f[4]);
-                if (rep.Length > 0) { f[1] = NextWhen(dt, rep).ToString("yyyy-MM-dd HH:mm"); f[3] = "0"; }
+                if (rep.Length > 0)
+                {
+                    DateTime nw = NextWhen(dt, rep);
+                    for (int k = 0; k < 40 && nw <= now; k++) nw = NextWhen(nw, rep);   // 欠了好几次也一次追到未来
+                    f[1] = nw.ToString("yyyy-MM-dd HH:mm"); f[3] = "0";
+                }
                 else f[2] = "1";
             }
             else if (f[3] == "0" && (dt - now).TotalMinutes <= 10) { f[3] = "1"; changed = true; soon.Add(f[4]); }
@@ -8989,7 +9067,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 105;
+    public const int APP_VER = 106;
 
     public static void Start()
     {

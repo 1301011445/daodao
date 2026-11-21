@@ -1312,6 +1312,13 @@ var exprImgs = [];
     try { if (window.DaoNative && DaoNative.hideKeyboard) DaoNative.hideKeyboard(); } catch (e) {}
   }
 
+  // v87：第二段脚本（长按「跟它说话」的打字流程）看不到这里的私有函数，
+  // 之前直接调 openAsk() 就报 ReferenceError，长按打字整条路径一直是坏的。显式开放入口。
+  window.daoAskSide = askSide;
+  window.daoAskOpen = openAsk;
+  window.daoAskClose = closeAsk;
+  window.daoAskInput = askInput;
+
   function setMoodByCode(m) {
     if (!m) { mood = 0; moodLeft = 0; return; }
     mood = (m === 7 || m === 8) ? (m === 8 ? 1 : 4) : m;
@@ -1463,7 +1470,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='86';
+  var HTML_VER='87';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1761,9 +1768,8 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
       holdTmr = null;
       longFired = true;
       if (listening) stopListen();
-      askMode = 'chat';
-      try { askInput.placeholder = '跟道说句话……'; } catch (err) {}
-      openAsk();
+      if (window.daoAskSide) { window.daoAskSide('chat'); }          // v87：走第一段脚本开放出来的入口
+      else if (window.daoAskOpen) { window.daoAskOpen(); }
     }, 550);
   });
   talkBtn.addEventListener('pointerup', function (e) {

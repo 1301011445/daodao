@@ -86,6 +86,25 @@ public class NoteAlarm {
         } catch (Exception e) { }
     }
 
+    public static boolean canExact(Context c) {
+        try {
+            if (Build.VERSION.SDK_INT < 31) return true;
+            AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
+            return am == null || am.canScheduleExactAlarms();
+        } catch (Exception e) { return true; }
+    }
+
+    public static boolean openExactSettings(Context c) {
+        try {
+            if (Build.VERSION.SDK_INT < 31) return false;
+            Intent i = new Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM);
+            i.setData(android.net.Uri.parse("package:" + c.getPackageName()));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            c.startActivity(i);
+            return true;
+        } catch (Exception e) { return false; }
+    }
+
     /** 闹钟响的时候由系统调用 */
     public static class NoteReceiver extends BroadcastReceiver {
         @Override

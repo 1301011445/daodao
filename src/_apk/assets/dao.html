@@ -1437,7 +1437,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='101';
+  var HTML_VER='102';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1726,7 +1726,7 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     function one(i) {
       if (i >= q.length) {
         try { localStorage.setItem(NOTE_Q, '[]'); } catch (e) {}
-        if (done.length) tip('补记上了 ' + done.length + ' 条');
+        if (done.length) { tip('补记上了 ' + done.length + ' 条'); noteSync(); }
         return;
       }
       fetch('http://' + pcIp + ':8848/note?op=add&text=' + encodeURIComponent(q[i]))
@@ -1790,6 +1790,7 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
         tip('记下了：' + f[2] + ' ' + f[3]);
         noteSay('记下了，' + f[2] + '，' + f[3]);
         phoneAlarm(f[1], f[2], f[3]);
+        noteSync();
       } else {
         tip('没记上：' + s);
       }
@@ -1802,16 +1803,60 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
   function noteRead() {
     fetch('http://' + pcIp + ':8848/note?op=today').then(function (r) { return r.text(); }).then(function (s) {
       var t = s.indexOf('OK|') === 0 ? s.substring(3) : '记事本打不开';
-      if (s.indexOf('OK|') === 0) { try { localStorage.setItem('dao_note_last', t); } catch (e) {} }
+      if (s.indexOf('OK|') === 0) { try { localStorage.setItem('dao_note_last', t); } catch (e) {} noteSync(); }
       tip(t);
       noteSay(t);
     }).catch(function () {
+      var local = noteLocalText();
       var last = '';
       try { last = localStorage.getItem('dao_note_last') || ''; } catch (e) {}
-      var t = last ? ('电脑没连上，这是上次记下的：' + last) : '电脑没连上，也还没有本地记录';
+      var t = local ? ('电脑没连上，按手机上记的：' + local) : (last ? ('电脑没连上，这是上次记下的：' + last) : '电脑没连上，手机上还没有记事本备份');
       tip(t);
       noteSay(t);
     });
+  }
+
+  // 把电脑上的记事本（条目级）同步一份到手机上，断网时也能念
+  var NOTE_LIST = 'dao_note_list';
+  function noteSync() {
+    fetch('http://' + pcIp + ':8848/note?op=list').then(function (r) { return r.text(); }).then(function (s) {
+      if (s.indexOf('OK') !== 0) return;
+      var rows = s.split('\n').slice(1), arr = [];
+      for (var i = 0; i < rows.length; i++) {
+        var f = rows[i].split('\t');
+        if (f.length < 5) continue;
+        arr.push({ id: f[0], when: f[1], done: f[2], text: f[4] });
+      }
+      try { localStorage.setItem(NOTE_LIST, JSON.stringify(arr)); } catch (e) {}
+    }).catch(function () {});
+  }
+
+  function noteLocalText() {
+    var arr = [];
+    try { arr = JSON.parse(localStorage.getItem(NOTE_LIST) || '[]'); } catch (e) {}
+    if (!arr.length) return '';
+    var d = new Date();
+    var ymd = function (dt) {
+      var m = dt.getMonth() + 1, day = dt.getDate();
+      return dt.getFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
+    };
+    var today = ymd(d), tm = new Date(d.getTime() + 86400000), tomorrow = ymd(tm);
+    var overdue = [], tdy = [], tmr = [];
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i].done === '1') continue;
+      var when = String(arr[i].when || ''), day = when.substring(0, 10);
+      var hm = when.substring(11, 16).split(':');
+      var label = (parseInt(hm[0], 10) || 0) + '点' + (hm[1] || '00') + '分';
+      var line = label + ' ' + arr[i].text;
+      if (day === today) tdy.push(line);
+      else if (day === tomorrow) tmr.push(line);
+      else if (day < today) overdue.push(line);
+    }
+    var out = '';
+    if (overdue.length) out += '逾期' + overdue.length + '件：' + overdue.join('；') + '。';
+    if (tdy.length) out += '今天有' + tdy.length + '件：' + tdy.join('；') + '。';
+    if (tmr.length) out += '明天有' + tmr.length + '件：' + tmr.join('；') + '。';
+    return out || '这两天没有要做的。';
   }
 
   // 手机本地闹钟响、点通知进来时，原生端会调这个函数，让它把这条念出来
@@ -1821,11 +1866,19 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     try { noteSay('到点了，' + t); } catch (e) {}
   };
 
+  function noteAlarmSetting() {
+    var ok = false;
+    try { ok = (window.DaoNative && DaoNative.noteOpenAlarmSetting) ? DaoNative.noteOpenAlarmSetting() : false; } catch (e) {}
+    var t = ok ? '带你去开「精确闹钟」，允许了提醒才会准点响' : '这个机型不用单独开，或者系统里没这个开关';
+    tip(t); noteSay(t);
+  }
+
   window.__daoVoice = function (id, text) {
     if (!text) return;
     if (/没听清|权限|没有语音识别|启动失败/.test(text)) { tip(text); return; }
     tip('你说：' + text);
     noteFlush();
+    if (/精确闹钟|闹钟不准|提醒不准|闹钟权限/.test(text)) { noteAlarmSetting(); return; }
     if (NOTE_MAIL_RE.test(text)) { noteMail(text); return; }
     if (NOTE_READ_RE.test(text)) { noteRead(); return; }
     if (NOTE_RE.test(text)) { noteAdd(text); return; }
@@ -1833,6 +1886,7 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     chatAsk(text);
   };
   setTimeout(noteFlush, 800);
+  setTimeout(noteSync, 1000);
   // 手机第一次用记事本前，先要一次通知权限（Android 13 起必须显式申请）
   setTimeout(function () {
     try {
@@ -1841,6 +1895,14 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
       }
     } catch (e) {}
   }, 1500);
+  // Android 12 起精确闹钟要单独授权，没开就提示一次
+  setTimeout(function () {
+    try {
+      if (window.DaoNative && DaoNative.noteAlarmOk && !DaoNative.noteAlarmOk()) {
+        tip('精确闹钟没开，提醒可能晚几分钟；说「开精确闹钟」我带你去设置');
+      }
+    } catch (e) {}
+  }, 2000);
 
   // 「跟它说话」：轻点＝直接开口说话（语音对话，再点一下结束并识别）
   var streamed = false;

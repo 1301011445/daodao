@@ -129,6 +129,17 @@ public class DaoBridge {
         try { NoteAlarm.askPermission(ctx); } catch (Exception e) { }
     }
 
+    // 精确闹钟：Android 12 起要单独授权，没开的话提醒可能晚几分钟
+    @JavascriptInterface
+    public boolean noteAlarmOk() {
+        try { return NoteAlarm.canExact(ctx); } catch (Exception e) { return true; }
+    }
+
+    @JavascriptInterface
+    public boolean noteOpenAlarmSetting() {
+        try { return NoteAlarm.openExactSettings(ctx); } catch (Exception e) { return false; }
+    }
+
     @JavascriptInterface
     public void stopSpeak() { try { if (tts != null) tts.stop(); } catch (Exception e) { } }
 

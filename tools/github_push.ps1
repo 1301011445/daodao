@@ -38,6 +38,29 @@ if (-not $remote -or $remote -notmatch 'github') {
     exit 0
 }
 
+
+# 这台机器上有外部程序（扫描/备份类）会短暂占用 .git 下的锁文件，表现是
+# "Unable to create ...lock: File exists"，但 Get-Process 看不到 git 进程。
+# 处理办法：每次 git 命令前把 .git 下所有 *.lock 递归改名成 .s<时间戳>，失败就重试。
+function ClearLocks {
+    $gitDir = Join-Path $repo '.git'
+    Get-ChildItem -LiteralPath $gitDir -Recurse -Force -Filter '*.lock' -ErrorAction SilentlyContinue | ForEach-Object {
+        try { Rename-Item -LiteralPath $_.FullName -NewName ($_.Name + '.s' + (Get-Date -f 'HHmmss')) -Force -ErrorAction Stop } catch {}
+    }
+}
+
+function GitRetry {
+    param([string[]]$GitArgs, [int]$Attempts = 4, [string]$What = 'git')
+    for ($i = 1; $i -le $Attempts; $i++) {
+        ClearLocks
+        $out = (& $git @GitArgs 2>&1 | Out-String)
+        if ($LASTEXITCODE -eq 0) { return @{ ok = $true; out = $out; tries = $i } }
+        L ("$What 第 $i 次失败: " + (($out.Trim() -split "`n")[0]))
+        Start-Sleep -Seconds 2
+    }
+    return @{ ok = $false; out = $out; tries = $Attempts }
+}
+
 # 确保 origin 指向这个地址
 $curOrigin = (& $git -C $repo config --get remote.origin.url 2>&1 | Out-String).Trim()
 if ($curOrigin -ne $remote) {
@@ -46,21 +69,19 @@ if ($curOrigin -ne $remote) {
 }
 
 # 提交本地改动（没改动就只推，不造空提交）
-& $git -C $repo add -A 2>&1 | Out-Null
+$add = GitRetry -GitArgs @('-C', $repo, 'add', '-A') -What 'add'
+if (-not $add.ok) { L 'add 连续失败，本轮放弃'; exit 0 }
 $staged = (& $git -C $repo diff --cached --name-only 2>&1 | Out-String).Trim()
 if ($staged) {
     $n = @($staged -split "`n" | Where-Object { $_.Trim() }).Count
     $msg = '自动备份 ' + (Get-Date -f 'yyyy-MM-dd HH:mm')
-    & $git -C $repo commit -m $msg 2>&1 | Out-Null
-    L ("已提交 $n 个文件")
+    $c = GitRetry -GitArgs @('-C', $repo, 'commit', '-m', $msg) -What 'commit'
+    if ($c.ok) { L ("已提交 $n 个文件") } else { L 'commit 连续失败，本轮放弃'; exit 0 }
 }
 
 # 推送
 $branch = (& $git -C $repo rev-parse --abbrev-ref HEAD 2>&1 | Out-String).Trim()
-$r = (& $git -C $repo push origin ("HEAD:" + $branch) 2>&1 | Out-String)
-if ($LASTEXITCODE -eq 0) {
-    L ("推送成功 -> " + $remote + " (" + $branch + ")")
-} else {
-    L ("推送失败: " + ($r.Trim() -replace "`r`n", ' '))
-}
+$p = GitRetry -GitArgs @('-C', $repo, 'push', 'origin', ('HEAD:' + $branch)) -What 'push'
+if ($p.ok) { L ("推送成功 -> " + $remote + " (" + $branch + ")，第 " + $p.tries + " 次通过") }
+else { L ("推送失败: " + ($p.out.Trim() -replace "`r`n", ' ')) }
 exit 0

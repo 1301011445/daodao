@@ -2387,7 +2387,7 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     return { sr: sr, pcm: pcm.subarray(0, o) };
   }
 
-  var rows = [], statusEl = null, lyricEl = null;
+  var rows = [], statusEl = null, lyricEl = null, barFill = null, barKnob = null;
   var songSt = 'idle', songPosSec = 0, songLastPos = -1, stallCnt = 0, pollTimer = null, songTotal = 0;
   var outsideH = null;
 
@@ -2431,6 +2431,12 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
           setStatus('播放没在走：' + dg + '（查音量/耳机，或这台的音频流不正常）', true);
         }
         paintRows();
+        if (barFill && songTotal > 0) {
+          var ratio = songPosSec / songTotal;
+          if (ratio < 0) ratio = 0; if (ratio > 1) ratio = 1;
+          barFill.style.width = (ratio * 100).toFixed(1) + '%';
+          if (barKnob) barKnob.style.left = 'calc(' + (ratio * 100).toFixed(1) + '% - 5px)';
+        }
         if (lyricEl) {
           var sk = SONGS[playing] ? SONGS[playing].k : '';
           var ly = LYRICS[sk];
@@ -2452,11 +2458,12 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     try { if (srcNode) { srcNode.stop(); srcNode = null; } } catch (e) {}
     playing = -1; songSt = 'idle'; songPosSec = 0; songLastPos = -1; stallCnt = 0;
     if (lyricEl) lyricEl.textContent = '';
+    if (barFill) barFill.style.width = '0%'; if (barKnob) barKnob.style.left = '0%';
     stopPoll(); paintRows();
   }
   function closePanel() {
     if (win) { try { win.remove(); } catch (e) {} win = null; }
-    rows = []; statusEl = null; lyricEl = null;
+    rows = []; statusEl = null; lyricEl = null; barFill = null; barKnob = null;
     if (outsideH) { try { document.removeEventListener('pointerdown', outsideH, true); } catch (e) {} outsideH = null; }
   }
   function stopMusic() { stopAudio(); closePanel(); }
@@ -2482,16 +2489,35 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
         }
       } catch (e) { }
     });
-    var ff = el('div', 'padding:5px 12px;margin-right:6px;font-size:13px;border-radius:9px;background:rgba(118,158,255,.22);', '+30秒');
-    ff.addEventListener('click', function (ev) {
-      if (ev && ev.stopPropagation) ev.stopPropagation();
+    var ff = el('div', 'padding:5px 12px;margin-right:6px;font-size:13px;border-radius:9px;background:rgba(118,158,255,.22);', '快进');
+    // 2026-11-22 夜：原来是死板的「+30 秒」。改成按住不放连续快进（每 0.4 秒跳 5 秒），
+    // 松手就停；点一下仍是短跳 10 秒。想精确就到下面的进度条点/拖。
+    var ffT = null;
+    function ffBy(sec) {
       try {
-        if (window.DaoNative && DaoNative.seekSong) {
-          var ok = DaoNative.seekSong(Math.max(0, songPosSec + 30));
-          setStatus(ok ? '跳到 ' + Math.round(songPosSec + 30) + ' 秒' : '这首还不能跳，先停一下再点');
-        }
+        if (!(window.DaoNative && DaoNative.seekSong)) return;
+        var to = Math.max(0, songPosSec + sec);
+        if (songTotal > 0 && to > songTotal - 1) to = songTotal - 1;
+        var ok = DaoNative.seekSong(to);
+        songPosSec = to; songLastPos = to; stallCnt = 0;
+        setStatus(ok ? '快进到 ' + Math.round(to) + ' 秒' : '这首得先停一下再快进');
       } catch (e) { }
+    }
+    ff.addEventListener('pointerdown', function (ev) {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      if (ev && ev.preventDefault) ev.preventDefault();
+      ffBy(5);
+      ff.style.background = 'rgba(150,190,255,.5)';
+      ffT = setInterval(function () { ffBy(5); }, 400);
     });
+    function ffEnd(ev) {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      if (ffT) { clearInterval(ffT); ffT = null; }
+      ff.style.background = 'rgba(118,158,255,.22)';
+    }
+    ff.addEventListener('pointerup', ffEnd);
+    ff.addEventListener('pointercancel', ffEnd);
+    ff.addEventListener('pointerleave', ffEnd);
     var sp = el('div', 'padding:5px 12px;margin-right:6px;font-size:13px;border-radius:9px;background:rgba(118,158,255,.22);', '停止');
     sp.addEventListener('click', function (ev) {
       if (ev && ev.stopPropagation) ev.stopPropagation();
@@ -2508,6 +2534,36 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     win.appendChild(statusEl);
     lyricEl = el('div', 'font-size:15px;line-height:1.5;color:#ffe6a8;min-height:22px;margin:0 2px 4px;', '');
     win.appendChild(lyricEl);
+    // 进度条：点哪儿就跳到哪儿，按住拖也行——这比「+30 秒」更像正常人听歌
+    var bar = el('div', 'position:relative;height:16px;margin:2px 2px 6px;border-radius:8px;background:rgba(118,158,255,.18);overflow:hidden;touch-action:none;');
+    barFill = el('div', 'position:absolute;left:0;top:0;bottom:0;width:0%;background:rgba(140,180,255,.55);', '');
+    bar.appendChild(barFill);
+    var barKnob = el('div', 'position:absolute;top:-4px;left:0;width:10px;height:24px;border-radius:5px;background:rgba(200,220,255,.85);', '');
+    bar.appendChild(barKnob);
+    function barSeek(ev) {
+      try {
+        var rc = bar.getBoundingClientRect();
+        var ratio = (ev.clientX - rc.left) / Math.max(1, rc.width);
+        if (ratio < 0) ratio = 0; if (ratio > 1) ratio = 1;
+        var to = songTotal > 0 ? ratio * songTotal : 0;
+        if (window.DaoNative && DaoNative.seekSong) {
+          var ok = DaoNative.seekSong(to);
+          if (ok) { songPosSec = to; songLastPos = to; stallCnt = 0; setStatus('跳到 ' + Math.round(to) + ' 秒'); }
+          else setStatus('这首还不能拖，先停一下再试');
+        }
+        if (barFill) barFill.style.width = (ratio * 100).toFixed(1) + '%';
+        if (barKnob) barKnob.style.left = 'calc(' + (ratio * 100).toFixed(1) + '% - 5px)';
+      } catch (e) { }
+    }
+    var barDrag = false;
+    bar.addEventListener('pointerdown', function (ev) {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      if (ev && ev.preventDefault) ev.preventDefault();
+      barDrag = true; barSeek(ev);
+    });
+    bar.addEventListener('pointermove', function (ev) { if (barDrag) barSeek(ev); });
+    window.addEventListener('pointerup', function () { barDrag = false; });
+    window.addEventListener('pointercancel', function () { barDrag = false; });
     rows = [];
     SONGS.forEach(function (s, i) {
       var r = el('div',

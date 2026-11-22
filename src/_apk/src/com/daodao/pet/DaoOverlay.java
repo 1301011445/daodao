@@ -472,14 +472,16 @@ public class DaoOverlay extends Service {
         long cyc = 13000L;
         long p = (System.currentTimeMillis() - peekT0) % cyc;
         int w = lp.width;
-        int restX = side == SIDE_LEFT ? -w / 2 : sw - w / 2;
-        int outX = side == SIDE_LEFT ? 0 : sw - w;
+        // 2026-11-22 夜：换「半身探头 + 手扒边框」的姿态后，窗口不再半隐——人本身已经是半身构图，
+        // 再藏一半就只剩四分之一。现在整窗贴边，只在 ±6% 身宽里轻轻探进探出。
+        int baseX = side == SIDE_LEFT ? 0 : sw - w;
+        int outX = baseX + (side == SIDE_LEFT ? (int) (w * 0.06f) : -(int) (w * 0.06f));
         float f;
         if (p < cyc * 0.50f) f = 0f;
         else if (p < cyc * 0.62f) { float u = (p - cyc * 0.50f) / (cyc * 0.12f); f = u * u * (3 - 2 * u); }
         else if (p < cyc * 0.90f) f = 1f;
         else { float u = (p - cyc * 0.90f) / (cyc * 0.10f); float s = u * u * (3 - 2 * u); f = 1f - s; }
-        int x = restX + (int) ((outX - restX) * f);
+        int x = baseX + (int) ((outX - baseX) * f);
         if (x != peekLastX) {
             peekLastX = x;
             lp.x = x;
@@ -563,6 +565,8 @@ public class DaoOverlay extends Service {
         private Bitmap sheet;
         private Bitmap ballArt;      // 球头像专用图（assets/ball.png），有就用它，比从八帧里裁更清楚
         private Bitmap ballHappy, ballSleep, ballSur;   // 三种表情：开心 / 困 / 惊讶
+        private Bitmap peekArt;      // 贴边探头的半身姿态（assets/peek.png）
+        private Bitmap[] frames;     // 八帧拆开存，供网格变形逐帧用
         private long happyUntil = 0;
         private int fw = 192, fh = 384;
         private int fN = 8;
@@ -605,6 +609,19 @@ public class DaoOverlay extends Service {
             ballHappy = loadOpt("ball_happy.png");
             ballSleep = loadOpt("ball_sleep.png");
             ballSur = loadOpt("ball_sur.png");
+            peekArt = loadOpt("peek.png");
+            // 2026-11-22 夜：形象不再「一张图定住」，改成按骨骼权重做网格变形。
+            // 先把八帧拆成独立位图，变形时直接取当前帧，省掉每帧 createBitmap。
+            try {
+                if (sheet != null && fN > 0 && fw > 0) {
+                    frames = new Bitmap[fN];
+                    for (int i = 0; i < fN; i++) {
+                        frames[i] = Bitmap.createBitmap(sheet, i * fw, 0, fw, fh);
+                    }
+                }
+            } catch (Throwable e) {
+                frames = null;
+            }
             invalidate();
         }
 
@@ -721,9 +738,65 @@ public class DaoOverlay extends Service {
             c.drawOval(new RectF(w * 0.24f, h + bob - h * 0.03f, w * 0.76f, h + bob + h * 0.005f), sh);
             c.save();
             if (walking && walkDir < 0) { c.translate(w, 0); c.scale(-1f, 1f); }   // 向左走就把整帧镜像，别让它倒着迈步
+            if (vm == MODE_PEEK && side == SIDE_RIGHT) { c.translate(w, 0); c.scale(-1f, 1f); }   // 在右边扒边，手要朝右
+            if (vm == MODE_PEEK) { c.rotate((float) Math.sin(tick / 38.0) * 1.2f, w / 2f, h * 0.98f); }  // 探头时轻轻晃，不是一张死图
             c.translate(lean, 0);
-            c.drawBitmap(sheet, src, dst, p);
+            if (vm == MODE_PEEK && peekArt != null && !peekArt.isRecycled()) {
+                drawWarp(c, peekArt, 0, bob, w, h + bob, tick / 30.0, false, true);   // 贴边：半身探头 + 慢晃 + 呼吸 + 左右看
+            } else if (frames != null && fi >= 0 && fi < frames.length) {
+                drawWarp(c, frames[fi], 0, bob, w, h + bob, tick / 30.0, walking, false);
+            } else {
+                c.drawBitmap(sheet, src, dst, p);
+            }
             c.restore();
+        }
+
+        /**
+         * 2026-11-22 夜：立绘不再「贴一张图不动」，改成网格变形（相当于轻量骨骼）：
+         *   腰部以下摆、发梢延迟跟随、胸腔随呼吸起伏、头部轻侧倾、走路时下身前后剪切。
+         * 顶点按高度给权重，所以不会出现切图拼接的接缝。
+         */
+        void drawWarp(Canvas c, Bitmap bm, float left, float top, float w, float h, double t, boolean walk, boolean peek) {
+            if (bm == null || bm.isRecycled()) return;
+            final int COLS = 8, ROWS = 12;
+            float[] v = new float[(COLS + 1) * (ROWS + 1) * 2];
+            float breath = (float) Math.sin(t * 1.05);
+            float sway = (float) Math.sin(t * 0.52);
+            float lag = (float) Math.sin(t * 0.52 - 0.8);
+            float tilt = (float) Math.sin(t * 0.47 + 0.5);
+            float step = walk ? (float) Math.sin(t * 5.2) : 0f;
+            float look = (float) Math.sin(t * 0.34);          // 靠墙站时左右看，约 18 秒一个来回
+            float hand = (float) Math.max(0f, Math.sin(t * 1.1));  // 手轻轻抬一下，半拍抬起半拍放下
+            int i = 0;
+            for (int r = 0; r <= ROWS; r++) {
+                float ny = r / (float) ROWS;
+                float baseY = top + h * ny;
+                for (int cc = 0; cc <= COLS; cc++) {
+                    float nx = cc / (float) COLS;
+                    float baseX = left + w * nx;
+                    float dx = 0.013f * w * sway * (float) Math.pow(ny, 1.7f)
+                             + 0.011f * w * lag * (float) Math.pow(ny, 2.3f);
+                    float dy = -0.007f * h * breath * (float) Math.exp(-Math.pow((ny - 0.44) / 0.20, 2));
+                    if (ny < 0.30f) dx += tilt * (0.30f - ny) * h * 0.7f;          // 头部侧倾，脖子以下是支点
+                    if (peek) {
+                        // 靠墙站：别像钉在墙上。呼吸加重、上身随重心慢慢挪、头左右看、空着的手抬一抬
+                        dy += -0.003f * h * breath;
+                        dx += 0.016f * w * (float) Math.sin(t * 0.6) * ny * ny;
+                        if (ny < 0.32f) dx += 0.022f * w * look * (0.32f - ny) / 0.32f;
+                        if (nx < 0.26f && ny > 0.10f && ny < 0.42f) {
+                            dx += 0.028f * w * hand * (1f - ny / 0.42f);
+                            dy -= 0.020f * h * hand * (1f - nx / 0.26f);
+                        }
+                    }
+                    if (walk && ny > 0.55f) {                                       // 走路：下半身前后摆，脚下跟着起伏
+                        dx += 0.020f * w * step * (ny - 0.55f) / 0.45f;
+                        dy += -Math.abs(step) * 0.010f * h * ny * ny;
+                    }
+                    v[i++] = baseX + dx;
+                    v[i++] = baseY + dy;
+                }
+            }
+            c.drawBitmapMesh(bm, COLS, ROWS, v, 0, null, 0, p);
         }
 
         void drawBall(Canvas c, int w, int h) {

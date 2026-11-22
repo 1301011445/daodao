@@ -1,4 +1,5 @@
-﻿# 每日图标轮换：按一年中的第几天挑当天的 ico，覆盖 current.ico，改桌面/开始菜单快捷方式图标
+﻿# 程序版本：v0.1 | 2026-11-22 | 基线建档（此前无版本头）
+# 每日图标轮换：按一年中的第几天挑当天的 ico，覆盖 current.ico，改桌面/开始菜单快捷方式图标
 $ErrorActionPreference = 'Continue'
 $root = 'F:\Daodao'
 $icoDir = Join-Path $root 'icons\ico'

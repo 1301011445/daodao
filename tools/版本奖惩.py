@@ -1,4 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
+# 程序版本：v0.2 | 2026-11-22 | 修正路径：LANDING/ONLINE 改指当前落地页与 app_17jdxkgf27q
 """版本更新检测 + 版本内容真实使用 的奖惩结算（2026-11-18 加）
 
 用户要求：「版本更新检测奖励惩罚机制也要有，版本内容要定期真实使用。」
@@ -30,8 +31,8 @@ JOY = os.path.join(STATE, '愉悦值.json')
 BOOK = os.path.join(STATE, '版本账本.json')
 USE = os.path.join(STATE, '版本使用.json')
 PHONE = os.path.join(ROOT, '手机自检.txt')
-LANDING = os.path.join(ROOT, '引导页_src', 'index.html')
-ONLINE = 'https://4mf81m04wehh3.doubao.link/app/app_17hnj8acgs2'
+LANDING = r'C:\Users\LDY\Doubao\chats\2026-11-11\new-chat\道落地页\道_落地页_v069.html'  # 2026-11-22 改：原 引导页_src\index.html 是旧副本（data-ver 停在 69）
+ONLINE = 'https://4mf81m04wehh3.doubao.link/app/app_17jdxkgf27q'  # 2026-11-22 改：旧 app_17hnj8acgs2 线上还是 62，已换现用落地页 app
 
 DOUBLE_DAY = 3      # 落后多少天才开始扣
 STALL_DAY = 3       # 连续多少天没真用才扣

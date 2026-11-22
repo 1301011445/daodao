@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 程序版本：v0.1 | 2026-11-22 | 基线建档（此前无版本头）
 """学习复现日历：按 1/3/7/21 天把学过的类别排进复现日，并核对有没有真复现过
 
 数据来源：
@@ -82,12 +83,20 @@ def main():
         fails += 1
 
     # R3
-    bad = [r for r in recs if r[2] and not os.path.exists(r[2])]
+    # 2026-11-22 修确定性：复现记录里写的是「脚本路径 + 参数」（如 ...\评审.py --frames），
+    # 以前直接拿整串去 exists() 判，带参数就必然 FAIL，属于假失败。现在只取第一段路径。
+    def script_path(cell):
+        s = (cell or "").strip()
+        if not s:
+            return ""
+        s = s.split(" ")[0].strip().strip('"')
+        return s
+    bad = [r for r in recs if script_path(r[2]) and not os.path.exists(script_path(r[2]))]
     print(("PASS" if not bad else "FAIL") + " | R3 复现脚本存在 | 坏 %d/%d" % (len(bad), len(recs)))
     if bad:
         fails += 1
         for r in bad:
-            print("    缺文件", r[2])
+            print("    缺文件", script_path(r[2]))
 
     # R4
     early = []

@@ -378,6 +378,45 @@ def do_listen():
     return 0
 
 
+def do_wake():
+    """常驻听：一轮接一轮地录、认，每句打一行 JSON；stdin 收 p 暂停、收 r 继续。
+    以前是每句都重新起一次 python，冷启动 1-2 秒，唤醒总是慢半拍。
+    现在进程不重启，模型只加载一次，中间只等 VAD 说完。"""
+    import sys
+    import threading
+    import time
+    _pause = {"v": False}
+
+    def watch():
+        try:
+            for line in sys.stdin:
+                c = (line or "").strip().lower()
+                if c == "p":
+                    _pause["v"] = True
+                elif c == "r":
+                    _pause["v"] = False
+                elif c == "q":
+                    os._exit(0)
+        except Exception:
+            pass
+
+    threading.Thread(target=watch, daemon=True).start()
+    while True:
+        try:
+            if _pause["v"]:
+                time.sleep(0.2)
+                continue
+            audio = record()
+            import numpy as np
+            rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2))) if audio.size else 0.0
+            text = recognize()
+            print(json.dumps({"rms": round(rms, 1), "text": text}, ensure_ascii=False), flush=True)
+            time.sleep(0.05)
+        except Exception as e:
+            print(json.dumps({"rms": 0, "text": "", "err": repr(e)}, ensure_ascii=False), flush=True)
+            time.sleep(0.5)
+
+
 def do_probe():
     out = {}
     try:
@@ -421,6 +460,8 @@ def main():
             return do_chat()
         if cmd == "listen":
             return do_listen()
+        if cmd == "wake":
+            return do_wake()
         if cmd == "say":
             speak(" ".join(args) if args else "你好，我是道。")
             return 0

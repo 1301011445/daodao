@@ -1,4 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
+# 程序版本：v0.2 | 2026-11-22 | 修正误报：台账累计超上限属正常，只比「现值 vs 裁剪结果」
 """愉悦值与问题库的自动检查 / 结算（道 自省用）
 
 做三件事：
@@ -242,9 +243,15 @@ def main():
     # ---------- 体检 ----------
     total = sum(int(r.get('分值', 0)) for r in joy.get('记录', []))
     lo, hi = joy.get('区间', [0, 100])
-    if total < lo or total > hi:
-        warn.append('愉悦值算出来是 %d，跑到区间 %s 外面了，台账可能被手改过' % (total, joy.get('区间')))
-    joy['当前愉悦值'] = max(lo, min(hi, total))
+    clipped = max(lo, min(hi, total))
+    # 2026-11-22 改：台账累计超过上限是正常的（到顶后加分被裁剪），
+    # 只有在「现值 ≠ 裁剪结果」时才说明台账被动过，避免每天报一次假 WARN
+    prev = joy.get('当前愉悦值')
+    if prev is not None and int(prev) != clipped:
+        warn.append('愉悦值现值 %s 与台账裁剪结果 %d 不符（台账可能被手改，或裁剪没落账）' % (prev, clipped))
+    if total > hi:
+        out.append('  愉悦值台账累计 %d，按区间 %d-%d 裁剪后现值 %d（到顶后不再涨，正常）' % (total, lo, hi, clipped))
+    joy['当前愉悦值'] = clipped
 
     for r in joy.get('记录', []):
         if '时间' not in r or '分值' not in r or '理由' not in r:

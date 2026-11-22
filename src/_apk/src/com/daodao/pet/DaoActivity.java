@@ -28,6 +28,11 @@ public class DaoActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(true);
         s.setAllowContentAccess(true);
+        // 2026-11-22：页面在 file:///android_asset 下，允许它自己去读 assets（曲库兜底用）
+        try {
+            s.setAllowFileAccessFromFileURLs(true);
+            s.setAllowUniversalAccessFromFileURLs(true);
+        } catch (Exception e) { }
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setLoadWithOverviewMode(false);
         s.setUseWideViewPort(true);
@@ -77,6 +82,28 @@ public class DaoActivity extends Activity {
 
         web.loadUrl("file:///android_asset/dao.html");
         setContentView(web);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        try {
+            // 2026-11-22：浮窗要知道「道」是不是在前台——在前台就自己躲起来，不挡页面
+            android.content.SharedPreferences p = getSharedPreferences(DaoOverlay.SP, MODE_PRIVATE);
+            p.edit().putInt("app", 1).apply();
+            if (p.getBoolean("want", false) && DaoOverlay.canDraw(this)) {
+                DaoOverlay.start(this, p.getInt("mode", DaoOverlay.MODE_PEEK));
+            }
+        } catch (Exception e) { }
+    }
+
+    @Override
+    protected void onPause() {
+        try {
+            // 退回桌面 / 去别的应用，浮窗再出来
+            getSharedPreferences(DaoOverlay.SP, MODE_PRIVATE).edit().putInt("app", 0).apply();
+        } catch (Exception e) { }
+        super.onPause();
     }
 
     @Override

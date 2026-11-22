@@ -42,7 +42,7 @@
     padding: 10px 14px calc(13px + env(safe-area-inset-bottom, 0px));
     display: flex; flex-direction: column; gap: 9px; width: 100%;
   }
-  #bar .minis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; width: 100%; }
+  #bar .minis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; width: 100%; }
   button {
     display: inline-block; margin: 0; border-radius: 999px;
     background: rgba(118,158,255,.15); color: #cfdcff; font-size: 15px;
@@ -66,8 +66,36 @@
     border: 1px solid rgba(150,186,255,.42);
     box-shadow: 0 6px 18px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.10);
   }
+  #btnTalk { touch-action: none; -webkit-user-select: none; user-select: none; }
   #btnTalk.listening { background: linear-gradient(180deg, rgba(120,220,170,.55), rgba(60,170,130,.35)); border-color: rgba(150,255,210,.7); }
   #btnTalk:active { transform: translateY(1px); background: linear-gradient(180deg, rgba(126,166,255,.50), rgba(90,126,214,.34)); }
+  /* 手机桌面上浮窗的面板：跟电脑端「我在桌面上的样子」一一对应 */
+  #ovPanel {
+    position: fixed; left: 12px; right: 12px;
+    bottom: calc(138px + env(safe-area-inset-bottom, 0px)); z-index: 10055;
+    display: none; padding: 13px 14px 12px;
+    background: linear-gradient(180deg, rgba(17,27,50,.97), rgba(10,15,31,.97));
+    border: 1px solid rgba(130,170,255,.34); border-radius: 18px;
+    box-shadow: 0 18px 46px rgba(0,0,0,.55);
+  }
+  #ovPanel.show { display: block; }
+  #ovHd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  #ovHd b { font-size: 15px; letter-spacing: 1px; color: #eaf1ff; font-weight: 600; }
+  #ovClose { width: 30px; height: 30px; border-radius: 50%; font-size: 16px; line-height: 1; padding: 0; }
+  #ovGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  #ovGrid button {
+    min-height: 46px; border-radius: 14px; font-size: 14px;
+    background: linear-gradient(180deg, rgba(126,166,255,.15), rgba(96,132,220,.09));
+    border: 1px solid rgba(140,178,255,.26);
+  }
+  #ovGrid button.on {
+    background: linear-gradient(180deg, rgba(126,196,255,.40), rgba(80,140,220,.28));
+    border-color: rgba(160,220,255,.75); color: #fff;
+  }
+  #ovRow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  #ovRow button { min-height: 42px; border-radius: 14px; font-size: 13.5px; }
+  #ovFt { margin-top: 10px; font-size: 12.5px; line-height: 1.6; color: #9db2d8; }
+  #ovFt button { font-size: 12.5px; padding: 4px 11px; border-radius: 10px; margin-left: 2px; }
   /* 气泡加个小尾巴，指着说话的人，不然像屏幕贴了张便签 */
   #bubble::after {
     content: ''; position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%);
@@ -205,12 +233,27 @@
       </div>
     </div>
   </div>
+  <div id="ovPanel">
+    <div id="ovHd"><b>我在手机桌面上的样子</b><button id="ovClose" aria-label="关上">×</button></div>
+    <div id="ovGrid">
+      <button data-m="0">满身站着</button>
+      <button data-m="1">贴边偷看</button>
+      <button data-m="2">缩成小圆球</button>
+      <button data-m="3">收起（留通知）</button>
+    </div>
+    <div id="ovRow">
+      <button id="ovSide">换一边</button>
+      <button id="ovOff">从桌面拿下来</button>
+    </div>
+    <div id="ovFt">第一次用要在系统里放行「显示在其他应用上层」。<button id="ovPerm">去开权限</button></div>
+  </div>
   <div id="bar">
     <div class="minis">
       <button id="btnSwap"><span class="lb">换形象</span></button>
       <button id="btnAct"><span class="lb">换动作</span></button>
       <button id="btnSong"><span class="lb">唱歌</span></button>
       <button id="btnNote"><span class="lb">记事本</span></button>
+      <button id="btnDesk"><span class="lb">上桌面</span></button>
     </div>
     <button id="btnTalk">跟它说话</button>
   </div>
@@ -483,6 +526,38 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
     actKind = actOfMode(lockMode);
     actAmt = 1;
     sceneIdx = sceneForAct(actKind);
+  }
+
+  // 2026-11-22 Q-083：内嵌 webp 有不少「alpha=0 但 RGB 还留着紫」的像素。WebView 缩放时
+  // 若没按预乘处理，这些看不见的颜色会顺着插值渗出来，就是深色底上的紫晕/粉晕。
+  // 绘制前先过一遍：全透明处 RGB 归零；alpha 很低又是偏紫的，把绿提起来压掉紫味。
+  // 结果按源对象缓存，同一张图只算一次。
+  function SPR(src) {
+    if (!src) return src;
+    if (src.__clean) return src.__clean;
+    try {
+      var w = src.naturalWidth || src.width, hh = src.naturalHeight || src.height;
+      if (!w || !hh) return src;
+      var c = document.createElement('canvas');
+      c.width = w; c.height = hh;
+      var g = c.getContext('2d');
+      g.drawImage(src, 0, 0);
+      var d = g.getImageData(0, 0, w, hh), p = d.data, n = p.length;
+      for (var i = 0; i < n; i += 4) {
+        var a = p[i + 3];
+        if (a < 6) { p[i] = 0; p[i + 1] = 0; p[i + 2] = 0; }
+        else if (a < 200) {
+          // 淡边（a<200）上的粉/紫：直接把绿抬到 min(R,B)，去掉紫味但不改亮度太多
+          var r = p[i], gg = p[i + 1], b = p[i + 2], mn = Math.min(r, b);
+          if (r > 110 && b > 110 && gg < mn * 0.85) {
+            p[i + 1] = mn;
+          }
+        }
+      }
+      g.putImageData(d, 0, 0);
+      src.__clean = c;
+      return c;
+    } catch (e) { return src; }
   }
 
   function resize() {
@@ -862,7 +937,7 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
     // 御剑：剑客配了专属的踩剑姿势，整张换掉，剑就在图里
     if (species === 8 && actKind === 2 && actAmt > 0.25 && swordIm8.complete && swordIm8.naturalWidth) {
       var swW = TARGET_H * (swordIm8.naturalWidth / swordIm8.naturalHeight);
-      ctx.drawImage(swordIm8, -swW / 2, -TARGET_H, swW, TARGET_H);
+      ctx.drawImage(SPR(swordIm8), -swW / 2, -TARGET_H, swW, TARGET_H);
       ctx.restore();
       return;
     }
@@ -881,7 +956,7 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
         // translate(CX+dx+walkX+swayX,...) 时 x 变成 NaN，整幅人物就再也画不出来。
         var dSway = 4 * actAmt * Math.sin(beat);
         var swayY = -6 * actAmt * Math.abs(Math.sin(beat * 2));
-        ctx.drawImage(dIm, -dW / 2 + dSway, -TARGET_H + swayY, dW, TARGET_H);
+        ctx.drawImage(SPR(dIm), -dW / 2 + dSway, -TARGET_H + swayY, dW, TARGET_H);
         ctx.restore();
         return;
       }
@@ -893,7 +968,7 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
       var wIm = walkImgs8[wIdx];
       if (wIm.complete && wIm.naturalWidth) {
         var wW = TARGET_H * (wIm.naturalWidth / wIm.naturalHeight);
-        ctx.drawImage(wIm, -wW / 2, -TARGET_H, wW, TARGET_H);
+        ctx.drawImage(SPR(wIm), -wW / 2, -TARGET_H, wW, TARGET_H);
         ctx.restore();
         return;
       }
@@ -902,7 +977,7 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
     if (poseP >= 0 && curPose && curPose[poseP] && curPose[poseP].complete && curPose[poseP].naturalWidth) {
       var pim2 = curPose[poseP];
       var pwid = TARGET_H * (pim2.naturalWidth / pim2.naturalHeight);
-      ctx.drawImage(pim2, -pwid / 2, -TARGET_H, pwid, TARGET_H);
+      ctx.drawImage(SPR(pim2), -pwid / 2, -TARGET_H, pwid, TARGET_H);
       // v0.93：这一支是提前 return 的，函数末尾那次 drawActProps(true) 永远走不到，
       // 于是电视 / 茶杯热气 / 滑板这些身前道具对有姿势图的形象全都画不出来。这里补上。
       drawActProps(true);
@@ -918,7 +993,7 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
       var fi = walkF * fw;
       ctx.save();
       if (walkDir < 0) ctx.scale(-1, 1);                 // 朝左走就整帧镜像
-      ctx.drawImage(walkSheet, fi, 0, fw, fh, -fwD / 2, -TARGET_H, fwD, TARGET_H);
+      ctx.drawImage(SPR(walkSheet), fi, 0, fw, fh, -fwD / 2, -TARGET_H, fwD, TARGET_H);
       ctx.restore();
       ctx.restore();
       return;
@@ -944,7 +1019,7 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
       syp = i * stripH * imgScale;
       shp = Math.min(img.naturalHeight - syp, sh * imgScale);
       if (shp <= 0.5) continue;
-      ctx.drawImage(img, 0, syp, img.naturalWidth, shp, -baseW / 2 + off, yy, baseW, sh);
+      ctx.drawImage(SPR(img), 0, syp, img.naturalWidth, shp, -baseW / 2 + off, yy, baseW, sh);
     }
 
     var fyp = FY[species] || 0.36, fwp = FW[species] || 0.55;
@@ -1470,7 +1545,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER='107';
+  var HTML_VER = '112';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -1647,9 +1722,9 @@ setInterval(daoSyncJoy, 60000);
 
   function tip(msg) {
     var t = el('div',
-      'position:fixed;left:50%;transform:translateX(-50%);bottom:84px;z-index:10000;' +
+      'position:fixed;left:50%;transform:translateX(-50%);bottom:140px;z-index:10060;' +
       'max-width:80vw;padding:9px 14px;border-radius:12px;background:rgba(0,0,0,.78);color:#fff;' +
-      'font-size:15px;line-height:1.45;font-family:system-ui,sans-serif;');
+      'font-size:15px;line-height:1.45;font-family:system-ui,sans-serif;pointer-events:none;');
     t.textContent = msg;
     document.body.appendChild(t);
     setTimeout(function () { try { t.remove(); } catch (e) {} }, 2600);
@@ -2137,10 +2212,13 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     } catch (e) {}
   }, 2000);
 
-  // 「跟它说话」：轻点＝直接开口说话（语音对话，再点一下结束并识别）
+  // 「跟它说话」：2026-11-22 按用户要求改成「按住说，松手发」——对话按长按时长算。
+  // 按下就开始录，松手结束并让原生识别；按不到 0.35 秒当误触，只提示不硬发；
+  // 按住期间按钮上实时显示已按多少秒，看得见这一句说了多长。
   var streamed = false;
   var talkBtn = document.getElementById('btnTalk');
   var listening = false;
+  var holdT0 = 0, holdTick = null;
 
   function startListen() {
     if (!(window.DaoNative && (DaoNative.listenCloud || DaoNative.listen))) {
@@ -2151,18 +2229,51 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     try { if (window.DaoNative && DaoNative.stopAll) DaoNative.stopAll(); } catch (e) {}
     talkBtn.classList.add('listening');
     try { if (DaoNative.listenCloud) DaoNative.listenCloud('mic'); else DaoNative.listen('mic'); } catch (e) {}
-    tip('我在听…说完再点一下');
+    tip('按住别松，说完松手');
   }
   function stopListen() {
     listening = false;
     talkBtn.classList.remove('listening');
     try { if (DaoNative.stopListenCloud) DaoNative.stopListenCloud(); else if (DaoNative.stopListen) DaoNative.stopListen(); } catch (e) {}
-    tip('好，我听听…');
+    tip('听完了，我在想…');
   }
-  // v0.88：打字功能按用户要求删除，长按不再有任何作用，「跟它说话」只剩轻点说话
-  talkBtn.addEventListener('pointerup', function (e) {
-    e.preventDefault();
-    if (listening) stopListen(); else startListen();
+  function abortListen() {
+    listening = false;
+    try { talkBtn.classList.remove('listening'); } catch (e) {}
+    try { if (window.DaoNative && DaoNative.stopListenCloud) DaoNative.stopListenCloud(); else if (window.DaoNative && DaoNative.stopListen) DaoNative.stopListen(); } catch (e) {}
+  }
+  function holdLabel(ms) {
+    var s = (ms / 1000).toFixed(1);
+    try { talkBtn.textContent = '🔴 说…' + s + 's（松手就发）'; } catch (e) {}
+  }
+  function startHold(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (holdT0) return;                       // 已经在按着，别重复开录
+    holdT0 = Date.now();
+    if (!listening) startListen();
+    holdLabel(0);
+    if (holdTick) clearInterval(holdTick);
+    holdTick = setInterval(function () { holdLabel(Date.now() - holdT0); }, 200);
+  }
+  function endHold(cancel) {
+    if (!holdT0) return;                      // 没在按，忽略重复的 up/cancel
+    var held = Date.now() - holdT0;
+    holdT0 = 0;
+    if (holdTick) { clearInterval(holdTick); holdTick = null; }
+    try { talkBtn.textContent = '跟它说话'; } catch (e) {}
+    if (cancel) { abortListen(); tip('松开了，这句不算'); return; }
+    if (listening) stopListen();
+    if (held < 350) tip('按太短了（' + (held / 1000).toFixed(1) + ' 秒），按住说满半秒再松手');
+    else tip('这一句 ' + (held / 1000).toFixed(1) + ' 秒，发出去了');
+  }
+  talkBtn.addEventListener('pointerdown', function (e) { startHold(e); });
+  talkBtn.addEventListener('pointerup', function (e) { e.preventDefault(); endHold(false); });
+  talkBtn.addEventListener('pointercancel', function () { endHold(true); });
+  // 手指滑出按钮再松：按钮上收不到 up，用 document 兜住
+  document.addEventListener('pointerup', function (e) {
+    if (!holdT0) return;
+    if (e && e.target === talkBtn) return;    // 按钮自己的 up 处理过了
+    endHold(false);
   });
 
   // ---------- 对话 ----------
@@ -2210,10 +2321,28 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
   // 曲子是 IMA ADPCM 压的（tools\音乐\手机曲库\adpcm.py），体积约原 wav 的 1/4，
   // WebView 的 file:// 不给 XHR 读 assets，所以走 DaoNative.assetB64 取字节再自己解
   var SONGS = [
+    { k: 'gongzuo_sing', f: 'music/gongzuo_sing.m4a', t: '把好日子扛在肩上（演唱）' },
     { k: 'guitu',    f: 'music/guitu.adp',    t: '归途的月光' },
-    { k: 'gongzuo',  f: 'music/gongzuo.adp',  t: '把好日子扛在肩上' },
+    { k: 'gongzuo',  f: 'music/gongzuo.adp',  t: '把好日子扛在肩上（器乐）' },
     { k: 'shaonian', f: 'music/shaonian.adp', t: '少年模样' }
   ];
+  // 演唱那首的歌词与时间点（来自 曲库\把好日子扛在肩上_词.md）
+  var LYRICS = {
+    gongzuo_sing: [
+      { t: 17.1, s: '清早出门天刚放亮' }, { t: 21.0, s: '一路小跑心里敞亮' },
+      { t: 25.0, s: '活再琐碎也做成样' }, { t: 29.0, s: '抬头笑说今天照常' },
+      { t: 34.3, s: '好日子就在我肩上' }, { t: 38.3, s: '一步一寸也是成长' },
+      { t: 42.3, s: '风大雨急心不慌忙' }, { t: 46.3, s: '心里的光自己点亮' },
+      { t: 68.6, s: '下班路上街灯正亮' }, { t: 72.6, s: '手里的活做得漂亮' },
+      { t: 76.6, s: '累了想想家里灯光' }, { t: 80.6, s: '明天还有新的太阳' },
+      { t: 85.7, s: '好日子就在我肩上' }, { t: 89.7, s: '一步一寸也是成长' },
+      { t: 93.7, s: '风大雨急心不慌忙' }, { t: 97.7, s: '心里的光自己点亮' },
+      { t: 102.9, s: '平常人自有他的光' }, { t: 106.9, s: '慢慢走也能到远方' },
+      { t: 110.9, s: '心里有数就不慌张' }, { t: 114.9, s: '一天更比一天更强' },
+      { t: 145.7, s: '好日子就在我肩上' }, { t: 149.7, s: '一步一寸也是成长' },
+      { t: 153.7, s: '风大雨急心不慌忙' }, { t: 157.7, s: '心里的光自己点亮' }
+    ]
+  };
   var STEPS = [7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,
     73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,
     494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,
@@ -2258,76 +2387,281 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     return { sr: sr, pcm: pcm.subarray(0, o) };
   }
 
-  function stopMusic() {
+  var rows = [], statusEl = null, lyricEl = null;
+  var songSt = 'idle', songPosSec = 0, songLastPos = -1, stallCnt = 0, pollTimer = null, songTotal = 0;
+  var outsideH = null;
+
+  function setStatus(msg, isErr) {
+    if (!statusEl) return;
+    statusEl.textContent = msg || '';
+    statusEl.style.color = isErr ? '#ff9c9c' : '#9fb6d9';
+  }
+  function rowText(i) {
+    var s = SONGS[i];
+    if (i !== playing) return s.t;
+    if (songSt === 'load') return s.t + '  …载入中';
+    if (songSt === 'play') return s.t + '  ♪ ' + songPosSec.toFixed(1) + ' / ' + songTotal + ' 秒';
+    if (songSt === 'err') return s.t + '  ✕ 失败';
+    return s.t;
+  }
+  function paintRows() {
+    for (var _i = 0; _i < rows.length; _i++) {
+      var r = rows[_i], on = (playing === _i);
+      r.style.background = on ? (songSt === 'err' ? 'rgba(255,120,120,.24)' : 'rgba(118,158,255,.42)') : 'rgba(118,158,255,.16)';
+      r.style.borderColor = on ? (songSt === 'err' ? 'rgba(255,150,150,.7)' : 'rgba(170,200,255,.75)') : 'rgba(118,158,255,.16)';
+      r.textContent = rowText(_i);
+    }
+  }
+
+  // 进度：直接问原生「真写进去多少采样」，不再凭「起了个线程」就当播放中。
+  // 2.4 秒没往前走，标失败并附诊断；peak=0 说明解出来就是静音。
+  function startPoll() {
+    if (pollTimer) return;
+    pollTimer = setInterval(function () {
+      if (playing < 0) { stopPoll(); return; }
+      var d = -1;
+      try { d = (window.DaoNative && DaoNative.songPos) ? Number(DaoNative.songPos()) : -1; } catch (e) { d = -1; }
+      if (songSt === 'play' && d >= 0) {
+        if (d > songLastPos + 0.001) { stallCnt = 0; songPosSec = d; } else { stallCnt++; }
+        songLastPos = d;
+        if (stallCnt >= 6) {
+          songSt = 'err';
+          var dg = '';
+          try { dg = (window.DaoNative && DaoNative.songDiag) ? String(DaoNative.songDiag()) : ''; } catch (e2) { }
+          setStatus('播放没在走：' + dg + '（查音量/耳机，或这台的音频流不正常）', true);
+        }
+        paintRows();
+        if (lyricEl) {
+          var sk = SONGS[playing] ? SONGS[playing].k : '';
+          var ly = LYRICS[sk];
+          if (ly) {
+            var cur = '';
+            for (var li = 0; li < ly.length; li++) { if (ly[li].t <= songPosSec + 0.7) cur = ly[li].s; }
+            lyricEl.textContent = cur ? '♪ ' + cur : '';
+          }
+        }
+      }
+    }, 400);
+  }
+  function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+  // 2026-11-22 用户报「按了一次唱歌，就没办法按第二次」：原来 stopMusic 停声音又 remove 面板却不置空 win。
+  // 拆成三件事各管各的：停声音 / 关面板 / 重画。
+  function stopAudio() {
     try { if (window.DaoNative && DaoNative.stopSong) DaoNative.stopSong(); } catch (e) {}
     try { if (srcNode) { srcNode.stop(); srcNode = null; } } catch (e) {}
-    playing = -1;
-    if (win) win.remove();
+    playing = -1; songSt = 'idle'; songPosSec = 0; songLastPos = -1; stallCnt = 0;
+    if (lyricEl) lyricEl.textContent = '';
+    stopPoll(); paintRows();
   }
+  function closePanel() {
+    if (win) { try { win.remove(); } catch (e) {} win = null; }
+    rows = []; statusEl = null; lyricEl = null;
+    if (outsideH) { try { document.removeEventListener('pointerdown', outsideH, true); } catch (e) {} outsideH = null; }
+  }
+  function stopMusic() { stopAudio(); closePanel(); }
 
   var win = null;
   function musicPanel() {
     if (win) { stopMusic(); return; }
     win = el('div',
-      'position:fixed;left:12px;right:12px;bottom:74px;z-index:10001;padding:12px;border-radius:16px;' +
-      'background:rgba(14,20,40,.96);color:#e8eeff;font-family:system-ui,sans-serif;font-size:16px;' +
-      'box-shadow:0 8px 30px rgba(0,0,0,.45);');
-    var hd = el('div', 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;');
+      'position:fixed;left:12px;right:12px;bottom:96px;z-index:10002;padding:12px 12px 10px;border-radius:16px;' +
+      'background:rgba(14,20,40,.97);color:#e8eeff;font-family:system-ui,sans-serif;font-size:16px;' +
+      'box-shadow:0 8px 30px rgba(0,0,0,.5);touch-action:manipulation;-webkit-user-select:none;user-select:none;');
+    var hd = el('div', 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;');
     hd.appendChild(el('div', 'font-size:15px;opacity:.8;', '道自己的歌（手机本地放）'));
-    var x = el('div', 'padding:4px 10px;font-size:20px;line-height:1;', '×');
-    x.addEventListener('click', stopMusic);
-    hd.appendChild(x);
+    var box = el('div', 'display:flex;align-items:center;');
+    var pp = el('div', 'padding:5px 12px;margin-right:6px;font-size:13px;border-radius:9px;background:rgba(118,158,255,.22);', '暂停');
+    pp.addEventListener('click', function (ev) {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      try {
+        if (window.DaoNative && DaoNative.isPaused && DaoNative.isPaused()) {
+          DaoNative.resumeSong(); pp.textContent = '暂停';
+        } else {
+          DaoNative.pauseSong(); pp.textContent = '继续';
+        }
+      } catch (e) { }
+    });
+    var ff = el('div', 'padding:5px 12px;margin-right:6px;font-size:13px;border-radius:9px;background:rgba(118,158,255,.22);', '+30秒');
+    ff.addEventListener('click', function (ev) {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      try {
+        if (window.DaoNative && DaoNative.seekSong) {
+          var ok = DaoNative.seekSong(Math.max(0, songPosSec + 30));
+          setStatus(ok ? '跳到 ' + Math.round(songPosSec + 30) + ' 秒' : '这首还不能跳，先停一下再点');
+        }
+      } catch (e) { }
+    });
+    var sp = el('div', 'padding:5px 12px;margin-right:6px;font-size:13px;border-radius:9px;background:rgba(118,158,255,.22);', '停止');
+    sp.addEventListener('click', function (ev) {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      stopAudio(); setStatus('停了；再点一行就重新放');
+    });
+    var x = el('div', 'padding:4px 10px;font-size:22px;line-height:1;', '×');
+    x.addEventListener('click', function (ev) {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      stopMusic();
+    });
+    box.appendChild(pp); box.appendChild(ff); box.appendChild(sp); box.appendChild(x); hd.appendChild(box);
     win.appendChild(hd);
+    statusEl = el('div', 'font-size:12px;line-height:1.45;color:#9fb6d9;min-height:17px;margin:2px 2px 2px;word-break:break-all;', '');
+    win.appendChild(statusEl);
+    lyricEl = el('div', 'font-size:15px;line-height:1.5;color:#ffe6a8;min-height:22px;margin:0 2px 4px;', '');
+    win.appendChild(lyricEl);
+    rows = [];
     SONGS.forEach(function (s, i) {
       var r = el('div',
         'display:flex;align-items:center;min-height:52px;padding:0 12px;margin-top:8px;' +
-        'border-radius:12px;background:rgba(118,158,255,.16);');
+        'border-radius:12px;border:1px solid rgba(118,158,255,.16);background:rgba(118,158,255,.16);');
       r.textContent = s.t;
       r.addEventListener('click', function () { playSong(i); });
       win.appendChild(r);
+      rows.push(r);
     });
     document.body.appendChild(win);
+    paintRows();
+    setStatus('点一首就放；再点这一行就停');
+    // 点面板外面也能收起来（原来只能去点右上角小 ×，手指容易点空）
+    outsideH = function (ev) {
+      if (win && ev && ev.target && !win.contains(ev.target)) stopMusic();
+    };
+    setTimeout(function () { try { document.addEventListener('pointerdown', outsideH, true); } catch (e) {} }, 0);
   }
+
+  var songPending = -1;
 
   function playSong(i) {
     var s = SONGS[i];
-    if (playing === i) { stopMusic(); return; }
-    stopMusic();
-    // 唱歌前先把朗读停掉，两路声音不能一起响
+    if (playing === i && songSt !== 'err') { stopAudio(); setStatus('停了'); return; }
+    if (!s) return;
+    stopAudio();
     try { if (window.DaoNative && DaoNative.stopAll) DaoNative.stopAll(); } catch (e) {}
     try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
-    playing = i;
-    tip('载入《' + s.t + '》…');
-    // 先交给原生：读 assets、解 ADPCM、写 wav、MediaPlayer 放（真机上就是这条路）
+    songPending = i; playing = i; songSt = 'load'; songPosSec = 0; songLastPos = -1; stallCnt = 0;
+    paintRows(); setStatus('载入《' + s.t + '》…（包内 6MB，解码要一两秒）');
+    startPoll();
     if (window.DaoNative && DaoNative.playSongAsset) {
       try {
-        var nr = String(DaoNative.playSongAsset(s.k || ''));
-        if (nr.indexOf('OK') === 0) { tip('正在放《' + s.t + '》，再点一下停'); return; }
-        tip(nr.replace(/^ERR\|/, ''));   // 原生不行就继续走下面的网页解码
-      } catch (e2) {}
-    }
-    try {
-      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
-      // 解一次缓存一次：同一首再点不用重新解码（4M 采样现解要一两秒）
-      var buf = songBufCache[s.f];
-      if (!buf) {
-        var b64 = (window.DaoNative && DaoNative.assetB64) ? DaoNative.assetB64(s.f) : '';
-        if (!b64) { tip('拿不到曲库文件'); return; }
-        var d = decodeAdp(b64ToBuf(b64));
-        buf = actx.createBuffer(1, d.pcm.length, d.sr);
-        buf.getChannelData(0).set(d.pcm);
-        songBufCache = {}; songBufCache[s.f] = buf;   // 只留最近一首，别把内存吃满
+        var nr = String(DaoNative.playSongAsset(s.k || '') || '');
+        if (nr.indexOf('START') === 0) return;      // 等 __daoSong 回话（OK 或 ERR）
+        if (nr.indexOf('OK') === 0) { songSt = 'play'; paintRows(); return; }
+        failSong(i, nr.replace(/^ERR\|?/, ''));
+        return;
+      } catch (e2) {
+        failSong(i, '桥接异常 ' + (e2 && e2.message ? e2.message : ''));
+        return;
       }
-      playingBuf = buf;
-      srcNode = actx.createBufferSource();
-      srcNode.buffer = buf;
-      srcNode.connect(actx.destination);
-      srcNode.onended = function () { if (playing === i) { playing = -1; } };
-      srcNode.start(0);
-      tip('正在放《' + s.t + '》，再点一下暂停');
-    } catch (e) { tip('放不了：' + e.message); playing = -1; }
+    }
+    failSong(i, '这一版没有原生播放接口');
   }
 
+  function failSong(i, msg) {
+    playing = i; songSt = 'err'; stopPoll(); paintRows();
+    setStatus('放不了：' + (msg || '未知原因'), true);
+    // 原生放不了才走网页解码；走之前先把原因摆出来，别再让人对着「播放中」干等
+    webPlay(i, msg || '');
+  }
+
+  window.__daoSong = function (evt) {
+    evt = String(evt || '');
+    var i = songPending, s = (i >= 0 && SONGS[i]) ? SONGS[i] : null;
+    var parts = evt.split('|');
+    var nm = parts[parts.length - 1];
+    if (evt.indexOf('ERR') === 0) {
+      var m = evt.replace(/^ERR\|?/, '').slice(0, 110);
+      if (typeof nm !== 'string') nm = '';
+      failSong(i >= 0 ? i : playing, m);
+      return;
+    }
+    if (evt.indexOf('OK|') === 0) {
+      var sec = parseFloat(parts[1]) || 0;
+      songTotal = Math.round(sec);
+      songSt = 'play'; songPosSec = 0; songLastPos = -1; stallCnt = 0;
+      startPoll(); paintRows();
+      setStatus('正在放《' + (s ? s.t : '这首') + '》共 ' + songTotal + ' 秒；点这一行停');
+      return;
+    }
+    if ((evt.indexOf('DONE') === 0 || evt.indexOf('STOP') === 0) && s && nm && nm !== s.k) return;
+    if (evt.indexOf('DONE') === 0 || evt.indexOf('STOP') === 0) {
+      playing = -1; songSt = 'idle'; stopPoll(); paintRows();
+      setStatus(evt.indexOf('DONE') === 0 ? '放完了' : '停了');
+    }
+  };
+
+  // 网页解码：XHR 异步取包内 adp（不再走 8MB base64 同步过桥），按帧分批解，每批让一次 UI
+  function webPlay(i, natErr) {
+    var s = SONGS[i];
+    if (!s) { playing = -1; paintRows(); return; }
+    setStatus('原生失败（' + (natErr || '未知') + '），改用网页解码…');
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', s.f, true);
+      xhr.responseType = 'arraybuffer';
+      xhr.onload = function () {
+        if (!xhr.response || xhr.response.byteLength < 16) { failSongPlain(i, '网页读不到 ' + s.f); return; }
+        decodeAsync(i, xhr.response);
+      };
+      xhr.onerror = function () { failSongPlain(i, '网页读不到 ' + s.f); };
+      xhr.send();
+    } catch (e) {
+      failSongPlain(i, '网页取包失败 ' + (e && e.message ? e.message : ''));
+    }
+  }
+  function failSongPlain(i, msg) {
+    playing = i; songSt = 'err'; paintRows();
+    setStatus('放不了：' + msg, true);
+  }
+
+  function decodeAsync(i, ab) {
+    var s = SONGS[i], dv = new DataView(ab);
+    var m = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
+    if (m !== 'DAO1') { failSongPlain(i, '网页解码：包头不是 DAO1'); return; }
+    var sr = dv.getUint32(4, true), nf = dv.getUint32(8, true);
+    if (!sr || !nf) { failSongPlain(i, '网页解码：头里 sr/帧数 是 0'); return; }
+    var total = nf * 2048;
+    try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { failSongPlain(i, '这台设备网页音频起不来'); return; }
+    if (actx.state === 'suspended' && actx.resume) { try { actx.resume(); } catch (e) {} }
+    var f32 = new Float32Array(total), o = 0, pos = 12, f = 0, peak = 0;
+    songTotal = Math.round(total / sr);
+    setStatus('网页解码中…共 ' + songTotal + ' 秒');
+    function step() {
+      var stopAt = f + 240;
+      for (; f < nf && f < stopAt; f++) {
+        var pred = dv.getInt16(pos, true), idx = dv.getUint8(pos + 2);
+        var end = Math.min(pos + 1028, dv.byteLength);
+        for (var b = pos + 4; b < end; b++) {
+          var by = dv.getUint8(b);
+          for (var k = 0; k < 2; k++) {
+            var code = k === 0 ? (by >> 4) & 15 : by & 15;
+            var st = STEPS[idx];
+            var delta = st >> 3;
+            if (code & 4) delta += st;
+            if (code & 2) delta += st >> 1;
+            if (code & 1) delta += st >> 2;
+            pred += (code & 8) ? -delta : delta;
+            if (pred > 32767) pred = 32767; else if (pred < -32768) pred = -32768;
+            idx += IDXT[code & 7];
+            if (idx < 0) idx = 0; else if (idx > 88) idx = 88;
+            if (o < total) { f32[o++] = pred; var a = pred < 0 ? -pred : pred; if (a > peak) peak = a; }
+          }
+        }
+        pos += 1028;
+      }
+      if (f < nf) { setTimeout(step, 0); return; }
+      if (peak === 0) { failSongPlain(i, '网页解码出来全是静音（包内数据是空的）'); return; }
+      try {
+        var buf = actx.createBuffer(1, Math.max(1, o), sr), ch = buf.getChannelData(0);
+        for (var q = 0; q < o; q++) ch[q] = f32[q] / 32768.0;
+        srcNode = actx.createBufferSource();
+        srcNode.buffer = buf; srcNode.connect(actx.destination);
+        srcNode.onended = function () { if (playing === i) { playing = -1; songSt = 'idle'; paintRows(); setStatus('放完了'); } };
+        srcNode.start(0);
+        playing = i; songSt = 'play'; songPosSec = 0; paintRows();
+        setStatus('正在放《' + s.t + '》（网页解码，' + songTotal + ' 秒）');
+      } catch (e) { failSongPlain(i, '网页播放失败 ' + (e && e.message ? e.message : '')); }
+    }
+    step();
+  }
 
   // 长按右上角「电脑」设电脑 IP（换 WiFi 时用）
   var tmr = null;
@@ -2341,6 +2675,87 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
   ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (k) {
     pcBtnEl.addEventListener(k, function () { if (tmr) { clearTimeout(tmr); tmr = null; } });
   });
+  // ---------- 手机桌面上（浮窗）----------
+  // 2026-11-22：电脑端那四种样子搬到手机上。点「上桌面」开面板，
+  // 选 满身 / 贴边偷看 / 小圆球 / 收起；真挂窗口的是原生 DaoOverlay 前台服务。
+  var ovPanel = document.getElementById('ovPanel');
+  var ovBtns = ovPanel ? ovPanel.querySelectorAll('#ovGrid button[data-m]') : [];
+  var ovSideBtn = document.getElementById('ovSide');
+  var ovPoll = null;
+
+  function ovHas() { return !!(window.DaoNative && DaoNative.overlayOn); }
+  function ovState() {
+    try { if (window.DaoNative && DaoNative.overlayState) return DaoNative.overlayState(); } catch (e) {}
+    return '0|1|2';
+  }
+  function ovPaint() {
+    var s = String(ovState()).split('|');
+    var on = s[0] === '1', m = parseInt(s[1], 10), sd = parseInt(s[2], 10);
+    for (var i = 0; i < ovBtns.length; i++) {
+      var k = parseInt(ovBtns[i].getAttribute('data-m'), 10);
+      if (on && k === m) ovBtns[i].classList.add('on'); else ovBtns[i].classList.remove('on');
+    }
+    if (ovSideBtn) ovSideBtn.textContent = '换一边（现在在' + (sd === 1 ? '左' : '右') + '边）';
+  }
+  function ovOpen() {
+    if (!ovHas()) { tip('这台设备没有浮窗通道，装到手机上才有'); return; }
+    ovPaint();
+    ovPanel.classList.add('show');
+    if (ovPoll) clearInterval(ovPoll);
+    ovPoll = setInterval(ovPaint, 900);
+  }
+  function ovClose() {
+    if (!ovPanel) return;
+    ovPanel.classList.remove('show');
+    if (ovPoll) { clearInterval(ovPoll); ovPoll = null; }
+  }
+  function ovNeedPerm() {
+    try { if (window.DaoNative && DaoNative.overlayReady && DaoNative.overlayReady() === '1') return false; } catch (e) {}
+    try { if (window.DaoNative && DaoNative.overlayAsk) DaoNative.overlayAsk(); } catch (e) {}
+    tip('先去系统设置里允许「显示在其他应用上层」，回来再点一次');
+    return true;
+  }
+  function ovCall(fn, arg) {
+    try { if (window.DaoNative && DaoNative[fn]) return DaoNative[fn](arg); } catch (e) { tip('叫不动浮窗'); }
+    return '';
+  }
+  if (ovPanel) {
+    document.getElementById('ovClose').addEventListener('click', ovClose);
+    document.getElementById('btnDesk').addEventListener('pointerdown', function (e) {
+      if (e && e.preventDefault) e.preventDefault();
+      if (ovPanel.classList.contains('show')) ovClose(); else ovOpen();
+    });
+    for (var oi = 0; oi < ovBtns.length; oi++) {
+      ovBtns[oi].addEventListener('click', function () {
+        var m = parseInt(this.getAttribute('data-m'), 10);
+        if (ovNeedPerm()) return;
+        if (m === 3 && ovState().split('|')[0] === '1') ovCall('overlayMode', 3);
+        else ovCall('overlayOn', m);
+        setTimeout(ovPaint, 400);
+        if (m === 3) tip('窗口收起来了，通知栏里还留着，点一下能唤回');
+        else if (m === 2) tip('缩成小球了，按主页键能看见它蹲在屏幕边上');
+        else if (m === 1) tip('去边上扒着了，按主页键能看到它扒着屏幕边');
+        else tip('满身站到桌面上了，按一下主页键看看');
+      });
+    }
+    document.getElementById('ovSide').addEventListener('click', function () {
+      if (ovNeedPerm()) return;
+      ovCall('overlaySide');
+      setTimeout(ovPaint, 400);
+      tip('换到另一边了');
+    });
+    document.getElementById('ovOff').addEventListener('click', function () {
+      ovCall('overlayOff');
+      setTimeout(ovPaint, 300);
+      ovClose();
+      tip('从桌面上拿下来了');
+    });
+    document.getElementById('ovPerm').addEventListener('click', function () {
+      if (window.DaoNative && DaoNative.overlayAsk) ovCall('overlayAsk');
+      else tip('这台设备开不了这个权限');
+    });
+  }
+
   window.daoStopMusic = stopMusic;
   window.daoMusicPanel = musicPanel;
   window.daoPlaySong = playSong;

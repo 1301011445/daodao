@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 程序版本：v0.1 | 2026-11-22 | 基线建档（此前无版本头）
 """响度体检（ITU-R BS.1770-4 口径）：integrated LUFS + true peak + 电平分解
 
 用法：

@@ -1,4 +1,5 @@
-﻿# send_mail.ps1 — 把消息发到指定邮箱（支持 QQ / 163 / 126 / Gmail / Outlook / 企业邮箱等多家通道）
+﻿# 程序版本：v0.1 | 2026-11-22 | 基线建档（此前无版本头）
+# send_mail.ps1 — 把消息发到指定邮箱（支持 QQ / 163 / 126 / Gmail / Outlook / 企业邮箱等多家通道）
 # 为什么不用 Net.Mail.SmtpClient：它只走 587 STARTTLS，QQ 那条通道握手就被断；这里手写最小 SMTP 客户端，
 #   465（隐式 SSL）和 587（STARTTLS）两种通道都支持。
 # 配置：F:\Daodao\.mail_config（UTF-8）。两种写法都认：
@@ -22,6 +23,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $cfg = 'F:\Daodao\.mail_config'
+
+# 2026-11-21：不传 -To 时从 F:\Daodao\通知.ini 的 to= 取收件人。
+# 以前这里默认空串，check_and_feed 每轮都报「邮件失败 / 收件人地址不对」，
+# 实际是收件人根本没接上。改完 -To 仍是最高优先（临时发给别人用 -To）。
+if ([string]::IsNullOrWhiteSpace($To)) {
+    $ini = 'F:\Daodao\通知.ini'
+    if (Test-Path -LiteralPath $ini) {
+        foreach ($ln in (Get-Content -LiteralPath $ini -Encoding UTF8)) {
+            if ($ln -match '^\s*to\s*=\s*(.+)$') { $To = $Matches[1].Trim(); break }
+        }
+    }
+}
 
 # 发件域名 → SMTP 服务器（ssl 模式：1=隐式 465，2=STARTTLS 587）
 $presets = @{

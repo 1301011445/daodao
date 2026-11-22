@@ -35,6 +35,11 @@ public class DesktopPet : Form
     const uint SWP_NOSIZE = 0x0001;
     const uint SWP_NOACTIVATE = 0x0010;
 
+    [DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+
     [StructLayout(LayoutKind.Sequential)]
     public class MEMORYSTATUSEX
     {
@@ -50,9 +55,15 @@ public class DesktopPet : Form
         public MEMORYSTATUSEX() { this.dwLength = (uint)Marshal.SizeOf(typeof(MEMORYSTATUSEX)); }
     }
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
+    [DllImport("kernel32.dll", SetLastError = true)]    [return: MarshalAs(UnmanagedType.Bool)]
     static extern bool GlobalMemoryStatusEx([In, Out] MEMORYSTATUSEX lpBuffer);
+
+    // 2026-11-22 帧调度：WinForms 的 Timer 走 WM_TIMER，精度被系统计时器量子卡住（默认 ~15.6ms），
+    // 所以请求 33ms 实际是 46.6ms。把计时器分辨率提到 1ms，才能真正按 Interval 出帧。
+    [DllImport("winmm.dll")]
+    static extern uint timeBeginPeriod(uint uPeriod);
+    [DllImport("winmm.dll")]
+    static extern uint timeEndPeriod(uint uPeriod);
 
     const int W = 380;
     const int H = 205;
@@ -85,6 +96,112 @@ public class DesktopPet : Form
 
     Timer anim;
     Stopwatch animClock = new Stopwatch();
+    // 2026-11-22 第1类二轮「帧调度」：只量不改——tick 真实间隔与单帧重绘耗时全部留样，
+    // 由 /diag 读出来给 tools\界面\帧调度检查.py 判 PASS/FAIL，不靠眼睛估
+    static double[] dgIv = new double[300];
+    static int dgIvN = 0, dgIvI = 0;
+    static double[] dgPm = new double[300];
+    static int dgPmN = 0, dgPmI = 0;
+    static long dgTickCount = 0;
+    static int dgIntervalMs = 0;
+    static void DgTick(double ms)
+    {
+        dgTickCount++;
+        dgIv[dgIvI] = ms; dgIvI = (dgIvI + 1) % dgIv.Length; if (dgIvN < dgIv.Length) dgIvN++;
+    }
+    static void DgPaint(double ms)
+    {
+        dgPm[dgPmI] = ms; dgPmI = (dgPmI + 1) % dgPm.Length; if (dgPmN < dgPm.Length) dgPmN++;
+    }
+    // 环形缓冲取样求 avg/p50/p95/max；n<3 直接报样本不足，不给假分数
+    System.Threading.Timer pump;
+    // 出一个帧就置忙，画完再放开：Threading.Timer 比 UI 线程快的时候不许把消息队列灌满
+    static volatile bool dgPumpBusy = false;
+    void PumpTick(object o)
+    {
+        if (dgPumpBusy) return;
+        try
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            dgPumpBusy = true;
+            BeginInvoke(new MethodInvoker(delegate()
+            {
+                try { OnTick(null, EventArgs.Empty); }
+                finally { dgPumpBusy = false; }
+            }));
+        }
+        catch { dgPumpBusy = false; }
+    }
+    // 2026-11-22 呼吸节律：周期 3.6~5.2 秒（每次重取），吸气占 38%，每口气幅度 ±5% 浮动。
+    // 波形不是纯正弦：吸气走 -1→+1 的半余弦，呼气 +1→-1，两段在边界上连续，不会"跳一口气"
+    float brT = 0f;
+    float brPeriod = 4.2f;
+    float brPh = 0f;
+    float brAmpJit = 1f;
+    Random brRnd = new Random();
+    void BrStep(float dt)
+    {
+        brT += dt;
+        if (brT >= brPeriod)
+        {
+            brT -= brPeriod;
+            brPeriod = 3.6f + (float)(brRnd.NextDouble() * 1.6);
+            brAmpJit = 0.95f + (float)(brRnd.NextDouble() * 0.10f);
+            if (brT < 0f) brT = 0f;
+        }
+        brPh = (brPeriod > 0.1f) ? (brT / brPeriod) : 0f;
+    }
+    static float BrWave(float ph)
+    {
+        if (ph < 0f) ph = 0f;
+        if (ph > 0.9999f) ph = 0.9999f;
+        if (ph < 0.38f)
+        {
+            float u = ph / 0.38f;
+            return -(float)Math.Cos(u * (float)Math.PI);   // -1 → +1（吸气）
+        }
+        float v = (ph - 0.38f) / 0.62f;
+        return (float)Math.Cos(v * (float)Math.PI);        // +1 → -1（呼气）
+    }
+    float BrValue()
+    {
+        return BrWave(brPh) * brAmpJit;
+    }
+
+    static string DgCalc(double[] arr, int n, int wi)
+    {        int cnt = n < arr.Length ? n : arr.Length;
+        if (cnt < 3) return "n=" + cnt + "|no-data";
+        double[] v = new double[cnt];
+        int s = (wi - cnt + arr.Length * 2) % arr.Length;
+        for (int k = 0; k < cnt; k++) v[k] = arr[(s + k) % arr.Length];
+        Array.Sort(v);
+        double avg = 0;
+        for (int k = 0; k < cnt; k++) avg += v[k];
+        avg /= cnt;
+        double p50 = v[(int)(cnt * 0.5)];
+        double p95 = v[cnt - 1 < (int)(cnt * 0.95) ? cnt - 1 : (int)(cnt * 0.95)];
+        return string.Format("n={0}|avg={1:F1}|p50={2:F1}|p95={3:F1}|max={4:F1}", cnt, avg, p50, p95, v[cnt - 1]);
+    }
+    public static string DgReset()
+    {
+        dgIvN = 0; dgIvI = 0; dgPmN = 0; dgPmI = 0; dgTickCount = 0;
+        return "RESET";
+    }
+    public static string DiagCmd()
+    {
+        string iv = DgCalc(dgIv, dgIvN, dgIvI);
+        string pm = DgCalc(dgPm, dgPmN, dgPmI);
+        double p50 = 0;
+        int a = iv.IndexOf("p50=");
+        if (a > 0)
+        {
+            int b = iv.IndexOf('|', a);
+            double.TryParse(b > 0 ? iv.Substring(a + 4, b - a - 4) : iv.Substring(a + 4), out p50);
+        }
+        double fps = p50 > 0.1 ? 1000.0 / p50 : 0;
+        return "DIAG|iv(" + iv + ")|paint(" + pm + ")|ticks=" + dgTickCount +
+               "|interval=" + dgIntervalMs + "|fps=" + fps.ToString("F1") + "|ver=" + SyncServer.APP_VER;
+    }
     float animLastDt = 0.045f;
     float t = 0f;
     int species = 0;
@@ -114,9 +231,25 @@ public class DesktopPet : Form
     bool movedFlag = false;
     Point dragStart;
     Point formStart;
+    // 2026-11-22 晚：桌面上的四种待法 —— 满身 / 贴边偷看（只露半边）/ 悬浮球 / 收起
+    int petMode = 0;
+    int peekVisPct = 34;          // 偷看时露出的宽度，占窗口宽的三分之一左右
+    int peekSide = 2;             // 1 贴左边 2 贴右边
+    bool autoPeek = true;         // 你在别的窗口干活时，它自己贴边
+    bool autoPeekActive = false;
+    System.Windows.Forms.Timer modeWatch;
+    System.Windows.Forms.Timer slideTimer;
+    int slideTargetX = int.MinValue;
+    Point fullLoc = Point.Empty;
+    NotifyIcon trayIcon;
     bool speaking = false;
     System.Diagnostics.Process curPlayer = null;   // 当前正在播语音的进程，点它就能立刻掐掉
     bool hearBusy = false;                          // 正在录你说的话，这期间它自己别开口
+    // 2026-11-22：喊名字就醒。常驻听唤醒词（默认开），听到「道」就先应一声，再接着听下一句
+    bool wakeOn = true;
+    System.Threading.Thread wakeThread;
+    long wakeHitAt = 0;                             // 最近一次应声的时刻，用来给下一轮留缓冲
+    string lastSaidText = "";                       // 刚说过的话，挡住把自己的尾音当成主人在叫
     int speakTicks = 0;
     int walkCounter = 0;
     float tiltTarget = 0f;
@@ -1408,7 +1541,7 @@ public class DesktopPet : Form
             "to=\n";
     }
 
-    // 到点提醒：提前十分钟预告一次，到点说一遍并标记完成
+    // 到点提醒：提前十分钟预告一次，到点播报一次（不自动标完成，条目留在待办里等主人自己划掉）
     void CheckNotes()
     {
         PumpMailRetry();
@@ -1446,15 +1579,23 @@ public class DesktopPet : Form
             }
             if (dt <= now)
             {
-                changed = true;
-                due.Add(f[4]);
                 if (rep.Length > 0)
                 {
+                    changed = true;
+                    due.Add(f[4]);
                     DateTime nw = NextWhen(dt, rep);
                     for (int k = 0; k < 40 && nw <= now; k++) nw = NextWhen(nw, rep);   // 欠了好几次也一次追到未来
                     f[1] = nw.ToString("yyyy-MM-dd HH:mm"); f[3] = "0";
                 }
-                else f[2] = "1";
+                else if (f[3] != "2")
+                {
+                    // 2026-11-22 改：到点只播报一次，不再把条目自动标成「完成」。
+                    // 原写法会把还没做的事塞进已完成，待办区就空了（用户报的现象：记事本没有待做的事）。
+                    // f[3] 改成三态：0 未预告 / 1 已预告十分钟 / 2 已到点播报（到点后不再重复吵）。
+                    changed = true;
+                    due.Add(f[4]);
+                    f[3] = "2";
+                }
             }
             else if (f[3] == "0" && (dt - now).TotalMinutes <= 10) { f[3] = "1"; changed = true; soon.Add(f[4]); }
             outp.Add(f[0] + "\t" + f[1] + "\t" + f[2] + "\t" + f[3] + "\t" + f[4] + (rep.Length > 0 ? "\t" + rep : ""));
@@ -2261,7 +2402,7 @@ public class DesktopPet : Form
             {
                 if (File.Exists(tool))
                 {
-                    ProcessStartInfo pr = new ProcessStartInfo("python", "-X utf8 \"" + tool + "\" render \"" + js + "\" \"" + wav + "\"");
+                    ProcessStartInfo pr = new ProcessStartInfo(PyExe(), "-X utf8 \"" + tool + "\" render \"" + js + "\" \"" + wav + "\"");
                     pr.UseShellExecute = false;
                     pr.CreateNoWindow = true;
                     pr.WorkingDirectory = MusicExeDir();
@@ -2342,7 +2483,8 @@ public class DesktopPet : Form
         if (moodKind == 3) return "-14%";
         if (moodKind == 6) return "-9%";
         if (moodKind == 5) return "+5%";
-        return "+2%";
+        // 2026-11-22 语音：默认档 +2% → +3%。60fps 后口型抖得更细，语速略提一点才跟得上日常对话节奏
+        return "+3%";
     }
 
     // v0.107：句末语调。问句/反问结尾要抬，感叹结尾稍抬，陈述句不动。
@@ -2364,7 +2506,7 @@ public class DesktopPet : Form
         if (t.Length > 0)
         {
             char last = t[t.Length - 1];
-            if (last == '？' || last == '?' || last == '吗' || last == '呢' || last == '吧') hz += 3;
+            if (last == '？' || last == '?' || last == '吗' || last == '呢' || last == '吧') hz += 5;
             else if (last == '！' || last == '!') hz += 2;
         }
         if (hz == 0) return "+0Hz";
@@ -2409,12 +2551,15 @@ public class DesktopPet : Form
                 if (vo != null) vIdx = Convert.ToInt32(vo);
                 object gd = kv.GetValue("GreetDay");
                 if (gd != null) { try { greetDay = DateTime.Parse(gd.ToString()); } catch { } }
+                object wk = kv.GetValue("WakeOn");
+                if (wk != null) { try { wakeOn = (Convert.ToInt32(wk) != 0); } catch { } }
                 // 闲聊一律手动：开机不去恢复上一次的状态，想唠就在右键菜单里点一下。
                 // 记忆值还留着，方便以后想改回自动时用
                 kv.Close();
             }
         }
         catch { }
+        LoadModeSettings();
         AutoScaleMode = AutoScaleMode.None;
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
@@ -2494,12 +2639,17 @@ public class DesktopPet : Form
         BuildMenu();
 
         anim = new Timer();
-        // 30 帧/秒：33ms 一次重画。动画时间按真实经过时间推进，
-        // 提帧只是让画面更连贯，走路/挥手的速度不会跟着变快
-        anim.Interval = 33;
+        // 2026-11-22 帧调度（第1类二轮）：实测请求 33ms 时真实间隔 p50=46.6ms、只有 21.5fps；
+        // 改成 16ms 之后 p50=30.7ms（32.6fps）——WM_TIMER 走的是系统计时器量子（~15.6ms），
+        // 16 会被吸成 2 个量子。所以真正出帧交给 Threading.Timer（受 timeBeginPeriod 影响），
+        // 它只负责按 16ms 敲一下，重绘仍在 UI 线程做，用 pending 标志防积压
+        try { timeBeginPeriod(1); } catch { }
+        anim.Interval = 16;
+        dgIntervalMs = 16;
         anim.Tick += new EventHandler(OnTick);
         animClock.Start();
-        anim.Start();
+        // anim.Start() 停用：WM_TIMER 上不去 60fps，改由 pump 驱动
+        try { pump = new System.Threading.Timer(PumpTick, null, 16, 16); } catch { }
 
         blinkNextT = 0.9f;
 
@@ -2534,6 +2684,7 @@ public class DesktopPet : Form
             noteTimer.Interval = 20000;
             noteTimer.Tick += delegate(object nt, EventArgs ne) { CheckNotes(); };
             noteTimer.Start();
+        StartModeWatch();
         }
         catch { }
 
@@ -2549,6 +2700,39 @@ public class DesktopPet : Form
                 GreetIfDue(true);
             };
             gt.Start();
+        }
+        catch { }
+
+        // 开起来过一会儿开始"听名字"：喊一声「道」就应你，然后接着听你要说什么
+        try
+        {
+            Timer wk = new Timer();
+            wk.Interval = 18000;
+            wk.Tick += delegate(object ws, EventArgs we)
+            {
+                wk.Stop();
+                wk.Dispose();
+                if (wakeOn) StartWakeLoop();
+            };
+            wk.Start();
+        }
+        catch { }
+
+        // 闲着久了也打个招呼：白天每 40 分钟招手说一句，别太吵
+        try
+        {
+            Timer hg = new Timer();
+            hg.Interval = 2400000;
+            hg.Tick += delegate(object hs, EventArgs he)
+            {
+                int h = DateTime.Now.Hour;
+                if (h < 8 || h > 21) return;
+                if (speaking || hearBusy || lying) return;
+                string[] lines = { "我在这儿。", "抬头歇一下眼睛吧。", "渴了就喝口水。", "有事喊我一声。" };
+                waveTicks = 45;
+                Say(lines[new Random().Next(lines.Length)]);
+            };
+            hg.Start();
         }
         catch { }
 
@@ -2705,7 +2889,7 @@ public class DesktopPet : Form
         }
         try
         {
-            ProcessStartInfo psi = new ProcessStartInfo("python", "-X utf8 \"" + py + "\"");
+            ProcessStartInfo psi = new ProcessStartInfo(PyExe(), "-X utf8 \"" + py + "\"");
             psi.UseShellExecute = false;
             psi.CreateNoWindow = true;
             psi.WorkingDirectory = AppDir();
@@ -2738,7 +2922,7 @@ public class DesktopPet : Form
             {
                 try
                 {
-                    ProcessStartInfo psi = new ProcessStartInfo("python", "-X utf8 \"" + py + "\"");
+                    ProcessStartInfo psi = new ProcessStartInfo(PyExe(), "-X utf8 \"" + py + "\"");
                     psi.UseShellExecute = false;
                     psi.CreateNoWindow = true;
                     psi.WorkingDirectory = AppDir();
@@ -2851,7 +3035,7 @@ public class DesktopPet : Form
         {
             try
             {
-                ProcessStartInfo psi = new ProcessStartInfo("python", "-X utf8 \"" + py + "\"");
+                ProcessStartInfo psi = new ProcessStartInfo(PyExe(), "-X utf8 \"" + py + "\"");
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
                 psi.WorkingDirectory = AppDir();
@@ -2968,6 +3152,279 @@ public class DesktopPet : Form
         brainThread.Start();
     }
 
+    // ===== 桌面待法：满身 / 贴边偷看 / 悬浮球 / 收起 =====
+    // 2026-11-22 晚（用户要求）：干活时它可以在屏幕侧边只露半边（像乔巴那样探头），
+    // 也可以缩成悬浮球，点一下再出来。四种模式随时可换，选过就记住。
+    int FullW { get { return (int)(W * uiScale); } }
+    int FullH { get { return (int)(H * uiScale); } }
+
+    void LoadModeSettings()
+    {
+        try
+        {
+            RegistryKey k = Registry.CurrentUser.OpenSubKey("Software\\DaoPet");
+            if (k != null)
+            {
+                object m = k.GetValue("PetMode"); if (m != null) petMode = Convert.ToInt32(m);
+                object sd = k.GetValue("PeekSide"); if (sd != null) peekSide = Convert.ToInt32(sd);
+                object ap = k.GetValue("AutoPeek"); if (ap != null) autoPeek = Convert.ToInt32(ap) != 0;
+                k.Close();
+            }
+        }
+        catch { }
+        if (petMode < 0 || petMode > 3) petMode = 0;
+        if (peekSide != 1 && peekSide != 2) peekSide = 2;
+    }
+
+    void SaveModeSettings()
+    {
+        try
+        {
+            RegistryKey k = Registry.CurrentUser.CreateSubKey("Software\\DaoPet");
+            if (k != null)
+            {
+                k.SetValue("PetMode", petMode);
+                k.SetValue("PeekSide", peekSide);
+                k.SetValue("AutoPeek", autoPeek ? 1 : 0);
+                k.Close();
+            }
+        }
+        catch { }
+    }
+
+    void SetMode(int m)
+    {
+        if (m < 0 || m > 3) m = 0;
+        if (petMode == 0 && m != 0) fullLoc = Location;   // 记住满身时站在哪儿，回来还原
+        petMode = m;
+        SetModeWindow();
+        SaveModeSettings();
+        RefreshModeChecks();
+    }
+
+    void SetModeWindow()
+    {
+        try
+        {
+            if (slideTimer != null) slideTimer.Stop();
+            slideTargetX = int.MinValue;
+            if (petMode == 3)
+            {
+                EnsureTray();
+                if (trayIcon != null) trayIcon.Visible = true;
+                Hide();
+                return;
+            }
+            if (trayIcon != null) trayIcon.Visible = false;
+            if (!Visible) ShowWindow(this.Handle, SW_SHOWNOACTIVATE);
+            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+            int y = Location.Y;
+            if (y < wa.Top + 8) y = wa.Top + 8;
+            if (petMode == 2)
+            {
+                int d = (int)(72 * uiScale);
+                if (d < 40) d = 40;
+                if (y > wa.Bottom - d - 8) y = wa.Bottom - d - 8;
+                int x = peekSide == 1 ? wa.Left + 6 : wa.Right - d - 6;
+                Bounds = new Rectangle(x, y, d, d);
+            }
+            else if (petMode == 1)
+            {
+                // 关键：人物画在窗口正中，所以要让「窗口中心」正好压在屏幕边上，
+                // 屏幕才刚好切掉一半身子。以前按窗口宽露出三成算，露出的其实是窗口左侧的空白，
+                // 屏幕上什么都看不见（2026-11-22 实测踩到）。
+                if (y > wa.Bottom - FullH / 2) y = wa.Bottom - FullH / 2;
+                int x = peekSide == 1 ? wa.Left - FullW / 2 : wa.Right - FullW / 2;
+                // 2026-11-22：原来是"啪"一下贴到边上。改成从当前位置挪过去（520ms 缓出），
+                // 像是自己退到边框后面，不是瞬移。
+                if (Math.Abs(Location.X - x) > 6)
+                {
+                    Bounds = new Rectangle(Location.X, y, FullW, FullH);
+                    SlideTo(x);
+                }
+                else
+                {
+                    Bounds = new Rectangle(x, y, FullW, FullH);
+                }
+            }
+            else
+            {
+                Bounds = new Rectangle(Location.X, Location.Y, FullW, FullH);
+                if (fullLoc != Point.Empty)
+                {
+                    int x = Math.Max(wa.Left + 8, Math.Min(fullLoc.X, wa.Right - FullW - 8));
+                    int yy = Math.Max(wa.Top + 8, Math.Min(fullLoc.Y, wa.Bottom - FullH - 8));
+                    Location = new Point(x, yy);
+                }
+            }
+            ForceLayer();
+            TopMost = true;
+            SetWindowPos(this.Handle, HWND_TOPMOST, Location.X, Location.Y, Bounds.Width, Bounds.Height, SWP_NOACTIVATE);
+        }
+        catch { }
+    }
+
+    void SlideTo(int targetX)
+    {
+        // 2026-11-22：原来"每帧走剩下的三分之一"，四五十毫秒就窜过去了，看着像瞬移。
+        // 改成按时长算：整段 520ms，先快后慢（ease-out），像人挪过去而不是闪过去。
+        if (slideTimer == null)
+        {
+            slideTimer = new System.Windows.Forms.Timer();
+            slideTimer.Interval = 16;
+            slideTimer.Tick += delegate(object s, EventArgs e)
+            {
+                if (slideTargetX == int.MinValue) { slideTimer.Stop(); return; }
+                int t = Environment.TickCount - slideStartTick;
+                float u = t / 520f;
+                if (u > 1f) u = 1f;
+                float e2 = 1f - (1f - u) * (1f - u) * (1f - u);   // easeOutCubic
+                int x = slideStartX + (int)((slideTargetX - slideStartX) * e2);
+                if (Math.Abs(slideTargetX - x) <= 2 || u >= 1f)
+                {
+                    Location = new Point(slideTargetX, Location.Y);
+                    slideTimer.Stop();
+                    slideTargetX = int.MinValue;
+                    return;
+                }
+                Location = new Point(x, Location.Y);
+            };
+        }
+        if (slideTargetX == int.MinValue)
+        {
+            slideStartX = Location.X;
+            slideStartTick = Environment.TickCount;
+        }
+        else
+        {
+            // 半路改目标：从当前位置重新起算，别跳
+            slideStartX = Location.X;
+            slideStartTick = Environment.TickCount;
+        }
+        slideTargetX = targetX;
+        if (!slideTimer.Enabled) slideTimer.Start();
+    }
+    int slideStartX = 0;
+    int slideStartTick = 0;
+
+    int PeekRestX()
+    {
+        Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+        return peekSide == 1 ? wa.Left - FullW / 2 : wa.Right - FullW / 2;
+    }
+
+    int PeekOutX()
+    {
+        Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+        return peekSide == 1 ? wa.Left : wa.Right - FullW;
+    }
+
+    void StartModeWatch()
+    {
+        if (modeWatch != null) return;
+        modeWatch = new System.Windows.Forms.Timer();
+        modeWatch.Interval = 900;
+        modeWatch.Tick += delegate(object s, EventArgs e) { AutoPeekCheck(); };
+        modeWatch.Start();
+    }
+
+    bool ForegroundIsOther()
+    {
+        try
+        {
+            IntPtr h = GetForegroundWindow();
+            if (h == IntPtr.Zero) return false;
+            uint pid = 0;
+            GetWindowThreadProcessId(h, out pid);
+            if (pid == 0) return false;
+            return pid != (uint)Process.GetCurrentProcess().Id;
+        }
+        catch { return false; }
+    }
+
+    // 在别的窗口里干活 → 自己贴边只露半边；回到桌面/回到它身上 → 回满身
+    void AutoPeekCheck()
+    {
+        if (mouseDown) return;
+        if (!autoPeek)
+        {
+            if (autoPeekActive && petMode == 1) { autoPeekActive = false; SetMode(0); }
+            return;
+        }
+        bool other = ForegroundIsOther();
+        if (other && petMode == 0)
+        {
+            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+            peekSide = (Location.X + FullW / 2) < (wa.Left + wa.Width / 2) ? 1 : 2;
+            autoPeekActive = true;
+            SetMode(1);
+        }
+        else if (!other && autoPeekActive && petMode == 1)
+        {
+            autoPeekActive = false;
+            SetMode(0);
+        }
+    }
+
+    void EnsureTray()
+    {
+        if (trayIcon != null) return;
+        trayIcon = new NotifyIcon();
+        try { trayIcon.Icon = this.Icon != null ? this.Icon : SystemIcons.Application; }
+        catch { try { trayIcon.Icon = SystemIcons.Application; } catch { } }
+        trayIcon.Text = "道";
+        ContextMenuStrip tm = new ContextMenuStrip();
+        tm.Items.Add("出来（满身）", null, new EventHandler(delegate(object s, EventArgs e) { SetMode(0); }));
+        tm.Items.Add("贴边偷看（只露半边）", null, new EventHandler(delegate(object s, EventArgs e) { SetMode(1); }));
+        tm.Items.Add("缩成悬浮球", null, new EventHandler(delegate(object s, EventArgs e) { SetMode(2); }));
+        tm.Items.Add(new ToolStripSeparator());
+        tm.Items.Add("退出道", null, new EventHandler(delegate(object s, EventArgs e) { try { trayIcon.Visible = false; } catch { } Close(); }));
+        trayIcon.ContextMenuStrip = tm;
+        trayIcon.DoubleClick += new EventHandler(delegate(object s, EventArgs e) { SetMode(0); });
+    }
+
+    void RefreshModeChecks()
+    {
+        try
+        {
+            if (ContextMenuStrip == null) return;
+            foreach (ToolStripItem it in ContextMenuStrip.Items) RefreshChecksIn(it);
+        }
+        catch { }
+    }
+
+    void RefreshChecksIn(ToolStripItem it)
+    {
+        if (!(it is ToolStripMenuItem)) return;
+        ToolStripMenuItem mi = (ToolStripMenuItem)it;
+        if (mi.Name != null && mi.Name.StartsWith("mode")) { try { mi.Checked = (Convert.ToInt32(mi.Tag) == petMode); } catch { } }
+        if (mi.Name == "autopeek") mi.Checked = autoPeek;
+        foreach (ToolStripItem sub in mi.DropDownItems) RefreshChecksIn(sub);
+    }
+
+    void MenuSetMode(object s, EventArgs e)
+    {
+        ToolStripMenuItem it = (ToolStripMenuItem)s;
+        autoPeekActive = false;
+        SetMode(Convert.ToInt32(it.Tag));
+    }
+
+    void MenuToggleAutoPeek(object s, EventArgs e)
+    {
+        autoPeek = !autoPeek;
+        ToolStripMenuItem it = (ToolStripMenuItem)s;
+        it.Checked = autoPeek;
+        SaveModeSettings();
+        if (!autoPeek && autoPeekActive) { autoPeekActive = false; if (petMode == 1) SetMode(0); }
+    }
+
+    void MenuFlipSide(object s, EventArgs e)
+    {
+        peekSide = peekSide == 1 ? 2 : 1;
+        SaveModeSettings();
+        if (petMode == 1 || petMode == 2) SetModeWindow();
+    }
+
     void BuildMenu()
     {
         ContextMenuStrip m = new ContextMenuStrip();
@@ -2975,6 +3432,11 @@ public class DesktopPet : Form
         // 一、说话：最常用，放最上头
         ToolStripMenuItem gTalk = new ToolStripMenuItem("跟我说话");
         gTalk.DropDownItems.Add("语音对话：我说话，你回答", null, new EventHandler(MenuVoiceChat));
+        // 常驻听名字：喊一声「道」就应你，再接着听下一句
+        ToolStripMenuItem wakeItem = new ToolStripMenuItem("喊我名字就醒（说「道」）");
+        wakeItem.Checked = wakeOn;
+        wakeItem.Click += new EventHandler(MenuWake);
+        gTalk.DropDownItems.Add(wakeItem);
         gTalk.DropDownItems.Add("听我说", null, new EventHandler(MenuHear));
         gTalk.DropDownItems.Add("问它一句（它会念出来）", null, new EventHandler(MenuAskBrain));
         gTalk.DropDownItems.Add("跟我打字聊天", null, new EventHandler(MenuTalk));
@@ -3073,6 +3535,26 @@ public class DesktopPet : Form
         gDesk.DropDownItems.Add("今日简报", null, new EventHandler(MenuBrief));
         gDesk.DropDownItems.Add("看看电脑状态", null, new EventHandler(MenuStatus));
         gDesk.DropDownItems.Add("打开回收站", null, new EventHandler(MenuRecycle));
+        ToolStripMenuItem gMode = new ToolStripMenuItem("我在桌面上的样子");
+        string[] modeNames = { "满身（跟原来一样）", "贴边偷看（只露半边）", "缩成悬浮球", "收起（只在托盘）" };
+        for (int mi2 = 0; mi2 < 4; mi2++)
+        {
+            ToolStripMenuItem mmi = new ToolStripMenuItem(modeNames[mi2]);
+            mmi.Tag = mi2;
+            mmi.Name = "mode" + mi2;
+            mmi.Checked = (petMode == mi2);
+            mmi.Click += new EventHandler(MenuSetMode);
+            gMode.DropDownItems.Add(mmi);
+        }
+        gMode.DropDownItems.Add(new ToolStripSeparator());
+        ToolStripMenuItem apm = new ToolStripMenuItem("干活时自己去边上偷看");
+        apm.Name = "autopeek";
+        apm.Checked = autoPeek;
+        apm.ToolTipText = "你在别的窗口里做事时，它自己贴到屏幕边，只露半边；点它一下就出来";
+        apm.Click += new EventHandler(MenuToggleAutoPeek);
+        gMode.DropDownItems.Add(apm);
+        gMode.DropDownItems.Add("换一边（左 / 右）", null, new EventHandler(MenuFlipSide));
+        gDesk.DropDownItems.Add(gMode);
         // 三个二级菜单合到一处，右键点开只有四条主干
         ToolStripMenuItem gMore = new ToolStripMenuItem("声音、闲话和桌面");
         gMore.DropDownItems.Add(gSound);
@@ -3836,6 +4318,243 @@ public class DesktopPet : Form
         return n < 2 ? 2 : n;
     }
 
+    // ============ 喊名字就醒（实时语音） ============
+    // 常驻听：每轮录一句（voice.py 的 VAD 会自动在你说完时停），只判断这句里有没有在叫"道"。
+    // 认出来就先应一声、招手，再自动接着听你下一句，等于"喊一声开门"。
+    void MenuWake(object s, EventArgs e)
+    {
+        wakeOn = !wakeOn;
+        try
+        {
+            RegistryKey k = Registry.CurrentUser.CreateSubKey("Software\\DaoPet");
+            if (k != null) { k.SetValue("WakeOn", wakeOn ? 1 : 0); k.Close(); }
+        }
+        catch { }
+        if (wakeOn)
+        {
+            Say("好，你喊「道」，我就应一声。");
+            StartWakeLoop();
+        }
+        else
+        {
+            Say("行，那我先不听名字了。");
+        }
+    }
+
+    void StartWakeLoop()
+    {
+        if (wakeThread != null && wakeThread.IsAlive) return;
+        wakeThread = new System.Threading.Thread(delegate() { WakeLoop(); });
+        wakeThread.IsBackground = true;
+        wakeThread.Start();
+    }
+
+    Process wakeProc = null;
+    System.IO.StreamWriter wakeIn = null;
+    readonly System.Collections.Generic.Queue<string> wakeLines = new System.Collections.Generic.Queue<string>();
+    readonly object wakeLock = new object();
+    bool wakePaused = false;
+
+    void WakeLoop()
+    {
+        while (wakeOn)
+        {
+            try
+            {
+                // 自己在说话、正在录音、或者在跑对话/大脑时别抢麦克风：
+                // 不再杀进程，只发一个 p 让它别听，说完再发 r（省的反复启停 python）
+                bool busy = speaking || hearBusy
+                    || (voiceChatThread != null && voiceChatThread.IsAlive)
+                    || (brainThread != null && brainThread.IsAlive)
+                    || (hearThread != null && hearThread.IsAlive);
+                if (busy)
+                {
+                    PumpWake(false);
+                    System.Threading.Thread.Sleep(500);
+                    continue;
+                }
+                PumpWake(true);
+                // 应声之后留两秒，别再把自己的尾音当唤声
+                if (Environment.TickCount - (int)(wakeHitAt & 0x7fffffff) < 2000) { System.Threading.Thread.Sleep(500); continue; }
+
+                if (wakeProc == null || wakeProc.HasExited) StartWakeProc();
+                if (wakeProc == null) { System.Threading.Thread.Sleep(2000); continue; }
+
+                string line = null;
+                lock (wakeLock)
+                {
+                    if (wakeLines.Count > 0) line = wakeLines.Dequeue();
+                }
+                if (line == null) { System.Threading.Thread.Sleep(120); continue; }
+
+                string heard = JsonStr(line, "text");
+                // 能量门限（学 microWakeWord 的 energy gate）：屋里安静时不认，
+                // 免得空调声、键盘声被认成一句话再往唤醒逻辑里送
+                double rms = JsonNum(line, "rms");
+                if (rms > 0 && rms < 120) continue;
+                if (IsWakeCall(heard)) HitWake();
+            }
+            catch { System.Threading.Thread.Sleep(1000); }
+        }
+        StopWakeProc();
+    }
+
+    void StartWakeProc()
+    {
+        try
+        {
+            string py = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "voice.py");
+            if (!System.IO.File.Exists(py)) return;
+            StopWakeProc();
+            ProcessStartInfo pi = new ProcessStartInfo();
+            pi.FileName = PyExe();
+            pi.Arguments = "\"" + py + "\" wake";
+            pi.UseShellExecute = false;
+            pi.CreateNoWindow = true;
+            pi.RedirectStandardInput = true;
+            pi.RedirectStandardOutput = true;
+            pi.RedirectStandardError = true;
+            pi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+            pi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+            pi.WindowStyle = ProcessWindowStyle.Hidden;
+            wakeProc = Process.Start(pi);
+            wakeIn = wakeProc.StandardInput;
+            wakePaused = false;
+            System.Threading.Thread rd = new System.Threading.Thread(delegate()
+            {
+                try
+                {
+                    Process p = wakeProc;
+                    string s;
+                    while ((s = p.StandardOutput.ReadLine()) != null)
+                    {
+                        lock (wakeLock)
+                        {
+                            if (wakeLines.Count > 40) wakeLines.Dequeue();
+                            wakeLines.Enqueue(s);
+                        }
+                    }
+                }
+                catch { }
+            });
+            rd.IsBackground = true;
+            rd.Start();
+        }
+        catch { wakeProc = null; }
+    }
+
+    // pause=true 表示"先别听"，false 表示"接着听"
+    void PumpWake(bool listen)
+    {
+        try
+        {
+            if (wakeProc == null || wakeProc.HasExited || wakeIn == null) return;
+            if (listen == wakePaused)
+            {
+                wakeIn.WriteLine(listen ? "r" : "p");
+                wakeIn.Flush();
+                wakePaused = !listen;
+            }
+        }
+        catch { }
+    }
+
+    void StopWakeProc()
+    {
+        try
+        {
+            if (wakeProc != null && !wakeProc.HasExited)
+            {
+                try { wakeIn.WriteLine("q"); wakeIn.Flush(); } catch { }
+                if (!wakeProc.WaitForExit(1500)) wakeProc.Kill();
+            }
+        }
+        catch { }
+        wakeProc = null; wakeIn = null; wakePaused = false;
+    }
+
+    // 分清"喊人"和"话里带道"：知道、道理、味道、难道、这道题…都不是在叫我。
+    // 所以不放宽成"句子里有 道 就算"，只认"道"出现在开头（或紧跟喂/哎/嘿）这几种喊人说法。
+    bool IsWakeCall(string t)
+    {
+        if (t == null) return false;
+        string s = t.Replace(" ", "");
+        char[] drop = { '，', '。', '？', '！', '、', '…', ',', '.', '?', '!' };
+        foreach (char ch in drop) s = s.Replace(ch.ToString(), "");
+        if (s.Length == 0) return false;
+        if (s.Length > 10) return false;
+        string[] notCall = { "知道", "道理", "味道", "难道", "街道", "一道", "通道", "频道", "报道", "道教", "霸道", "轨道", "道德", "大道", "这道", "那道", "说道", "一道题" };
+        for (int i = 0; i < notCall.Length; i++) if (s.Contains(notCall[i])) return false;
+        if (lastSaidText.Length > 3 && s.Contains(lastSaidText.Substring(0, 4))) return false;
+
+        string low = s.ToLower();
+        if (s == "道" || s == "道道" || s == "小道" || low == "dao" || low == "heydao") return true;
+        if (s.StartsWith("道") && s.Length <= 6) return true;
+        string[] heads = { "喂道", "哎道", "嘿道", "嗨道", "老道", "叫你道", "喊你道", "在不在道" };
+        for (int i = 0; i < heads.Length; i++) if (s.StartsWith(heads[i])) return true;
+        return false;
+    }
+
+    // 给自检口用：外部把一句话塞进来，判断"是不是在叫名字"
+    public static bool WakeChk(string t)
+    {
+        try { return DesktopPet.Self.WakeTest(t); } catch { return false; }
+    }
+
+    // 给自检口用：喂一句"听到的话"，命中就走完整的应声流程
+    public static bool WakeFeed(string t)
+    {
+        try
+        {
+            if (!DesktopPet.Self.IsWakeCall(t)) return false;
+            DesktopPet.Self.HitWake();
+            return true;
+        }
+        catch { return false; }
+    }
+
+    bool WakeTest(string t)
+    {
+        return IsWakeCall(t);
+    }
+
+    // 给自检口用：常见问题本地秒答
+    public static string FastChk(string q)
+    {
+        try { return DesktopPet.Self.FastAnswer(q); } catch { return null; }
+    }
+
+    void HitWake()
+    {
+        wakeHitAt = Environment.TickCount;
+        string[] ack = { "道在呢，你说吧。", "我在。", "来啦，什么事？", "哎，我听着呢。", "嗯，叫我干嘛？" };
+        string line = ack[new Random().Next(ack.Length)];
+        try
+        {
+            BeginInvoke(new MethodInvoker(delegate()
+            {
+                StopSpeechNow();
+                waveTicks = 55;                 // 招手
+                lying = false;
+                SayAs(line, CurVoice());
+                Invalidate();
+            }));
+        }
+        catch { }
+        // 应声说完，接着听下一句：等它念完再开麦，不然录到的是它自己的声音
+        System.Threading.Thread.Sleep(200);
+        int waitMs = 1200;
+        while (speaking && waitMs < 20000) { System.Threading.Thread.Sleep(200); waitMs += 200; }
+        try
+        {
+            BeginInvoke(new MethodInvoker(delegate()
+            {
+                if (hearThread == null || !hearThread.IsAlive) MenuHear(null, EventArgs.Empty);
+            }));
+        }
+        catch { }
+    }
+
     void MenuHear(object s, EventArgs e)
     {
         if (hearThread != null && hearThread.IsAlive) return;
@@ -3972,6 +4691,18 @@ public class DesktopPet : Form
         if (q == null) return;
         q = q.Trim();
         if (q.Length == 0) return;
+        // 2026-11-22：常见问题本地秒答，不再排一趟网络大脑（问时间/日期/它是谁这类）
+        if (mode == "ask")
+        {
+            string fast = FastAnswer(q);
+            if (fast != null)
+            {
+                if (!voiceOn) voiceOn = true;
+                moodKind = 4; moodTicks = 40;
+                SayAs(fast, CurVoice());
+                return;
+            }
+        }
         if (!voiceOn) voiceOn = true;
         Say("我想想。");
         brainThread = new System.Threading.Thread(delegate()
@@ -4023,6 +4754,59 @@ public class DesktopPet : Form
         });
         brainThread.IsBackground = true;
         brainThread.Start();
+    }
+
+    // 常见问题本地秒答：不进网络、不等模型，问完立刻出声（0.1 秒级）
+    string FastAnswer(string q)
+    {
+        string s = q.Trim();
+        if (s.Length > 30) return null;
+        DateTime now = DateTime.Now;
+        string[] wd = { "星期天", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六" };
+        if (s.Contains("几点") || s.Contains("现在时间") || s.Contains("什么时间了"))
+        {
+            string mm = now.Minute < 10 ? "零" + now.Minute : now.Minute.ToString();
+            return "现在 " + now.Hour + " 点" + mm + " 分。";
+        }
+        if (s.Contains("几号") || s.Contains("星期几") || s.Contains("周几") || s.Contains("今天星期") || s.Contains("什么日子"))
+        {
+            return "今天 " + now.Month + " 月 " + now.Day + " 日，" + wd[(int)now.DayOfWeek] + "。";
+        }
+        if (s.Contains("你是谁") || s.Contains("你叫什么") || s.Contains("你的名字"))
+        {
+            return "我是道，就在你桌面上待着，喊我名字我就应。";
+        }
+        if (s.Contains("你在干嘛") || s.Contains("你在干什么") || s.Contains("在做什么"))
+        {
+            return "在这儿站着呢，等你叫我。";
+        }
+        if (s.Contains("累不累") || s.Contains("你累") || s.Contains("困不困"))
+        {
+            return "不累，我不用睡觉。";
+        }
+        if (s.Contains("几点睡") || s.Contains("该睡"))
+        {
+            int h = now.Hour;
+            if (h >= 23 || h < 5) return "这会儿该睡了，明天还得早起。";
+            return "还早，先把手里的事收个尾。";
+        }
+        return null;
+    }
+
+    // 读 JSON 里的数字字段（用于 rms 这种判断，不必引 JSON 库）
+    double JsonNum(string json, string key)
+    {
+        if (json == null || json.Length == 0) return 0;
+        string pat = "\"" + key + "\":";
+        int i = json.IndexOf(pat);
+        if (i < 0) return 0;
+        i += pat.Length;
+        while (i < json.Length && (json[i] == ' ' || json[i] == '\t')) i++;
+        int st = i;
+        while (i < json.Length && (char.IsDigit(json[i]) || json[i] == '-' || json[i] == '.')) i++;
+        double v = 0;
+        try { v = double.Parse(json.Substring(st, i - st), System.Globalization.CultureInfo.InvariantCulture); } catch { }
+        return v;
     }
 
     string JsonStr(string json, string key)
@@ -5987,12 +6771,15 @@ public class DesktopPet : Form
         }
         // 动作时间按真实经过的时间走，不再假设每一跳都准是 45 毫秒：
         // 定时器被系统拖慢时以前会整只变慢、步子忽快忽慢，现在不会了
+        // 2026-11-22 帧调度诊断：先把这一跳的真实间隔记下来，再按真实时间推进动作
+        DgTick(animClock.Elapsed.TotalMilliseconds);
         float dt = (float)animClock.Elapsed.TotalSeconds;
         animClock.Restart();
         if (dt < 0.001f) dt = animLastDt;
         if (dt > 0.12f) dt = 0.12f;      // 卡了一下也别一下子跳过去
         animLastDt = dt;
         t += dt;
+        BrStep(dt);
         // 眨眼：按真实时间走。闭眼 0.15 秒，间隔 1.8~6.5 秒随机，四分之一概率连眨两下
         if (blinkFrames > 0)
         {
@@ -6006,7 +6793,23 @@ public class DesktopPet : Form
             {
                 blinkFrames = 1;
                 blinkCloseT = 0.15f;
-                blinkNextT = (blinkRnd.NextDouble() < 0.25) ? 0.34f : (1.8f + (float)(blinkRnd.NextDouble() * 4.7));
+                // 2026-11-22 从 GitHub 上的 NPC 眼动/眨眼建模（SkyrimTrueGaze 那类"ballistic saccade + blink 节律"）学来的一条：
+                // 真人眨眼间隔不是均匀分布，是对数正态——多数 2~4 秒，偶尔十几秒不眨，偶尔连着眨。
+                // 原来 1.8+rnd*4.7 是均匀分布，看着像节拍器，每 3 秒多准时眨一下。
+                if (blinkRnd.NextDouble() < 0.25)
+                {
+                    blinkNextT = 0.34f;               // 连眨第二下（留原来的手感）
+                }
+                else
+                {
+                    double n = 0;
+                    for (int bi = 0; bi < 4; bi++) n += blinkRnd.NextDouble();   // 4 个均匀相加≈正态（Irwin–Hall）
+                    n = (n - 2.0) * 1.7321;                                      // 归一到 ~N(0,1)
+                    float iv = (float)(3.2 * Math.Exp(0.55 * n));                // 对数正态：中位数 3.2 秒
+                    if (iv < 0.6f) iv = 0.6f;                                    // 下限：别一秒眨三次
+                    if (iv > 18f) iv = 18f;                                      // 上限：别盯着人十几秒不眨
+                    blinkNextT = iv;
+                }
             }
         }
         if (bubbleFrames > 0)
@@ -6228,7 +7031,63 @@ public class DesktopPet : Form
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        PaintAll(e.Graphics, ClientSize.Width, ClientSize.Height);
+        Stopwatch dgSw = Stopwatch.StartNew();
+        try
+        {
+            PaintAll(e.Graphics, ClientSize.Width, ClientSize.Height);
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "pet_paint_err.txt"),
+                    DateTime.Now.ToString("HH:mm:ss") + " petMode=" + petMode + " cw=" + ClientSize.Width + " " + ex.ToString() + Environment.NewLine);
+            }
+            catch { }
+            base.OnPaint(e);
+        }
+        finally
+        {
+            dgSw.Stop();
+            DgPaint(dgSw.Elapsed.TotalMilliseconds);
+        }
+    }
+
+    // 悬浮球：缩到 72 像素，只剩一张脸，点一下弹回满身
+    void PaintBall(Graphics g, int cw, int ch)
+    {
+        float r = Math.Min(cw, ch) / 2f - 2f;
+        if (r < 8f) r = 8f;
+        float cx = cw / 2f, cy = ch / 2f;
+        r *= 1f + 0.03f * (float)Math.Sin(t * 1.6f);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (LinearGradientBrush br = new LinearGradientBrush(new RectangleF(cx - r, cy - r, r * 2, r * 2),
+            Color.FromArgb(255, 92, 128, 216), Color.FromArgb(255, 30, 46, 96), 90f))
+        {
+            g.FillEllipse(br, cx - r, cy - r, r * 2, r * 2);
+        }
+        using (Pen pen = new Pen(Color.FromArgb(255, 190, 214, 255), 1.8f))
+        {
+            g.DrawEllipse(pen, cx - r, cy - r, r * 2, r * 2);
+        }
+        float ey = cy - r * 0.14f, ex = r * 0.30f;
+        using (SolidBrush wb = new SolidBrush(Color.FromArgb(255, 236, 244, 255)))
+        {
+            if (blinkFrames > 0)
+            {
+                g.FillRectangle(wb, cx - ex - 5, ey, 10, 2);
+                g.FillRectangle(wb, cx + ex - 5, ey, 10, 2);
+            }
+            else
+            {
+                g.FillEllipse(wb, cx - ex - 5, ey - 5, 10, 10);
+                g.FillEllipse(wb, cx + ex - 5, ey - 5, 10, 10);
+            }
+        }
+        using (Pen mp = new Pen(Color.FromArgb(220, 236, 244, 255), 1.6f))
+        {
+            g.DrawArc(mp, cx - r * 0.28f, cy + r * 0.06f, r * 0.56f, r * 0.36f, 20, 140);
+        }
     }
 
     public void PaintAll(Graphics g, int cw, int ch)
@@ -6247,6 +7106,11 @@ public class DesktopPet : Form
             }
             catch { }
         }
+        if (petMode == 2)
+        {
+            PaintBall(g, cw, ch);
+            return;
+        }
         g.TranslateTransform((cw - W * s) / 2f, (ch - H * s) / 2f);
         g.ScaleTransform(s, s);
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -6256,7 +7120,10 @@ public class DesktopPet : Form
         float cy = 127f;
         // 呼吸幅度会慢慢变：约 33 秒一轮强弱，偶尔来一次深吸，不是永远同一口气
         float breatheAmp = 0.78f + 0.22f * (float)Math.Sin(t * 0.19f);
-        float breathe = (float)(Math.Sin(t * 1.5f) * breatheAmp);
+        // 2026-11-22 从 GitHub 上的待机呼吸建模学来的一条：真人呼吸不是等周期正弦——
+        // 吸气比呼气短（约 4:6），每次周期 3.6~5.2 秒不等，每口气幅度也小幅浮动。
+        // 原来 sin(t*1.5) 是完美等周期的对称正弦，肉眼上像在"晃动"而不是"呼吸"。
+        float breathe = BrValue() * breatheAmp;
         float dy = 8.5f * (float)Math.Sin(t * (1.12f + 0.05f * (float)Math.Sin(t * 0.07f))) * (0.9f + 0.1f * breatheAmp);
         float dxs = 2.4f * (float)Math.Sin(t * 0.53);
         if (speaking) dy += 2.4f * (float)Math.Sin(t * (2.0f * (float)Math.PI / (nodBeatMs / 1000.0f)));
@@ -6398,12 +7265,15 @@ public class DesktopPet : Form
         if (runTicks > 0) targetFps = Math.Max(targetFps, 15.0f);
         if (targetFps < 8.5f) targetFps = 8.5f;
         if (targetFps > 20f) targetFps = 20f;
-        walkFpsCur += (targetFps - walkFpsCur) * 0.18f;
-        float fps = walkFpsCur;
-        // 相位自己累加，不再用 t×fps：帧率一变，t×fps 会整段跳帧，脚就像被人拽了一下
+        // 2026-11-22 帧调度：这个平滑系数原本是按 33ms 一帧调的（0.18/帧），换到 60fps 会快 2.8 倍，
+        // 起步那一下会变硬。改成按真实帧长归一，以后帧率再变手感也不变
         float dt = t - walkLastT;
         if (dt < 0f || dt > 0.2f) dt = 0.033f;
         walkLastT = t;
+        float wA = 1f - (float)Math.Pow(1f - 0.18f, dt / 0.033f);
+        walkFpsCur += (targetFps - walkFpsCur) * wA;
+        float fps = walkFpsCur;
+        // 相位自己累加，不再用 t×fps：帧率一变，t×fps 会整段跳帧，脚就像被人拽了一下
         walkPhase += fps * dt;
         if (walkPhase >= 8f) walkPhase -= 8f * (float)Math.Floor(walkPhase / 8f);
         float ph = walkPhase;
@@ -6647,7 +7517,9 @@ public class DesktopPet : Form
             else if (moodKind == 3) exprKind = 0;   // v0.107：难过不再切整图（sad 整图跟立绘差太多，像换了张脸），
                                                     // 改成只走语速 -14% 和低头动作，脸还是同一张
             else if (moodKind == 4) exprKind = 1;   // 4 是「兴奋」，配开心脸才和 +16% 的语速对得上
-            else if (moodKind == 6) exprKind = 4;
+            // 2026-11-22 表情：犯困(moodKind 6) 原来整图换成 sleep 脸，跟立绘差太多像换了张脸。
+            // 跟 v0.107 的难过一致——不切整图，只走语速 -9% 和低头眯眼，脸还是同一张
+            else if (moodKind == 6) exprKind = 0;
         }
         bool useExpr = false;
         if (UseExprArt && exprKind > 0 && exprMap != null && exprMap.ContainsKey(species))
@@ -8866,6 +9738,15 @@ public class DesktopPet : Form
         {
             mouseDown = false;
             if (movedFlag) SavePos();
+            else if (petMode == 1 || petMode == 2)
+            {
+                // 偷看/球的状态下点一下 = 叫我出来
+                autoPeekActive = false;
+                SetMode(0);
+                waveTicks = 26;
+                idleTicks = 0;
+                return;
+            }
             else
             {
                 // 点它一下：先招手打招呼，再说句话。先把正在念的长句掐掉，
@@ -8879,6 +9760,18 @@ public class DesktopPet : Form
         }
     }
 
+    protected override void OnMouseEnter(EventArgs e)
+    {
+        base.OnMouseEnter(e);
+        if (petMode == 1) SlideTo(PeekOutX());     // 探头：鼠标过来就整个出来
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        base.OnMouseLeave(e);
+        if (petMode == 1 && !mouseDown) SlideTo(PeekRestX());   // 走开又缩回去
+    }
+
     protected override void OnDoubleClick(EventArgs e)
     {
         base.OnDoubleClick(e);
@@ -8887,6 +9780,8 @@ public class DesktopPet : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        try { timeEndPeriod(1); } catch { }
+        try { if (pump != null) pump.Dispose(); } catch { }
         SavePos();
         base.OnFormClosing(e);
     }
@@ -8928,6 +9823,8 @@ public class DesktopPet : Form
             try { System.Threading.ThreadPool.QueueUserWorkItem(delegate(object o) { SyncPullMerge(); }); } catch { }
             // 开机不再一句接一句地自己播报（简报、记忆、今日所学都挪到右键菜单里，
             // 想看再点）。话只在两处出现：他要的早晚问候，还有用户点它或喊它的时候。
+            // 上次选的是「贴边偷看」或「悬浮球」，开机就直接按那个样子待着
+            if (petMode == 1 || petMode == 2) SetModeWindow();
         }
         catch { }
     }
@@ -9218,7 +10115,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 107;
+    public const int APP_VER = 112;
 
     public static void Start()
     {
@@ -9454,6 +10351,43 @@ static class SyncServer
                     DesktopPet.ThinkCmd(q2);
                     SendText(ns, q2.Trim().Length > 0 ? "THINK" : "EMPTY");
                 }
+                else if (path.StartsWith("/wakefeed"))
+                {
+                    // 自检口：把一句"听到的话"直接喂进去，走一遍完整的应声流程
+                    string t = "";
+                    int qi5 = path.IndexOf("?t=");
+                    if (qi5 >= 0)
+                    {
+                        try { t = Uri.UnescapeDataString(path.Substring(qi5 + 3).Replace('+', ' ')); }
+                        catch { t = ""; }
+                    }
+                    SendText(ns, DesktopPet.WakeFeed(t) ? "HIT" : "MISS");
+                }
+                else if (path.StartsWith("/wakechk"))
+                {
+                    // 自检口：把一句话丢进来，看它会不会当成"在叫名字"
+                    string t = "";
+                    int qi3 = path.IndexOf("?t=");
+                    if (qi3 >= 0)
+                    {
+                        try { t = Uri.UnescapeDataString(path.Substring(qi3 + 3).Replace('+', ' ')); }
+                        catch { t = ""; }
+                    }
+                    SendText(ns, DesktopPet.WakeChk(t) ? "YES" : "NO");
+                }
+                else if (path.StartsWith("/fast"))
+                {
+                    // 自检口：常见问题本地秒答，返回 FAST|答句 或 SLOW（要交给大脑）
+                    string fq = "";
+                    int qi4 = path.IndexOf("?q=");
+                    if (qi4 >= 0)
+                    {
+                        try { fq = Uri.UnescapeDataString(path.Substring(qi4 + 3).Replace('+', ' ')); }
+                        catch { fq = ""; }
+                    }
+                    string fa = DesktopPet.FastChk(fq);
+                    SendText(ns, fa == null ? "SLOW" : "FAST|" + fa);
+                }
                 else if (path.StartsWith("/pose"))
                 {
                     if (path.Contains("p=lie")) { DesktopPet.PoseCmd("lie"); SendText(ns, "LIE"); }
@@ -9619,6 +10553,19 @@ static class SyncServer
                 else if (path.StartsWith("/ver"))
                 {
                     SendText(ns, "VER|" + APP_VER);
+                }
+                else if (path.StartsWith("/diag"))
+                {
+                    // /diag?reset=1 先清空取样：环形缓冲是滚动窗口，机器忙过之后旧样本还留着，
+                    // 会让判据连续 FAIL 十几秒假阳性。测之前清零，测的才是"现在"
+                    if (path.Contains("reset"))
+                    {
+                        SendText(ns, DesktopPet.DgReset());
+                    }
+                    else
+                    {
+                        SendText(ns, DesktopPet.DiagCmd());
+                    }
                 }
                 else if (path.StartsWith("/apk"))
                 {

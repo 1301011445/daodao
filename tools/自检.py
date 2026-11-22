@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 程序版本：v0.1 | 2026-11-22 | 基线建档（此前无版本头）
 """道 双端自检 v1
 电脑端（exe 8848 HTTP 接口）+ 手机端（apk 包内资源与桥接接口）+ 版本链（源码/包/页面/线上/账本）
 用法：python 自检.py [--quiet]
@@ -83,7 +84,7 @@ def check_apk():
     html = read(os.path.join(tmp, "dao.html")).replace("\u0000", "")
     if not html:
         return add("apk 内 dao.html", False, "抽不出 dao.html")
-    ver = re.findall(r"HTML_VER='(\d+)'", html)
+    ver = re.findall(r"HTML_VER\s*=\s*['\"]?(\d+)", html)
     add("apk 内 HTML_VER", bool(ver), ver[0] if ver else "没写版本号")
 
     called = sorted(set(re.findall(r"DaoNative\.([A-Za-z_][A-Za-z0-9_]*)", html)))
@@ -140,7 +141,7 @@ def check_chain():
 
     src_html_ver = ""
     p = os.path.join(BASE, "src", "_apk", "assets", "dao.html")
-    v = re.findall(r"HTML_VER='(\d+)'", read(p))
+    v = re.findall(r"HTML_VER\s*=\s*['\"]?(\d+)", read(p))
     src_html_ver = v[0] if v else ""
     add("源码 dao.html 版本", bool(v), src_html_ver)
 

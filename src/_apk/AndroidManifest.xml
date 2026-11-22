@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.daodao.pet"
-    android:versionCode="107"
-    android:versionName="0.107">
+    android:versionCode="112"
+    android:versionName="0.112">
 
     <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="33" />
 
@@ -19,6 +19,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- 2026-11-22：手机端「在桌面上」浮窗 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
     <application
         android:label="@string/app_name"
@@ -29,6 +32,11 @@
 
         <receiver
             android:name=".NoteAlarm$NoteReceiver"
+            android:exported="false" />
+
+        <!-- 手机端浮窗服务：满身 / 贴边偷看 / 小球 / 收起 -->
+        <service
+            android:name=".DaoOverlay"
             android:exported="false" />
 
         <activity

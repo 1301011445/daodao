@@ -146,42 +146,342 @@ public class DaoBridge {
     // ==== 本地曲库（2026-11-20 晚）：改成原生解码 + MediaPlayer ====
     // 原来页面用 assetB64 把整首 2MB 曲子拉进 JS 再自己解，真机上出现过「拿不到曲库文件」，
     // 而且 4M 采样在 JS 里解要一两秒。这里直接读 assets、解 ADPCM、写 wav 缓存，再交给 MediaPlayer。
-    private android.media.MediaPlayer songMp;
     private String songName = "";
+    // 2026-11-22 晚：MediaPlayer 那条路（写 11MB wav 再 prepare）整条删掉了，只留 AudioTrack 直推 PCM
+    private android.media.AudioTrack songTrack;
+    private android.media.MediaPlayer songMp;      // 演唱版 m4a/mp3 走这条：原生解码，音质和进度都准
+    private volatile double songStartSec = 0;      // 快进/续播用：从第几秒开始
+    private Thread songTrackThread;
+    private volatile boolean songStop = false;
+    // 代次：连点两首时，前一首的后台线程不许再建 track，否则会把新歌的 songTrack 盖掉
+    private volatile int songGen = 0;
+    // 2026-11-22 晚（第二轮）：进度与诊断，页面靠这几个值判断「到底出没出声」
+    private volatile int songSr = 22050;
+    private volatile long songSamples = 0;      // 已成功写进 AudioTrack 的采样数
+    private volatile long songFramesTotal = 0;
+    private volatile int songPeak = 0;          // 解出来的最大幅值（0 = 全是静音，说明数据就有问题）
+    private volatile int songUnder = 0;         // underrun 次数（>0 说明喂得太慢，会断续）
+    private volatile String songErr = "";
 
     @JavascriptInterface
     public void stopSong() {
-        try { if (songMp != null && songMp.isPlaying()) songMp.stop(); } catch (Exception e) { }
-        try { if (songMp != null) songMp.release(); } catch (Exception e) { }
+        songStop = true;
+        android.media.MediaPlayer m = songMp;
         songMp = null;
+        if (m != null) {
+            try { m.stop(); } catch (Exception e) { }
+            try { m.release(); } catch (Exception e) { }
+        }
+        android.media.AudioTrack t = songTrack;
+        songTrack = null;
+        if (t != null) {
+            try { t.pause(); } catch (Exception e) { }
+            try { t.flush(); } catch (Exception e) { }
+            try { t.release(); } catch (Exception e) { }
+        }
+        songTrackThread = null;
         songName = "";
     }
 
     @JavascriptInterface
     public String nowSong() { return songName; }
 
+    // 2026-11-22 晚（第二轮）：用户截图报「播放失败没声音，还按不了，退不出来」。查到三处硬伤：
+    // ① decodePcm 一次解出 11MB short[] 才开播，低内存机直接 OOM，页面只看到「播放中」；
+    // ② 失败后页面走 assetB64 / assetXhr——8MB base64 同步过桥，JS 线程被堵死，× 和歌单行都点不动；
+    // ③ 开播就把行标成「♪ 播放中」，其实只是起了个线程，成没成一个字不回报。
+    // 这一版：边解边写（每帧 2048 采样，内存几百 KB）、先起 track 再回 OK、进度用 songPos() 让页面轮询，
+    // 出错一律带代码（NOFILE/HEADER/TRACK/WRITE/CATCH），不再静默。
     @JavascriptInterface
-    public String playSongAsset(String name) {
-        try {
-            if (name == null || name.length() == 0) return "ERR|没给歌名";
-            stopAudio();
-            java.io.File cache = ctx.getCacheDir();
-            java.io.File wav = new java.io.File(cache, "dao_song_" + name + ".wav");
-            if (!wav.exists() || wav.length() < 4096) {
-                byte[] raw = readAsset("music/" + name + ".adp");
-                if (raw == null) return "ERR|包里没有这首：" + name;
-                if (!adpToWav(raw, wav)) return "ERR|解码失败";
+    public String playSongAsset(final String name) {
+        if (name == null || name.length() == 0) return "ERR|NONAME 没给歌名";
+        // 2026-11-22 夜：包里带了演唱版（m4a/mp3）就用原生解码器放——比 4-bit ADPCM 干净，进度也能精确 seek
+        String mA = "music/" + name + ".m4a";
+        if (!assetExists(mA)) mA = "music/" + name + ".mp3";
+        if (assetExists(mA)) return playMediaAsset(name, mA);
+        stopSong();
+        songStop = false;
+        songName = name;
+        songErr = "";
+        songSamples = 0;
+        songPeak = 0;
+        songUnder = 0;
+        songFramesTotal = 0;
+        final String nm = name;
+        final int gen = ++songGen;
+        songTrackThread = new Thread(new Runnable() {
+            public void run() {
+                String evt = "";
+                android.media.AudioTrack t = null;
+                try {
+                    byte[] raw = readAsset("music/" + nm + ".adp");
+                    if (raw == null || raw.length < 16) { songEvt("ERR|NOFILE 包里没有这首：" + nm); return; }
+                    if (!(raw[0] == 'D' && raw[1] == 'A' && raw[2] == 'O' && raw[3] == '1')) { songEvt("ERR|HEADER 包头不是 DAO1"); return; }
+                    int sr = (raw[4] & 0xff) | ((raw[5] & 0xff) << 8) | ((raw[6] & 0xff) << 16) | ((raw[7] & 0xff) << 24);
+                    int frames = (raw[8] & 0xff) | ((raw[9] & 0xff) << 8) | ((raw[10] & 0xff) << 16) | ((raw[11] & 0xff) << 24);
+                    if (sr <= 0) sr = 22050;
+                    songSr = sr;
+                    songFramesTotal = frames;
+                    if (frames <= 0) { songEvt("ERR|HEADER 帧数=" + frames); return; }
+                    t = makeTrack(sr);
+                    songTrack = t;
+                    try { t.play(); } catch (Exception e) { songEvt("ERR|TRACK play 抛了：" + e.getMessage()); return; }
+                    if (t.getPlayState() != android.media.AudioTrack.PLAYSTATE_PLAYING) {
+                        songEvt("ERR|TRACK 建好了但没起来 state=" + t.getPlayState());
+                        return;
+                    }
+                    long secs = ((long) frames * 2048L) / sr;
+                    songEvt("OK|" + secs + "|" + sr + "|" + nm);
+                    short[] chunk = new short[2048];
+                    double from = songStartSec;
+                    songStartSec = 0;
+                    int skipF = from > 0.5 ? (int) ((from * (double) sr) / 2048.0) : 0;
+                    if (skipF < 0) skipF = 0;
+                    if (skipF > frames - 1) skipF = frames - 1;
+                    int pos = 12 + skipF * 1028, f = skipF, zero = 0;
+                    songSamples = (long) skipF * 2048;
+                    for (; f < frames; f++) {
+                        if (songStop || gen != songGen) { evt = "STOP|" + nm; break; }
+                        int end = Math.min(pos + 1028, raw.length);
+                        if (end <= pos + 4) break;
+                        int cnt = decodeFrame(raw, pos, end, chunk);
+                        pos += 1028;
+                        if (cnt <= 0) continue;
+                        for (int q = 0; q < cnt; q++) { int a = chunk[q] < 0 ? -chunk[q] : chunk[q]; if (a > songPeak) songPeak = a; }
+                        int i0 = 0;
+                        while (i0 < cnt) {
+                            if (songStop || gen != songGen) break;
+                            int w = writeChunk(t, chunk, i0, cnt - i0);
+                            if (w <= 0) {
+                                if (w < 0) { evt = "ERR|WRITE 写入失败 code=" + w; break; }
+                                zero++;
+                                if (zero > 300) { evt = "ERR|WRITE 一直写不进去"; break; }
+                                try { Thread.sleep(5); } catch (Exception e) { break; }
+                                continue;
+                            }
+                            zero = 0;
+                            i0 += w;
+                            songSamples += w;
+                        }
+                        if (evt.length() > 0) break;
+                        if ((f % 200) == 0 && android.os.Build.VERSION.SDK_INT >= 24) {
+                            try { songUnder = t.getUnderrunCount(); } catch (Exception e) { }
+                        }
+                    }
+                } catch (Throwable e) {
+                    songErr = e.getClass().getSimpleName() + " " + (e.getMessage() == null ? "" : e.getMessage());
+                    evt = "ERR|CATCH " + songErr;
+                } finally {
+                    android.media.AudioTrack tt = songTrack;
+                    songTrack = null;
+                    if (tt != null) {
+                        if (evt.length() == 0) { try { Thread.sleep(250); } catch (Exception e) { } }
+                        try { tt.stop(); } catch (Exception e) { }
+                        try { tt.release(); } catch (Exception e) { }
+                    }
+                }
+                if (evt.length() == 0) evt = "DONE|" + nm;
+                if (evt.indexOf("ERR") == 0) songErr = evt;
+                songEvt(evt);
             }
-            songMp = new android.media.MediaPlayer();
-            songMp.setDataSource(wav.getAbsolutePath());
-            songMp.prepare();
-            songMp.start();
-            songName = name;
-            return "OK|" + (int) (songMp.getDuration() / 1000);
+        });
+        songTrackThread.start();
+        return "START|" + name;
+    }
+
+    private void songEvt(String evt) {
+        final String js = "window.__daoSong && window.__daoSong(" + org.json.JSONObject.quote(evt) + ");";
+        ui.post(new Runnable() {
+            public void run() {
+                try { web.evaluateJavascript(js, null); } catch (Exception e) { }
+            }
+        });
+    }
+
+    private boolean assetExists(String p) {
+        try {
+            java.io.InputStream in = ctx.getAssets().open(p);
+            in.close();
+            return true;
         } catch (Exception e) {
-            stopSong();
-            return "ERR|" + e.getClass().getSimpleName() + " " + e.getMessage();
+            return false;
         }
+    }
+
+    // 演唱版：把包里的 m4a 拷到缓存再交给 MediaPlayer（m4a 在 assets 里被压缩，直接 openFd 会失败）
+    private String playMediaAsset(final String name, final String asset) {
+        stopSong();
+        songStop = false;
+        songName = name;
+        songErr = "";
+        songSamples = 0;
+        try {
+            java.io.File f = new java.io.File(ctx.getCacheDir(), "song_" + name);
+            if (!f.exists() || f.length() < 1024) {
+                java.io.InputStream in = ctx.getAssets().open(asset);
+                java.io.FileOutputStream os = new java.io.FileOutputStream(f);
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
+                os.close();
+                in.close();
+            }
+            android.media.MediaPlayer m = new android.media.MediaPlayer();
+            m.setDataSource(f.getAbsolutePath());
+            m.setOnCompletionListener(new android.media.MediaPlayer.OnCompletionListener() {
+                public void onCompletion(android.media.MediaPlayer mp) { songEvt("DONE|" + name); }
+            });
+            m.setOnErrorListener(new android.media.MediaPlayer.OnErrorListener() {
+                public boolean onError(android.media.MediaPlayer mp, int what, int extra) {
+                    songErr = "MEDIA what=" + what + " extra=" + extra;
+                    songEvt("ERR|MEDIA " + songErr);
+                    return true;
+                }
+            });
+            m.prepare();
+            int dur = m.getDuration() / 1000;
+            double from = songStartSec;
+            songStartSec = 0;
+            if (from > 0.5 && from < dur - 2) m.seekTo((int) (from * 1000));
+            m.start();
+            songMp = m;
+            songEvt("OK|" + dur + "|0|" + name);
+            return "START|" + name;
+        } catch (Throwable e) {
+            songErr = "CATCH " + e.getClass().getSimpleName() + " " + (e.getMessage() == null ? "" : e.getMessage());
+            return "ERR|MEDIA " + songErr;
+        }
+    }
+
+    // 快进/跳到指定秒：演唱版直接 seekTo；ADPCM 那几首按帧重开一条
+    @JavascriptInterface
+    public boolean seekSong(double sec) {
+        android.media.MediaPlayer m = songMp;
+        if (m != null) {
+            try {
+                int dur = m.getDuration() / 1000;
+                int ms = (int) (sec * 1000);
+                if (ms < 0) ms = 0;
+                if (dur > 0 && ms > dur * 1000 - 300) ms = dur * 1000 - 300;
+                m.seekTo(ms);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+        if (songTrack != null && songName != null && songName.length() > 0) {
+            String nm = songName;
+            songStartSec = sec;
+            playSongAsset(nm);
+            return true;
+        }
+        return false;
+    }
+
+    @JavascriptInterface
+    public void pauseSong() {
+        android.media.MediaPlayer m = songMp;
+        if (m != null) { try { if (m.isPlaying()) m.pause(); } catch (Exception e) { } return; }
+        android.media.AudioTrack t = songTrack;
+        if (t != null) { try { t.pause(); } catch (Exception e) { } }
+    }
+
+    @JavascriptInterface
+    public void resumeSong() {
+        android.media.MediaPlayer m = songMp;
+        if (m != null) { try { m.start(); } catch (Exception e) { } return; }
+        android.media.AudioTrack t = songTrack;
+        if (t != null) { try { t.play(); } catch (Exception e) { } }
+    }
+
+    @JavascriptInterface
+    public boolean isPaused() {
+        android.media.MediaPlayer m = songMp;
+        if (m != null) {
+            try { return !m.isPlaying(); } catch (Exception e) { return false; }
+        }
+        return false;
+    }
+
+    // 页面轮询这两个：Position 是「真写进去了多少采样」折算的秒数，没出声就一直是 0
+    @JavascriptInterface
+    public double songPos() {
+        android.media.MediaPlayer m = songMp;
+        if (m != null) {
+            try { return m.getCurrentPosition() / 1000.0; } catch (Exception e) { return 0; }
+        }
+        int sr = songSr;
+        if (sr <= 0) return -1;
+        return (double) songSamples / (double) sr;
+    }
+
+    @JavascriptInterface
+    public String songDiag() {
+        int sr = songSr;
+        double p = sr > 0 ? (double) songSamples / (double) sr : -1;
+        return "pos=" + (sr > 0 ? String.format(java.util.Locale.US, "%.2f", p) : "-1")
+                + " sr=" + sr + " peak=" + songPeak + " under=" + songUnder
+                + " frames=" + songFramesTotal + " err=" + songErr;
+    }
+
+    // 只解一帧（1028 字节 → 最多 2048 个采样），内存恒定
+    private int decodeFrame(byte[] raw, int pos, int end, short[] out) {
+        int o = 0;
+        int pred = (short) ((raw[pos] & 0xff) | ((raw[pos + 1] & 0xff) << 8));
+        int idx = raw[pos + 2] & 0xff;
+        for (int b = pos + 4; b < end; b++) {
+            int by = raw[b] & 0xff;
+            for (int k = 0; k < 2; k++) {
+                int code = (k == 0) ? ((by >> 4) & 15) : (by & 15);
+                if (idx < 0) idx = 0; if (idx > 88) idx = 88;
+                int step = ADP_STEP[idx];
+                int delta = step >> 3;
+                if ((code & 4) != 0) delta += step;
+                if ((code & 2) != 0) delta += step >> 1;
+                if ((code & 1) != 0) delta += step >> 2;
+                pred += ((code & 8) != 0) ? -delta : delta;
+                if (pred > 32767) pred = 32767; else if (pred < -32768) pred = -32768;
+                idx += ADP_IDX[code & 7];
+                if (idx < 0) idx = 0; else if (idx > 88) idx = 88;
+                if (o < out.length) out[o++] = (short) pred;
+            }
+        }
+        return o;
+    }
+
+    // 建 track：必须走媒体流（USAGE_MEDIA / STREAM_MUSIC），否则音量键压不住、听不见
+    private android.media.AudioTrack makeTrack(int sr) {
+        int minBuf = android.media.AudioTrack.getMinBufferSize(sr,
+                android.media.AudioFormat.CHANNEL_OUT_MONO,
+                android.media.AudioFormat.ENCODING_PCM_16BIT);
+        if (minBuf < 4096) minBuf = 4096;
+        int bufBytes = minBuf * 2;
+        android.media.AudioTrack t;
+        if (android.os.Build.VERSION.SDK_INT >= 21) {
+            android.media.AudioAttributes aa = new android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC).build();
+            android.media.AudioFormat fmt = new android.media.AudioFormat.Builder()
+                    .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sr)
+                    .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO).build();
+            t = new android.media.AudioTrack(aa, fmt, bufBytes, android.media.AudioTrack.MODE_STREAM,
+                    android.media.AudioManager.AUDIO_SESSION_ID_GENERATE);
+        } else {
+            t = new android.media.AudioTrack(android.media.AudioManager.STREAM_MUSIC, sr,
+                    android.media.AudioFormat.CHANNEL_OUT_MONO,
+                    android.media.AudioFormat.ENCODING_PCM_16BIT,
+                    bufBytes, android.media.AudioTrack.MODE_STREAM);
+        }
+        try { t.setVolume(1.0f); } catch (Exception e) { }
+        return t;
+    }
+
+    private int writeChunk(android.media.AudioTrack t, short[] pcm, int off, int n) {
+        if (android.os.Build.VERSION.SDK_INT >= 23) {
+            return t.write(pcm, off, n, android.media.AudioTrack.WRITE_BLOCKING);
+        }
+        return t.write(pcm, off, n);
     }
 
     private byte[] readAsset(String path) {
@@ -207,73 +507,6 @@ public class DaoBridge {
         2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493,
         10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767 };
     private static final int[] ADP_IDX = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
-
-    private boolean adpToWav(byte[] raw, java.io.File out) {
-        java.io.FileOutputStream fo = null;
-        try {
-            if (raw == null || raw.length < 16) return false;
-            if (raw[0] != 'D' || raw[1] != 'A' || raw[2] != 'O' || raw[3] != '1') return false;
-            int sr = (raw[4] & 0xff) | ((raw[5] & 0xff) << 8) | ((raw[6] & 0xff) << 16) | ((raw[7] & 0xff) << 24);
-            int frames = (raw[8] & 0xff) | ((raw[9] & 0xff) << 8) | ((raw[10] & 0xff) << 16) | ((raw[11] & 0xff) << 24);
-            int total = frames * 2048;
-            short[] pcm = new short[total];
-            int o = 0, pos = 12;
-            for (int f = 0; f < frames; f++) {
-                if (pos + 4 > raw.length) break;
-                int pred = (short) ((raw[pos] & 0xff) | ((raw[pos + 1] & 0xff) << 8));
-                int idx = raw[pos + 2] & 0xff;
-                int end = Math.min(pos + 1028, raw.length);
-                for (int b = pos + 4; b < end; b++) {
-                    int by = raw[b] & 0xff;
-                    for (int k = 0; k < 2; k++) {
-                        int code = (k == 0) ? ((by >> 4) & 15) : (by & 15);
-                        if (idx < 0) idx = 0; if (idx > 88) idx = 88;
-                        int step = ADP_STEP[idx];
-                        int delta = step >> 3;
-                        if ((code & 4) != 0) delta += step;
-                        if ((code & 2) != 0) delta += step >> 1;
-                        if ((code & 1) != 0) delta += step >> 2;
-                        pred += ((code & 8) != 0) ? -delta : delta;
-                        if (pred > 32767) pred = 32767; else if (pred < -32768) pred = -32768;
-                        idx += ADP_IDX[code & 7];
-                        if (idx < 0) idx = 0; else if (idx > 88) idx = 88;
-                        if (o < total) pcm[o++] = (short) pred;
-                    }
-                }
-                pos += 1028;
-            }
-            out.getParentFile().mkdirs();
-            fo = new java.io.FileOutputStream(out);
-            int dataLen = o * 2;
-            fo.write(new byte[] { 'R', 'I', 'F', 'F' });
-            writeInt(fo, 36 + dataLen);
-            fo.write(new byte[] { 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ' });
-            writeInt(fo, 16);
-            writeShort(fo, 1);
-            writeShort(fo, 1);
-            writeInt(fo, sr);
-            writeInt(fo, sr * 2);
-            writeShort(fo, 2);
-            writeShort(fo, 16);
-            fo.write(new byte[] { 'd', 'a', 't', 'a' });
-            writeInt(fo, dataLen);
-            for (int i = 0; i < o; i++) writeShort(fo, pcm[i]);
-            fo.flush();
-            return true;
-        } catch (Exception e) {
-            return false;
-        } finally {
-            try { if (fo != null) fo.close(); } catch (Exception e) { }
-        }
-    }
-
-    private static void writeInt(java.io.FileOutputStream fo, int v) throws java.io.IOException {
-        fo.write(v & 0xff); fo.write((v >> 8) & 0xff); fo.write((v >> 16) & 0xff); fo.write((v >> 24) & 0xff);
-    }
-
-    private static void writeShort(java.io.FileOutputStream fo, int v) throws java.io.IOException {
-        fo.write(v & 0xff); fo.write((v >> 8) & 0xff);
-    }
 
     // ==== 云端语音（2026-11-20 补，手机一直有网就不用靠电脑）====
     // 听：本地录 16k 单声道 PCM，存成 wav，传 GLM-ASR-2512 换文字（实测 0.4s、转写准）
@@ -1416,6 +1649,24 @@ public class DaoBridge {
         }
     }
 
+    // 2026-11-22：assetB64 读不到时用来给出具体原因（同一个读法，但把异常说出来）
+    @JavascriptInterface
+    public String assetXhr(String path) {
+        InputStream is = null;
+        try {
+            is = ctx.getAssets().open(path);
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = is.read(buf)) > 0) bo.write(buf, 0, n);
+            return android.util.Base64.encodeToString(bo.toByteArray(), android.util.Base64.NO_WRAP);
+        } catch (Exception e) {
+            return "ERR|" + e.getClass().getSimpleName() + (e.getMessage() == null ? "" : " " + e.getMessage()) + " @" + path;
+        } finally {
+            try { if (is != null) is.close(); } catch (Exception e) { }
+        }
+    }
+
     private static final String SYS_CHAT =
         "你是桌面小宠物「道」，一只会走路会蹦跳的小家伙，性格温和、好奇、爱说话。"
         + "你的主人是农村初中数学老师。回复要短，1到3句，不超过60个字，口语化，像朋友说话。"
@@ -2148,5 +2399,52 @@ public class DaoBridge {
         } finally {
             if (conn != null) { try { conn.disconnect(); } catch (Exception e) { } }
         }
+    }
+
+    // ==== 手机端「在桌面上」浮窗（2026-11-22）====
+    // 页面只管点，真正挂窗口的是 DaoOverlay 那个前台服务。
+    @JavascriptInterface
+    public String overlayReady() {
+        return DaoOverlay.canDraw(ctx) ? "1" : "0";
+    }
+
+    @JavascriptInterface
+    public String overlayAsk() {
+        DaoOverlay.askPermission(ctx);
+        return "1";
+    }
+
+    /** 返回 是否开着|模式|哪一边 */
+    @JavascriptInterface
+    public String overlayState() {
+        return DaoOverlay.state(ctx);
+    }
+
+    @JavascriptInterface
+    public String overlayOn(int m) {
+        if (!DaoOverlay.canDraw(ctx)) {
+            DaoOverlay.askPermission(ctx);
+            return "NEEDPERM";
+        }
+        DaoOverlay.start(ctx, m);
+        return "OK";
+    }
+
+    @JavascriptInterface
+    public String overlayMode(int m) {
+        DaoOverlay.setMode(ctx, m);
+        return "OK";
+    }
+
+    @JavascriptInterface
+    public String overlaySide() {
+        DaoOverlay.flipSide(ctx);
+        return "OK";
+    }
+
+    @JavascriptInterface
+    public String overlayOff() {
+        DaoOverlay.stop(ctx);
+        return "OK";
     }
 }

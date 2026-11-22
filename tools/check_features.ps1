@@ -1,4 +1,5 @@
-﻿# check_features.ps1 — 「道」功能体检：一条命令看出哪块功能缺件
+﻿# 程序版本：v0.1 | 2026-11-22 | 基线建档（此前无版本头）
+# check_features.ps1 — 「道」功能体检：一条命令看出哪块功能缺件
 # 用法: powershell -NoProfile -ExecutionPolicy Bypass -File check_features.ps1
 param([switch]$Quiet)
 

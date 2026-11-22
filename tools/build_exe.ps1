@@ -1,4 +1,5 @@
-﻿# Build the desktop pet exe from source, then swap and restart it.
+﻿# 程序版本：v0.2 | 2026-11-22 | 修换包失败：Move-Item -Force 不覆盖已存在 exe，改 Copy-Item 覆盖并清自愈冷却
+# Build the desktop pet exe from source, then swap and restart it.
 # Output: one line "BUILD_OK size=... proc=..." on success, "BUILD_FAIL ..." otherwise.
 $ErrorActionPreference = 'Stop'
 $root = 'F:\Daodao'
@@ -57,7 +58,13 @@ if ($code -ne 0 -or -not (Test-Path -LiteralPath $outNew)) {
 # stop running pet so the exe can be replaced
 Get-Process -Name '道' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
-Move-Item -LiteralPath $outNew -Destination $exe -Force
+# 2026-11-22 修：原来用 Move-Item -Force 换包，目标已存在时不覆盖，报
+# 「当文件已存在时，无法创建该文件」——编译成功了但 exe 换不上去。改成 Copy-Item -Force 覆盖 + 删临时件。
+Copy-Item -LiteralPath $outNew -Destination $exe -Force
+Remove-Item -LiteralPath $outNew -Force -ErrorAction SilentlyContinue
+# 顺手清掉自愈冷却，免得「10 分钟内不重启」把新构建没起来遮住
+$stamp = Join-Path $root '自我状态\.last_selfheal'
+if (Test-Path -LiteralPath $stamp) { Remove-Item -LiteralPath $stamp -Force -ErrorAction SilentlyContinue }
 Start-Process -FilePath $exe
 Start-Sleep -Seconds 10
 $n = @(Get-Process -Name '道' -ErrorAction SilentlyContinue).Count

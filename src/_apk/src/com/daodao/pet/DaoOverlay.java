@@ -1,0 +1,893 @@
+package com.daodao.pet;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RadialGradient;
+import android.graphics.Rect;
+import android.graphics.RectF;
+import android.graphics.Shader;
+import android.os.Build;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+import android.util.DisplayMetrics;
+import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.WindowManager;
+import android.widget.Toast;
+
+/**
+ * 手机端「在桌面上」浮窗。
+ *
+ * 2026-11-22 新加：电脑端 0.110 已经有四种状态（满身 / 贴边偷看 / 小圆球 / 收起），
+ * 手机这边用系统浮层（TYPE_APPLICATION_OVERLAY）做同一套东西。
+ *
+ * 四种状态：
+ *   0 满身   —— 整个立绘浮在屏幕上，可拖，点一下打开道
+ *   1 贴边   —— 窗口中心压在屏幕边上，系统替我们切掉一半，就是"扒着边框偷看"
+ *   2 小圆球 —— 一颗带表情的小球，点一下变回满身
+ *   3 收起   —— 只留通知栏那条，点通知里的按钮唤回
+ *
+ * 两条自动规矩（不改用户手动选的状态）：
+ *   打开「道」本体时浮窗自己藏起来，退回桌面/别的应用再出来；
+ *   屏幕熄灭时撤掉，亮屏再挂上。
+ */
+public class DaoOverlay extends Service {
+
+    public static final int MODE_FULL = 0;
+    public static final int MODE_PEEK = 1;
+    public static final int MODE_BALL = 2;
+    public static final int MODE_HIDE = 3;
+
+    public static final int SIDE_LEFT = 1;
+    public static final int SIDE_RIGHT = 2;
+
+    public static final String SP = "daodao_overlay";
+    private static final String CH = "dao_overlay";
+    private static final int NID = 2001;
+
+    static final String A_START = "com.daodao.pet.OV_START";
+    static final String A_MODE = "com.daodao.pet.OV_MODE";
+    static final String A_SIDE = "com.daodao.pet.OV_SIDE";
+    static final String A_STOP = "com.daodao.pet.OV_STOP";
+
+    private WindowManager wm;
+    private SharedPreferences sp;
+    private PetView pv;
+    private WindowManager.LayoutParams lp;
+    private Handler ui = new Handler(Looper.getMainLooper());
+
+    private int mode = MODE_PEEK;
+    private int side = SIDE_RIGHT;
+    private int sw = 0, sh = 0;
+    private boolean added = false;
+    private boolean screenOn = true;
+
+    private long tick = 0;
+    private Runnable beat;
+
+    private BroadcastReceiver screenRx;
+
+    // ---------------- 给桥 / 页面用的静态口子 ----------------
+
+    public static boolean canDraw(Context c) {
+        try {
+            if (Build.VERSION.SDK_INT >= 23) return android.provider.Settings.canDrawOverlays(c);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 1|模式|边  —— 正在浮着 / 0 表示没开 */
+    public static String state(Context c) {
+        try {
+            SharedPreferences p = c.getSharedPreferences(SP, Context.MODE_PRIVATE);
+            String on = p.getBoolean("on", false) ? "1" : "0";
+            String m = String.valueOf(p.getInt("mode", MODE_PEEK));
+            String s = String.valueOf(p.getInt("side", SIDE_RIGHT));
+            return on + "|" + m + "|" + s;
+        } catch (Exception e) {
+            return "0|1|2";
+        }
+    }
+
+    public static void askPermission(Context c) {
+        try {
+            if (Build.VERSION.SDK_INT >= 23) {
+                Intent i = new Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        android.net.Uri.parse("package:" + c.getPackageName()));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                c.startActivity(i);
+            }
+        } catch (Exception e) { }
+    }
+
+    public static void start(Context c, int m) {
+        try {
+            Intent i = new Intent(c, DaoOverlay.class);
+            i.setAction(A_START);
+            i.putExtra("mode", m);
+            if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i);
+            else c.startService(i);
+        } catch (Exception e) { }
+    }
+
+    public static void setMode(Context c, int m) {
+        try {
+            Intent i = new Intent(c, DaoOverlay.class);
+            i.setAction(A_MODE);
+            i.putExtra("mode", m);
+            if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i);
+            else c.startService(i);
+        } catch (Exception e) { }
+    }
+
+    public static void flipSide(Context c) {
+        try {
+            Intent i = new Intent(c, DaoOverlay.class);
+            i.setAction(A_SIDE);
+            if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i);
+            else c.startService(i);
+        } catch (Exception e) { }
+    }
+
+    public static void stop(Context c) {
+        try {
+            Intent i = new Intent(c, DaoOverlay.class);
+            i.setAction(A_STOP);
+            if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i);
+            else c.startService(i);
+        } catch (Exception e) { }
+    }
+
+    // ---------------- 生命周期 ----------------
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+        sp = getSharedPreferences(SP, MODE_PRIVATE);
+        mode = sp.getInt("mode", MODE_PEEK);
+        side = sp.getInt("side", SIDE_RIGHT);
+        measure();
+
+        screenRx = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                try {
+                    String a = intent == null ? "" : intent.getAction();
+                    if (Intent.ACTION_SCREEN_OFF.equals(a)) {
+                        screenOn = false;
+                        hideView();
+                    } else if (Intent.ACTION_SCREEN_ON.equals(a)) {
+                        screenOn = true;
+                        showView(false);
+                    }
+                } catch (Exception e) { }
+            }
+        };
+        try {
+            IntentFilter f = new IntentFilter();
+            f.addAction(Intent.ACTION_SCREEN_ON);
+            f.addAction(Intent.ACTION_SCREEN_OFF);
+            registerReceiver(screenRx, f);
+        } catch (Exception e) { }
+    }
+
+    @Override
+    public int onStartCommand(Intent it, int flags, int startId) {
+        String a = (it == null || it.getAction() == null) ? A_START : it.getAction();
+        int m = (it == null) ? -1 : it.getIntExtra("mode", -1);
+
+        if (A_STOP.equals(a)) {
+            // 用 startForegroundService 叫起来的服务，5 秒内必须先 startForeground，否则系统直接判崩
+            startForegroundSafe();
+            stopAll();
+            return START_NOT_STICKY;
+        }
+        if (A_SIDE.equals(a)) {
+            side = (side == SIDE_LEFT) ? SIDE_RIGHT : SIDE_LEFT;
+            sp.edit().putInt("side", side).apply();
+        }
+        if (m >= 0) {
+            mode = m;
+            sp.edit().putInt("mode", mode).apply();
+        }
+        sp.edit().putBoolean("on", true).putBoolean("want", true).apply();
+
+        startForegroundSafe();
+        if (mode == MODE_HIDE) hideView();
+        else if (screenOn) showView(false);
+        else hideView();
+
+        startBeat();
+        return START_STICKY;
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration nc) {
+        super.onConfigurationChanged(nc);
+        measure();
+        if (pv != null) pv.reloadSheet();
+        if (added) {
+            int oldMode = mode;
+            mode = oldMode;
+            layout(oldMode, false);
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        stopBeat();
+        removeView();                      // 只拆窗口，不再发通知（服务都要没了，别再留一条挂着）
+        try { if (screenRx != null) unregisterReceiver(screenRx); } catch (Exception e) { }
+        try { sp.edit().putBoolean("on", false).apply(); } catch (Exception e) { }
+        super.onDestroy();
+    }
+
+    @Override
+    public IBinder onBind(Intent i) { return null; }
+
+    // ---------------- 浮窗管理 ----------------
+
+    private int dp(float v) {
+        return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private void measure() {
+        try {
+            DisplayMetrics dm = new DisplayMetrics();
+            wm.getDefaultDisplay().getRealMetrics(dm);
+            sw = dm.widthPixels;
+            sh = dm.heightPixels;
+        } catch (Exception e) { }
+        if (sw <= 0) sw = 1080;
+        if (sh <= 0) sh = 1920;
+    }
+
+    /** 满身/贴边共用的立绘尺寸：高约屏幕 7.5%（上一版 16% 还是太大，挡图标）
+     *  1080×2400 / density 2.75 实测：180px 高、90px 宽，跟桌面图标差不多大 */
+    private int petH() {
+        int h = (int) (sh * 0.075f);
+        int cap = dp(66);
+        if (h > cap) h = cap;
+        if (h < dp(52)) h = dp(52);
+        return h;
+    }
+
+    private int ballSize() {
+        return dp(42);
+    }
+
+    private void layout(int m, boolean resetPos) {
+        if (pv == null) return;
+        if (lp == null) {
+            lp = new WindowManager.LayoutParams();
+            if (Build.VERSION.SDK_INT >= 26) {
+                lp.type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
+            } else {
+                lp.type = WindowManager.LayoutParams.TYPE_PHONE;
+            }
+            lp.gravity = Gravity.TOP | Gravity.LEFT;
+        }
+        int w, h;
+        if (m == MODE_BALL) {
+            int s = ballSize();
+            w = s; h = s;
+        } else {
+            h = petH();
+            w = h / 2;
+        }
+        lp.width = w;
+        lp.height = h;
+        lp.format = android.graphics.PixelFormat.TRANSLUCENT;
+        lp.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
+
+        int kx, ky;
+        if (m == MODE_PEEK) {
+            kx = side == SIDE_LEFT ? -w / 2 : sw - w / 2;
+            ky = resetPos ? (int) (sh * 0.38f) : sp.getInt("y1", (int) (sh * 0.38f));
+            peekT0 = 0;          // 刚贴边先老老实实藏着，过一会儿再探头
+            peekLastX = Integer.MIN_VALUE;
+        } else if (m == MODE_BALL) {
+            kx = resetPos ? (sw - w - dp(6)) : sp.getInt("x2", sw - w - dp(6));
+            ky = resetPos ? (int) (sh * 0.42f) : sp.getInt("y2", (int) (sh * 0.42f));
+            if (kx < 0) kx = 0;
+            if (kx > sw - w) kx = sw - w;
+        } else {
+            kx = resetPos ? (sw - w - dp(10)) : sp.getInt("x0", sw - w - dp(10));
+            ky = resetPos ? (int) (sh * 0.60f) : sp.getInt("y0", (int) (sh * 0.60f));
+            if (kx < 0) kx = 0;
+            if (kx > sw - w) kx = sw - w;
+        }
+        if (ky < 0) ky = 0;
+        if (ky > sh - h) ky = sh - h;
+        lp.x = kx; lp.y = ky;
+
+        if (pv != null) pv.setMode(m);
+        if (added) {
+            try { wm.updateViewLayout(pv, lp); } catch (Exception e) { }
+        }
+    }
+
+    private void showView(boolean resetPos) {
+        if (mode == MODE_HIDE) return;
+        if (sp.getInt("app", 0) == 1) return;     // 「道」本体在前台时不挡着
+        if (pv == null) {
+            pv = new PetView();
+        }
+        layout(mode, resetPos);
+        if (!added) {
+            try {
+                wm.addView(pv, lp);
+                added = true;
+            } catch (Exception e) {
+                added = false;
+                toast("浮窗没挂上去：" + (e == null ? "" : e.getMessage()));
+            }
+        }
+        refreshNotif();
+    }
+
+    private void hideView() {
+        removeView();
+        refreshNotif();
+    }
+
+    private void removeView() {
+        if (pv != null && added) {
+            try { wm.removeView(pv); } catch (Exception e) { }
+        }
+        added = false;
+    }
+
+    private void stopAll() {
+        removeView();
+        stopBeat();
+        try { stopForeground(true); } catch (Exception e) { }
+        try { sp.edit().putBoolean("on", false).putBoolean("want", false).putInt("app", 0).apply(); } catch (Exception e) { }
+        stopSelf();
+    }
+
+    private void setModeInternal(int m) {
+        mode = m;
+        sp.edit().putInt("mode", m).putBoolean("on", true).putBoolean("want", true).apply();
+        if (m == MODE_HIDE) {
+            hideView();
+        } else {
+            showView(false);
+            if (!added && screenOn) showView(false);
+        }
+        refreshNotif();
+    }
+
+    private void toast(final String s) {
+        ui.post(new Runnable() {
+            public void run() {
+                try { Toast.makeText(DaoOverlay.this, s, Toast.LENGTH_SHORT).show(); } catch (Exception e) { }
+            }
+        });
+    }
+
+    // ---------------- 心跳：做动画 + 看前台 ----------------
+
+    private void startBeat() {
+        if (beat != null) return;
+        beat = new Runnable() {
+            public void run() {
+                tick++;
+                try {
+                    if (pv != null && added) pv.invalidate();
+                } catch (Exception e) { }
+                // 每 10 拍（≈0.9 秒）查一次：本体在前台就藏，回桌面再出来
+                if (tick % 10 == 0) {
+                    try {
+                        int app = sp.getInt("app", 0);
+                        if (app == 1 && added) hideView();
+                        else if (app == 0 && !added && screenOn && mode != MODE_HIDE) showView(false);
+                    } catch (Exception e) { }
+                }
+                // 每 600 拍（≈54 秒）想打招呼就自己冒一句（内部限 20 分钟一次、只白天）
+                if (tick % 600 == 0 && pv != null && added && mode == MODE_FULL) {
+                    try { pv.greet(false); } catch (Exception e) { }
+                }
+                // 贴边时慢慢探头、再缩回去（学乔巴：先只露半身，隔一阵扒着边往外探一下）
+                if (mode == MODE_PEEK && added && lp != null && pv != null) {
+                    try { peekDrift(); } catch (Exception e) { }
+                }
+                // 满身站在桌面上时会自己走两步，不是钉在原地
+                if (mode == MODE_FULL && added && lp != null && pv != null) {
+                    try { walkDrift(); } catch (Exception e) { }
+                }
+                ui.postDelayed(this, 90);
+            }
+        };
+        ui.post(beat);
+    }
+
+    private void stopBeat() {
+        if (beat != null) ui.removeCallbacks(beat);
+        beat = null;
+    }
+
+    // ---------------- 贴边探头 ----------------
+    // 原来靠画布左右平移做"探头"，2.9 秒来回一趟，像在原地抖。
+    // 现在改成整窗慢慢挪：一半藏在边外 6.5 秒 → 1.5 秒挪出来 → 停 3.6 秒 → 1.3 秒缩回去。
+    // 图像不动地方，只把窗口推出去，看着像人扒着边框往外探身（乔巴那几张就是这个动作）。
+    private long peekT0 = 0;
+    private int peekLastX = Integer.MIN_VALUE;
+    private long touchAt = 0;
+
+    // 自己会走：站着待一会儿，然后沿着当前高度走 2~4 秒，走到边就掉头
+    private boolean walking = false;
+    private int walkDir = 0;
+    private long walkUntilAt = 0;
+    private long walkNextAt = 0;
+
+    private void walkDrift() {
+        long now = System.currentTimeMillis();
+        if (now - touchAt < 2000) { walking = false; if (pv != null) pv.walking = false; return; }
+        int w = lp.width;
+        if (!walking) {
+            if (walkNextAt == 0) walkNextAt = now + 5000 + (long) (Math.random() * 7000);
+            if (now < walkNextAt) return;
+            walking = true;
+            walkDir = Math.random() < 0.5 ? -1 : 1;
+            walkUntilAt = now + 2000 + (long) (Math.random() * 1800);
+            if (pv != null) pv.walking = true;
+        }
+        int step = Math.max(1, dp(0.75f));   // 2026-11-22 夜：1.4dp/拍 走得太飘，减半跟 8 帧节奏才好对上
+        lp.x += walkDir * step;
+        if (lp.x <= dp(2)) { lp.x = dp(2); walkDir = 1; }
+        if (lp.x >= sw - w - dp(2)) { lp.x = sw - w - dp(2); walkDir = -1; }
+        if (now > walkUntilAt) {
+            walking = false;
+            walkNextAt = now + 6000 + (long) (Math.random() * 8000);
+            if (pv != null) pv.walking = false;
+        }
+        try { wm.updateViewLayout(pv, lp); } catch (Exception e) { }
+    }
+
+    private void peekDrift() {
+        if (System.currentTimeMillis() - touchAt < 2500) return;   // 手刚碰过就别抢
+        if (peekT0 == 0) peekT0 = System.currentTimeMillis();
+        long cyc = 13000L;
+        long p = (System.currentTimeMillis() - peekT0) % cyc;
+        int w = lp.width;
+        int restX = side == SIDE_LEFT ? -w / 2 : sw - w / 2;
+        int outX = side == SIDE_LEFT ? 0 : sw - w;
+        float f;
+        if (p < cyc * 0.50f) f = 0f;
+        else if (p < cyc * 0.62f) { float u = (p - cyc * 0.50f) / (cyc * 0.12f); f = u * u * (3 - 2 * u); }
+        else if (p < cyc * 0.90f) f = 1f;
+        else { float u = (p - cyc * 0.90f) / (cyc * 0.10f); float s = u * u * (3 - 2 * u); f = 1f - s; }
+        int x = restX + (int) ((outX - restX) * f);
+        if (x != peekLastX) {
+            peekLastX = x;
+            lp.x = x;
+            try { wm.updateViewLayout(pv, lp); } catch (Exception e) { }
+        }
+    }
+
+    // ---------------- 通知 ----------------
+
+    private String modeText() {
+        switch (mode) {
+            case MODE_FULL: return "满身站在桌面上";
+            case MODE_PEEK: return (side == SIDE_LEFT ? "扒着左边" : "扒着右边") + "偷看";
+            case MODE_BALL: return "缩成一颗小球";
+            default: return "收起了，点通知唤回";
+        }
+    }
+
+    private PendingIntent servicePi(String action, int m, int req) {
+        Intent i = new Intent(this, DaoOverlay.class);
+        i.setAction(action);
+        if (m >= 0) i.putExtra("mode", m);
+        int fl = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 23) fl |= PendingIntent.FLAG_IMMUTABLE;
+        return PendingIntent.getService(this, req, i, fl);
+    }
+
+    private PendingIntent appPi() {
+        Intent i = new Intent(this, DaoActivity.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        int fl = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 23) fl |= PendingIntent.FLAG_IMMUTABLE;
+        return PendingIntent.getActivity(this, 11, i, fl);
+    }
+
+    private Notification buildNotif() {
+        Notification.Builder b;
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            try {
+                NotificationChannel ch = new NotificationChannel(CH, "道 在桌面上", NotificationManager.IMPORTANCE_LOW);
+                ch.setShowBadge(false);
+                ch.setSound(null, null);
+                nm.createNotificationChannel(ch);
+            } catch (Exception e) { }
+            b = new Notification.Builder(this, CH);
+        } else {
+            b = new Notification.Builder(this);
+        }
+        b.setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("道 · 在手机桌面上")
+                .setContentText(modeText())
+                .setOngoing(true)
+                .setShowWhen(false)
+                .setContentIntent(appPi());
+        try {
+            b.addAction(0, "满身", servicePi(A_MODE, MODE_FULL, 21));
+            b.addAction(0, "贴边", servicePi(A_MODE, MODE_PEEK, 22));
+            b.addAction(0, "球", servicePi(A_MODE, MODE_BALL, 23));
+            b.addAction(0, "收起", servicePi(A_STOP, -1, 24));
+        } catch (Exception e) { }
+        return b.build();
+    }
+
+    private void startForegroundSafe() {
+        try {
+            startForeground(NID, buildNotif());
+        } catch (Exception e) { }
+    }
+
+    private void refreshNotif() {
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            nm.notify(NID, buildNotif());
+        } catch (Exception e) { }
+    }
+
+    // ---------------- 画 ----------------
+
+    private class PetView extends View {
+        private Bitmap sheet;
+        private Bitmap ballArt;      // 球头像专用图（assets/ball.png），有就用它，比从八帧里裁更清楚
+        private Bitmap ballHappy, ballSleep, ballSur;   // 三种表情：开心 / 困 / 惊讶
+        private long happyUntil = 0;
+        private int fw = 192, fh = 384;
+        private int fN = 8;
+        private Paint p = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+        private Paint bp = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private int vm = MODE_FULL;
+        boolean walking = false;   // 由外层 walkDrift 控制：真在移动时才播走路帧
+        // 2026-11-22：桌面图标也打招呼。10 分钟内不重复，白天才开口，晚上只轻轻应一下
+        private long lastGreet = 0;
+        private String[] greetLines = { "道在这儿呢。", "来啦。", "我在这儿，你说。", "嗯，我在。" };
+
+        PetView() {
+            super(DaoOverlay.this);
+            setLayerType(View.LAYER_TYPE_HARDWARE, null);
+            reloadSheet();
+        }
+
+        void reloadSheet() {
+            try {
+                BitmapFactory.Options o = new BitmapFactory.Options();
+                o.inScaled = false;
+                sheet = BitmapFactory.decodeStream(getContext().getAssets().open("walk8.png"), null, o);
+            } catch (Exception e) {
+                sheet = null;
+            }
+            if (sheet != null && sheet.getHeight() > 0) {
+                fh = sheet.getHeight();
+                fN = 8;
+                fw = sheet.getWidth() / fN;
+                if (fw <= 0) { fw = fh / 2; fN = 1; }
+            }
+            if (sheet != null && !sheet.isRecycled()) keyWhite();
+            try {
+                BitmapFactory.Options bo = new BitmapFactory.Options();
+                bo.inScaled = false;
+                ballArt = BitmapFactory.decodeStream(getContext().getAssets().open("ball.png"), null, bo);
+            } catch (Exception e) {
+                ballArt = null;   // 没这张图就退回"从八帧里裁头像"
+            }
+            ballHappy = loadOpt("ball_happy.png");
+            ballSleep = loadOpt("ball_sleep.png");
+            ballSur = loadOpt("ball_sur.png");
+            invalidate();
+        }
+
+        /**
+         * 2026-11-22：walk8.png 的白底是半透明白（alpha 139~197），挂在桌面上就是一块白板。
+         * 只清「从四边连通过来」的近白像素——人物身上的白裙/白鞋与边缘不连通，不会被挖掉。
+         */
+        void keyWhite() {
+            try {
+                int w = sheet.getWidth(), h = sheet.getHeight();
+                int[] px = new int[w * h];
+                sheet.getPixels(px, 0, w, 0, 0, w, h);
+                boolean[] seen = new boolean[w * h];
+                int[] q = new int[w * h];
+                int head = 0, tail = 0;
+                for (int x = 0; x < w; x++) {
+                    tail = pushIfWhite(px, seen, q, tail, x, w);
+                    tail = pushIfWhite(px, seen, q, tail, x, (h - 1) * w);
+                }
+                for (int y = 0; y < h; y++) {
+                    tail = pushIfWhite(px, seen, q, tail, 0, y * w + 0);
+                    tail = pushIfWhite(px, seen, q, tail, w - 1, y * w + w - 1);
+                }
+                while (head < tail) {
+                    int idx = q[head++];
+                    px[idx] = 0x00000000;
+                    int x = idx % w, y = idx / w;
+                    if (x > 0) tail = pushIfWhite(px, seen, q, tail, x - 1, idx - 1);
+                    if (x < w - 1) tail = pushIfWhite(px, seen, q, tail, x + 1, idx + 1);
+                    if (y > 0) tail = pushIfWhite(px, seen, q, tail, x, idx - w);
+                    if (y < h - 1) tail = pushIfWhite(px, seen, q, tail, x, idx + w);
+                }
+                sheet.setPixels(px, 0, w, 0, 0, w, h);
+            } catch (Exception e) { }
+        }
+
+        int pushIfWhite(int[] px, boolean[] seen, int[] q, int tail, int x, int idx) {
+            if (idx < 0 || idx >= px.length || seen[idx]) return tail;
+            if (!nearWhite(px[idx])) return tail;
+            seen[idx] = true;
+            q[tail] = idx;
+            return tail + 1;
+        }
+
+        boolean nearWhite(int c) {
+            int a = (c >>> 24);
+            if (a < 60) return false;                      // 已经透明，别扩散
+            int r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+            if (r < 225 || g < 225 || b < 225) return false;
+            int mx = Math.max(r, Math.max(g, b)), mn = Math.min(r, Math.min(g, b));
+            return (mx - mn) <= 14;                        // 近中性白，彩色的浅色别当背景
+        }
+
+        /** 头像方框：第 0 帧的脸（实测脸在 x88-137 / y49-95，连头发取 0.52 边长的方块，居中偏右） */
+        private Rect headRect() {
+            int side = (int) (fw * 0.52f);
+            int x0 = (int) (fw * 0.26f);
+            int y0 = (int) (fh * 0.045f);
+            int x1 = Math.min(fw, x0 + side);
+            int y1 = Math.min(fh, y0 + side);
+            return new Rect(x0, y0, x1, y1);
+        }
+
+        Bitmap loadOpt(String name) {
+            try {
+                BitmapFactory.Options o = new BitmapFactory.Options();
+                o.inScaled = false;
+                return BitmapFactory.decodeStream(getContext().getAssets().open(name), null, o);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        void setMode(int m) {
+            vm = m;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            super.onDraw(c);
+            int w = getWidth(), h = getHeight();
+            if (vm == MODE_BALL) { drawBall(c, w, h); return; }
+
+            if (sheet == null || sheet.isRecycled()) {
+                Paint q = new Paint();
+                q.setColor(0xFF9FBCE8);
+                c.drawRoundRect(new RectF(2, 2, w - 2, h - 2), 12, 12, q);
+                return;
+            }
+            // 2026-11-22：满身时 8 帧慢走（3 拍一帧 ≈2.8fps）。贴边时不再原地踏步——
+            // 那种"人不动腿在动"最假，改成定格站姿，动的是窗口本身的探出/缩回。
+            int fi;
+            int bob;
+            if (vm == MODE_PEEK) {
+                fi = 0;
+                bob = (int) (Math.sin(tick / 22.0) * (h * 0.0015f));   // 只剩一点点呼吸的起伏
+            } else {
+                // 走的时候播 8 帧走路，站着就定格第 0 帧；窗口真的在移动，腿才动
+                if (walking) {
+                    fi = fN > 0 ? (int) ((tick / 3) % fN) : 0;   // 2026-11-22 夜：tick/2 太赶，改 3 拍一帧
+                    bob = (int) (Math.sin(tick / 4.0) * (h * 0.006f));
+                } else {
+                    fi = 0;
+                    bob = (int) (Math.sin(tick / 9.0) * (h * 0.004f));
+                }
+            }
+            float lean = 0;
+            Rect src = new Rect(fi * fw, 0, fi * fw + fw, fh);
+            Rect dst = new Rect(0, bob, w, h + bob);
+            // 脚下一点软阴影：不然人是"飘"在白底上的，落地感差
+            Paint sh = new Paint(Paint.ANTI_ALIAS_FLAG);
+            sh.setColor(0x22000000);
+            c.drawOval(new RectF(w * 0.24f, h + bob - h * 0.03f, w * 0.76f, h + bob + h * 0.005f), sh);
+            c.save();
+            if (walking && walkDir < 0) { c.translate(w, 0); c.scale(-1f, 1f); }   // 向左走就把整帧镜像，别让它倒着迈步
+            c.translate(lean, 0);
+            c.drawBitmap(sheet, src, dst, p);
+            c.restore();
+        }
+
+        void drawBall(Canvas c, int w, int h) {
+            int cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2 - 2;
+            if (r < 6) r = 6;
+            // 2026-11-22：球面改成「当天形象的头像」，不再是通用渐变笑脸。
+            // 呼吸 3.1 秒一轮（±2%），每 ~4.5 秒眨一下（压扁 6%，一拍 ~90ms）
+            float br = 1f + 0.02f * (float) Math.sin(tick * (Math.PI * 2 / 34.0));
+            boolean blink = (tick % 50) < 1;
+            c.save();
+            c.translate(cx, cy);
+            c.scale(br, br * (blink ? 0.94f : 1f));
+
+            Paint base = new Paint(Paint.ANTI_ALIAS_FLAG);
+            base.setColor(0xFFEFF5FF);
+            c.drawCircle(0, 0, r, base);
+
+            if (ballArt != null && !ballArt.isRecycled()) {
+                // 专用头像：等比铺满圆，纵向往上抬一点，让眼睛落在圆的上三分之一
+                // 表情：刚打过招呼→开心；深夜→困；其余正常
+                Bitmap art = ballArt;
+                long now = System.currentTimeMillis();
+                int hh = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+                if (now < happyUntil && ballHappy != null) art = ballHappy;
+                else if ((hh >= 23 || hh < 6) && ballSleep != null) art = ballSleep;
+                android.graphics.Path clip2 = new android.graphics.Path();
+                clip2.addCircle(0, 0, r, android.graphics.Path.Direction.CW);
+                c.save();
+                c.clipPath(clip2);
+                float s2 = Math.max(r * 2f / art.getWidth(), r * 2f / art.getHeight());
+                float dw = art.getWidth() * s2, dh = art.getHeight() * s2;
+                float ox = -dw / 2f, oy = -dh / 2f - r * 0.06f;
+                RectF dst2 = new RectF(ox, oy, ox + dw, oy + dh);
+                c.drawBitmap(art, null, dst2, p);
+                c.restore();
+            } else if (sheet != null && !sheet.isRecycled()) {
+                android.graphics.Path clip = new android.graphics.Path();
+                clip.addCircle(0, 0, r, android.graphics.Path.Direction.CW);
+                c.save();
+                c.clipPath(clip);
+                Rect head = headRect();
+                float d = r * 2.12f;
+                RectF dst = new RectF(-d / 2f, -d / 2f + r * 0.12f, d / 2f, d / 2f + r * 0.12f);
+                c.drawBitmap(sheet, head, dst, p);
+                c.restore();
+            }
+
+            Paint rim = new Paint(Paint.ANTI_ALIAS_FLAG);
+            rim.setStyle(Paint.Style.STROKE);
+            rim.setStrokeWidth(r * 0.05f + 1);
+            rim.setColor(0x99AFC6EA);
+            c.drawCircle(0, 0, r, rim);
+            c.restore();
+        }
+
+        private float dRx, dRy;
+        private int wx0, wy0;
+        private long t0;
+        private boolean moved;
+
+        @Override
+        public boolean onTouchEvent(MotionEvent e) {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    dRx = e.getRawX(); dRy = e.getRawY();
+                    wx0 = lp.x; wy0 = lp.y;
+                    t0 = System.currentTimeMillis();
+                    touchAt = t0;
+                    moved = false;
+                    return true;
+                case MotionEvent.ACTION_MOVE: {
+                    float dx = e.getRawX() - dRx, dy = e.getRawY() - dRy;
+                    if (!moved && (Math.abs(dx) > dp(6) || Math.abs(dy) > dp(6))) moved = true;
+                    if (moved) dragTo(wx0 + (int) dx, wy0 + (int) dy);
+                    touchAt = System.currentTimeMillis();
+                    return true;
+                }
+                case MotionEvent.ACTION_UP: {
+                    long dt = System.currentTimeMillis() - t0;
+                    if (!moved && dt < 400) {
+                        onTap();
+                    } else {
+                        onDrop();
+                    }
+                    return true;
+                }
+                case MotionEvent.ACTION_CANCEL:
+                    onDrop();
+                    return true;
+            }
+            return super.onTouchEvent(e);
+        }
+
+        private void dragTo(int nx, int ny) {
+            int w = lp.width, h = lp.height;
+            if (mode == MODE_PEEK) {
+                // 贴边时只让上下挪，横着的半边永远压在边上
+                nx = side == SIDE_LEFT ? -w / 2 : sw - w / 2;
+                if (ny < -h / 3) ny = -h / 3;
+                if (ny > sh - h * 0.66f) ny = (int) (sh - h * 0.66f);
+            } else {
+                if (nx < -w / 4) nx = -w / 4;
+                if (nx > sw - w * 0.75f) nx = (int) (sw - w * 0.75f);
+                if (ny < 0) ny = 0;
+                if (ny > sh - h) ny = sh - h;
+            }
+            lp.x = nx; lp.y = ny;
+            try { wm.updateViewLayout(this, lp); } catch (Exception e) { }
+        }
+
+        private void onDrop() {
+            int w = lp.width;
+            if (mode == MODE_BALL) {
+                // 松手吸到左右两边，跟常见的悬浮球一个脾气
+                int mid = lp.x + w / 2;
+                int nl = (mid < sw / 2) ? dp(4) : sw - w - dp(4);
+                lp.x = nl;
+                try { wm.updateViewLayout(this, lp); } catch (Exception e) { }
+                sp.edit().putInt("x2", lp.x).putInt("y2", lp.y).apply();
+            } else if (mode == MODE_PEEK) {
+                sp.edit().putInt("y1", lp.y).apply();
+                peekT0 = System.currentTimeMillis() + 1500;   // 手放开先隐一下再探头
+                peekLastX = Integer.MIN_VALUE;
+            } else if (mode == MODE_FULL) {
+                sp.edit().putInt("x0", lp.x).putInt("y0", lp.y).apply();
+            }
+        }
+
+        private void onTap() {
+            if (vm == MODE_BALL || vm == MODE_PEEK) {
+                // 跟电脑端一个规矩：戳一下就站直，不再满屏贴边；顺手打个招呼
+                setModeInternal(MODE_FULL);
+                greet(true);
+            } else {
+                openApp();
+            }
+        }
+
+        // 打招呼：戳它一定应一声；平时二十来分钟自己冒一句（只白天，晚上别吵）
+        void greet(boolean forced) {
+            long now = System.currentTimeMillis();
+            int hh = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+            if (!forced) {
+                if (hh < 8 || hh > 21) return;
+                if (now - lastGreet < 20L * 60 * 1000) return;
+            }
+            if (now - lastGreet < 40L * 1000) return;
+            lastGreet = now;
+            happyUntil = now + 6000;   // 打招呼这 6 秒换成笑脸
+            String line = greetLines[(int) (Math.random() * greetLines.length)];
+            try {
+                Toast t = Toast.makeText(getContext(), line, Toast.LENGTH_SHORT);
+                t.setGravity(Gravity.TOP | Gravity.END, (int) dp(18), (int) dp(96));
+                t.show();
+            } catch (Exception e) { }
+            postInvalidate();
+        }
+    }
+
+    private void openApp() {
+        try {
+            Intent i = new Intent(this, DaoActivity.class);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            startActivity(i);
+        } catch (Exception e) { }
+    }
+}

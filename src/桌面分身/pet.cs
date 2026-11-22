@@ -2649,7 +2649,9 @@ public class DesktopPet : Form
         anim.Tick += new EventHandler(OnTick);
         animClock.Start();
         // anim.Start() 停用：WM_TIMER 上不去 60fps，改由 pump 驱动
-        try { pump = new System.Threading.Timer(PumpTick, null, 16, 16); } catch { }
+        // 2026-11-22 实测 p50=29ms ≈ 两倍 16ms，说明每帧至少漏一个泵点：把泵周期压到 10ms，
+        // 用更密的敲门抵消 BeginInvoke 的排队延迟；忙标志仍在，不会把消息队列灌满。
+        try { pump = new System.Threading.Timer(PumpTick, null, 10, 10); } catch { }
 
         blinkNextT = 0.9f;
 

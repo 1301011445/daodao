@@ -5,7 +5,7 @@ It walks, speaks, learns, and — the unusual part — **keeps a ledger on itsel
 self-audit once a day, then fixes what scores low.
 
 Built for personal use, shipped as-is: Windows 10/11 executable (no installer) and an Android APK.
-Current release **v58** — 12.5 MB (Windows) / 4.9 MB (Android).
+Current build **v112** — 9.9 MB (Windows) / 12.5 MB (Android).
 
 ---
 
@@ -16,11 +16,18 @@ Current release **v58** — 12.5 MB (Windows) / 4.9 MB (Android).
   desktop. The whole set shares one skeleton and one voice table — motion and speech are the same
   pipeline, not two unrelated systems.
 - **Animation that is really drawn, not translated.** 8-frame walk cycles (contact, down, passing,
-  up, then the other foot) per character; 14 face plates, 48 expression frames, 20 poses, 16 walk
-  frames. Walking too fast and it steps onto a sword and flies instead.
-- **Speech in 14 voices.** Offline Chinese ASR (Vosk) for wake-word and first-pass hearing, an LLM
-  (GLM) for understanding and replies, edge-tts for synthesis, played locally — no subtitle-style
-  narration.
+  up, then the other foot); the same figure is additionally driven by an 8×12 deformation mesh at
+  runtime, so the torso breathes, the hair lags behind the body, the head tilts around the neck, and
+  the lower body shears while walking. On the phone, the edge pose is a half-body "peek with one hand
+  on the frame", mirrored automatically when it stands on the other side of the screen.
+- **Speech in multiple voices.** Offline Chinese ASR (Vosk) for wake-word and first-pass hearing, an
+  LLM (GLM) for understanding and replies, edge-tts for synthesis, played locally.
+- **Its own songs.** Melody and arrangement are generated from a small music pipeline
+  (`tools/音乐/`): lyric-to-note alignment, vibrato/breath/legato shaping, and a timbre learner that
+  studies *vocal technique parameters* (vibrato rate, breathiness, spectral tilt, register) from
+  reference audio and blends at most 55% of them into the character's own base voice — never a copy
+  of another singer's identity. A matcher scores lyric mood, melodic register and chosen timbre
+  against one shared table before anything is shipped.
 - **Self-updating.** On launch it checks the network after 5 seconds, then every 4 hours. Over public
   internet, so it updates on any Wi-Fi, in any city. The Windows build downloads, swaps itself and
   restarts (a one-second gap is normal); the Android build fetches the new APK on demand.
@@ -79,8 +86,7 @@ it.
 Windows (Python 3.13):
 
 ```
-pip install vosk miniaudio sounddevice edge-tts Pillow
-python src\桌面分身\_bundle\voice.py
+powershell -File tools\build_exe.ps1
 ```
 
 Android APK (JDK 17 + Android build-tools 34):
@@ -94,13 +100,17 @@ runtime before expecting wake-word recognition to work.
 
 ## Download
 
-Desktop and Android builds are served from the download page:
-<https://4mf81m04wehh3.doubao.link/app/app_17hnj8acgs2>
+Desktop and Android builds are served from the published download page (version page kept in sync by
+`SyncServer`). The exact link rotates per release; the current one lives in `版本清单_src/`.
 
 ## What is deliberately not in this repo
 
-Source code and art only. Personal conversations, runtime logs, state databases, payment QR codes,
-access tokens and the ASR model stay out of version control (see `.gitignore`).
+Personal conversations, runtime logs, state databases, payment QR codes, access tokens and the
+ASR model stay out of version control (see `.gitignore`).
+
+One exception is still open: the Android bridge currently loads its LLM key from a constant in
+`DaoBridge.java`. That key should be rotated and moved to a local, untracked configuration before
+this repository is used as a public showcase — treat the value in history as burned.
 
 ## Status
 

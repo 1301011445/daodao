@@ -416,6 +416,7 @@ public class DaoOverlay extends Service {
                 // 满身站在桌面上时会自己走两步，不是钉在原地
                 if (mode == MODE_FULL && added && lp != null && pv != null) {
                     try { walkDrift(); } catch (Exception e) { }
+                    try { pv.idleWaveIfDue(); } catch (Exception e) { }
                 }
                 ui.postDelayed(this, 90);
             }
@@ -571,6 +572,8 @@ public class DaoOverlay extends Service {
         // 2026-11-23：打招呼/被戳时抬手挥一挥（网格驱动，不是换图）。只对满身站姿生效，走路和贴边不抢戏。
         private long waveUntil = 0;
         private static final long WAVE_MS = 4200;
+        private long nodUntil = 0;           // 应声点头 1.4 秒，只在开口那一下
+        private long nextIdleWave = 0;       // 自己每隔 8~15 分钟抬手挥一次，白天才挥
         private int fw = 192, fh = 384;
         private int fN = 8;
         private Paint p = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
@@ -747,14 +750,20 @@ public class DaoOverlay extends Service {
                 float prog = 1f - (waveUntil - nowMs) / (float) WAVE_MS;
                 waveAmp = (float) Math.sin(prog * Math.PI);   // 抬起、挥、放下都缓一点
             }
+            // 应声点头：1.4 秒里点两下，幅度随起随落衰减，只动头不动身
+            float nodAmp = 0f;
+            if (vm == MODE_FULL && nowMs < nodUntil) {
+                float prog2 = 1f - (nodUntil - nowMs) / 1400f;
+                nodAmp = (float) Math.sin(prog2 * Math.PI);
+            }
             if (walking && walkDir < 0) { c.translate(w, 0); c.scale(-1f, 1f); }   // 向左走就把整帧镜像，别让它倒着迈步
             if (vm == MODE_PEEK && side == SIDE_RIGHT) { c.translate(w, 0); c.scale(-1f, 1f); }   // 在右边扒边，手要朝右
             if (vm == MODE_PEEK) { c.rotate((float) Math.sin(tick / 38.0) * 1.2f, w / 2f, h * 0.98f); }  // 探头时轻轻晃，不是一张死图
             c.translate(lean, 0);
             if (vm == MODE_PEEK && peekArt != null && !peekArt.isRecycled()) {
-                drawWarp(c, peekArt, 0, bob, w, h + bob, tick / 30.0, false, true, 0f);   // 贴边：半身探头 + 慢晃 + 呼吸 + 左右看
+                drawWarp(c, peekArt, 0, bob, w, h + bob, tick / 30.0, false, true, 0f, 0f);   // 贴边：半身探头 + 慢晃 + 呼吸 + 左右看
             } else if (frames != null && fi >= 0 && fi < frames.length) {
-                drawWarp(c, frames[fi], 0, bob, w, h + bob, tick / 30.0, walking, false, waveAmp);
+                drawWarp(c, frames[fi], 0, bob, w, h + bob, tick / 30.0, walking, false, waveAmp, nodAmp);
             } else {
                 c.drawBitmap(sheet, src, dst, p);
             }
@@ -766,7 +775,7 @@ public class DaoOverlay extends Service {
          *   腰部以下摆、发梢延迟跟随、胸腔随呼吸起伏、头部轻侧倾、走路时下身前后剪切。
          * 顶点按高度给权重，所以不会出现切图拼接的接缝。
          */
-        void drawWarp(Canvas c, Bitmap bm, float left, float top, float w, float h, double t, boolean walk, boolean peek, float wave) {
+        void drawWarp(Canvas c, Bitmap bm, float left, float top, float w, float h, double t, boolean walk, boolean peek, float wave, float nod) {
             if (bm == null || bm.isRecycled()) return;
             final int COLS = 8, ROWS = 12;
             float[] v = new float[(COLS + 1) * (ROWS + 1) * 2];
@@ -815,6 +824,11 @@ public class DaoOverlay extends Service {
                             }
                         }
                         if (ny < 0.55f) dx -= 0.008f * w * wave * (float) Math.sin(t * 4.7);
+                    }
+                    if (nod > 0.01f && ny < 0.32f) {
+                        // 点头：绕脖子（ny≈0.30）转，越靠头顶位移越大；13 弧度/秒 ≈ 每秒两下
+                        float wy2 = (0.32f - ny) / 0.32f;
+                        dy += 0.012f * h * nod * wy2 * (float) Math.sin(t * 13.0);
                     }
                     v[i++] = baseX + dx;
                     v[i++] = baseY + dy;
@@ -959,6 +973,22 @@ public class DaoOverlay extends Service {
             }
         }
 
+        // 2026-11-23：不是只有被戳才动。满身站着的时候，每隔 8~15 分钟自己抬手挥一下，
+        // 只在白天（8~21 点）做，晚上不闹；不开口，只动手，避免一天说太多话。
+        void idleWaveIfDue() {
+            long now = System.currentTimeMillis();
+            if (nextIdleWave == 0) {
+                nextIdleWave = now + (long) ((8 + Math.random() * 7) * 60 * 1000);
+                return;
+            }
+            if (now < nextIdleWave) return;
+            nextIdleWave = now + (long) ((8 + Math.random() * 7) * 60 * 1000);
+            int hh = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+            if (hh < 8 || hh > 21) return;
+            waveUntil = now + WAVE_MS;
+            postInvalidate();
+        }
+
         // 打招呼：戳它一定应一声；平时二十来分钟自己冒一句（只白天，晚上别吵）
         void greet(boolean forced) {
             long now = System.currentTimeMillis();
@@ -971,6 +1001,7 @@ public class DaoOverlay extends Service {
             lastGreet = now;
             happyUntil = now + 6000;   // 打招呼这 6 秒换成笑脸
             waveUntil = now + WAVE_MS; // 同时抬手挥 4 秒多，配合“来啦”这句
+            nodUntil = now + 1400;     // 先应声点两下头，再把手抬起来
             String line = greetLines[(int) (Math.random() * greetLines.length)];
             try {
                 Toast t = Toast.makeText(getContext(), line, Toast.LENGTH_SHORT);

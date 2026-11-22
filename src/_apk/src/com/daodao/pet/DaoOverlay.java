@@ -748,13 +748,13 @@ public class DaoOverlay extends Service {
             long nowMs = System.currentTimeMillis();
             if (vm == MODE_FULL && !walking && nowMs < waveUntil && waveUntil - nowMs <= WAVE_MS) {
                 float prog = 1f - (waveUntil - nowMs) / (float) WAVE_MS;
-                waveAmp = (float) Math.sin(prog * Math.PI);   // 抬起、挥、放下都缓一点
+                waveAmp = waveEnv(prog);                      // 快起、停一会、慢落（不是对称正弦）
             }
             // 应声点头：1.4 秒里点两下，幅度随起随落衰减，只动头不动身
             float nodAmp = 0f;
             if (vm == MODE_FULL && nowMs < nodUntil) {
                 float prog2 = 1f - (nodUntil - nowMs) / 1400f;
-                nodAmp = (float) Math.sin(prog2 * Math.PI);
+                nodAmp = waveEnv(prog2);
             }
             if (walking && walkDir < 0) { c.translate(w, 0); c.scale(-1f, 1f); }   // 向左走就把整帧镜像，别让它倒着迈步
             if (vm == MODE_PEEK && side == SIDE_RIGHT) { c.translate(w, 0); c.scale(-1f, 1f); }   // 在右边扒边，手要朝右
@@ -971,6 +971,17 @@ public class DaoOverlay extends Service {
             } else {
                 openApp();
             }
+        }
+
+        // 2026-11-23 学来的：对称的 sin(πp) 起落一样慢，看起来机械。真实动作是
+        // 「快起—保持—慢起快收」的不对称曲线（Material Decelerate 进、Accelerate 出）。
+        // 抬手用 ease-out 三次曲线（0→1 冲得快、末尾收住），放下用 (1-x)^3（先缓，末了收得干脆）。
+        float waveEnv(float p) {
+            if (p <= 0f) return 0f;
+            if (p >= 1f) return 0f;
+            if (p < 0.32f) { float x = p / 0.32f, u = 1f - x; return 1f - u * u * u; }   // 起手：快
+            if (p < 0.72f) return 1f;                                                     // 中间：稳住挥
+            float x = (p - 0.72f) / 0.28f, u = 1f - x; return u * u * u;                    // 收手：先缓后快
         }
 
         // 2026-11-23：不是只有被戳才动。满身站着的时候，每隔 8~15 分钟自己抬手挥一下，

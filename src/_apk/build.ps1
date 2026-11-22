@@ -64,6 +64,14 @@ $allSrc = @($srcFiles) + @($genFiles)
 $r = & "$jdk\bin\javac.exe" -encoding UTF-8 -source 8 -target 8 -bootclasspath $aj -d $obj $allSrc 2>&1 | Out-String
 W $r.Trim()
 W ("exit=" + $LASTEXITCODE)
+# 2026-11-23 补：javac 失败时以前会继续 d8/签名，拿旧 class 打出「编不过但能装」的假包。
+# 现在直接中止，别让坏包流出去。
+if ($LASTEXITCODE -ne 0) {
+    W "BUILD_APK_FAIL: javac 编译失败，中止"
+    [IO.File]::WriteAllText("$a\_build.txt", ($logs -join "`r`n"), (New-Object Text.UTF8Encoding($true)))
+    'BUILD_APK_FAIL'
+    exit 1
+}
 
 W "== 4 d8 =="
 New-Item -ItemType Directory -Path $dex -Force | Out-Null

@@ -39,6 +39,17 @@ W ("exit=" + $LASTEXITCODE)
 W ("res.zip=" + (Test-Path -LiteralPath "$a\res.zip"))
 
 W "== 2 aapt2 link =="
+# 对话密钥不再进仓库：本地 .local\glm_key.txt 打进 assets，仓库里没有就删掉旧残留，
+# 包里就不会带上一份明文密钥。手机上可在设置里另填（优先于 asset）。
+$keySrc = 'F:\Daodao\.local\glm_key.txt'
+$keyDst = "$a\assets\glm_key.txt"
+if (Test-Path -LiteralPath $keySrc) {
+    Copy-Item -LiteralPath $keySrc -Destination $keyDst -Force
+    W ("key asset injected=" + (Test-Path -LiteralPath $keyDst))
+} else {
+    if (Test-Path -LiteralPath $keyDst) { Remove-Item -LiteralPath $keyDst -Force }
+    W "key asset absent"
+}
 $r = & "$bt\aapt2.exe" link -o "$a\base.apk" -I $aj --manifest "$a\AndroidManifest.xml" -R "$a\res.zip" --java $gen --min-sdk-version 21 --target-sdk-version 33 -A "$a\assets" --auto-add-overlay 2>&1 | Out-String
 W $r.Trim()
 W ("exit=" + $LASTEXITCODE)

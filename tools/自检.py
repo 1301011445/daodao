@@ -174,11 +174,21 @@ def check_latency():
     b, dt, err = http("http://127.0.0.1:8848/tts?t=" + up.quote("你好呀，今天怎么样"), timeout=20)
     add("延迟 电脑TTS", len(b) > 2048, "%.2fs" % dt)
     t0 = time.time()
+    glmLk = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".local", "glm_key.txt")
+    glmLj = ""
+    try:
+        with open(glmLk, "r", encoding="utf-8") as _f:
+            glmLj = _f.read().strip()
+    except Exception:
+        glmLj = os.environ.get("GLM_KEY", "").strip()
+    if not glmLj:
+        add("延迟 云端对话首字", False, "未配置密钥（.local/glm_key.txt）")
+        return
     try:
         d = json.dumps({"model": "glm-4-flash", "temperature": 0.7, "max_tokens": 130, "stream": True,
                         "messages": [{"role": "user", "content": "自检：说一句话"}]}).encode()
         req = urllib.request.Request("https://open.bigmodel.cn/api/paas/v4/chat/completions", d,
-                                     {"Authorization": "Bearer e753a789a9fe4821b46d6558346b6dd8.P5ASHghZ3RX0tPJ9",
+                                     {"Authorization": "Bearer " + glmLj,
                                       "Content-Type": "application/json"})
         first = None
         for line in urllib.request.urlopen(req, timeout=25):

@@ -35,9 +35,40 @@ import java.util.List;
 public class DaoBridge {
 
     private static final String API = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
-    private static final String KEY = "e753a789a9fe4821b46d6558346b6dd8.P5ASHghZ3RX0tPJ9";
     private static final String MODEL = "glm-4-flash";
     private static final String MODEL_ALT = "glm-4.7-flash";
+
+    // 密钥不再写死在代码里（仓库是公开的）。优先用本机设置里填的，其次读打包时注入的
+    // assets/glm_key.txt；两处都没有就返回空串，调用方按“未配置”处理，不发请求。
+    private String _key;
+    private String key() {
+        if (_key != null) return _key;
+        String k = sp.getString("glm_key", "");
+        if (k == null) k = "";
+        k = k.trim();
+        if (k.isEmpty()) {
+            java.io.InputStream in = null;
+            try {
+                in = ctx.getAssets().open("glm_key.txt");
+                java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                byte[] b = new byte[4096];
+                int n;
+                while ((n = in.read(b)) > 0) bo.write(b, 0, n);
+                k = bo.toString("UTF-8").trim();
+            } catch (Exception e) {
+                k = "";
+            } finally {
+                try { if (in != null) in.close(); } catch (Exception e) {}
+            }
+        }
+        _key = k;
+        return k;
+    }
+    public boolean hasKey() { return !key().isEmpty(); }
+    public void setGlmKey(String k) {
+        sp.edit().putString("glm_key", k == null ? "" : k.trim()).apply();
+        _key = null;
+    }
 
     // 电脑端的局域网同步服务端口
     private static final int PC_PORT = 8848;
@@ -702,7 +733,7 @@ public class DaoBridge {
             c.setDoOutput(true);
             c.setConnectTimeout(8000);
             c.setReadTimeout(30000);
-            c.setRequestProperty("Authorization", "Bearer " + KEY);
+            c.setRequestProperty("Authorization", "Bearer " + key());
             c.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + B);
             OutputStream os = c.getOutputStream();
             os.write(("--" + B + "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nglm-asr-2512\r\n").getBytes("UTF-8"));
@@ -758,7 +789,7 @@ public class DaoBridge {
                     c.setDoOutput(true);
                     c.setConnectTimeout(8000);
                     c.setReadTimeout(40000);
-                    c.setRequestProperty("Authorization", "Bearer " + KEY);
+                    c.setRequestProperty("Authorization", "Bearer " + key());
                     c.setRequestProperty("Content-Type", "application/json");
                     OutputStream os = c.getOutputStream();
                     os.write(body.toString().getBytes("UTF-8"));
@@ -1134,6 +1165,7 @@ public class DaoBridge {
         final String q = (text == null) ? "" : text.trim();
         final String id = (cbId == null) ? "" : cbId;
         if (q.length() == 0) { postReply(id, "你想跟我说点什么？", 0); return; }
+        if (!hasKey()) { postReply(id, "还没配置对话密钥，先在电脑端设置里填上，我就能聊天了。", 0); return; }
         stopAudio();
         new Thread(new Runnable() {
             public void run() {
@@ -1156,7 +1188,7 @@ public class DaoBridge {
                     conn.setReadTimeout(30000);
                     conn.setDoOutput(true);
                     conn.setRequestProperty("Content-Type", "application/json");
-                    conn.setRequestProperty("Authorization", "Bearer " + KEY);
+                    conn.setRequestProperty("Authorization", "Bearer " + key());
                     OutputStream os = conn.getOutputStream();
                     os.write(o.toString().getBytes("UTF-8"));
                     os.flush(); os.close();
@@ -2368,7 +2400,7 @@ public class DaoBridge {
             conn.setReadTimeout(45000);
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("Authorization", "Bearer " + KEY);
+            conn.setRequestProperty("Authorization", "Bearer " + key());
 
             OutputStream os = conn.getOutputStream();
             os.write(body.toString().getBytes("UTF-8"));

@@ -68,7 +68,7 @@ def call_llm(prompt):
 
 
 def _fix_escapes(t):
-    """把大模型常写坏的反斜杠（Windows 路径）补成合法转义：\D 这种一律变 \\\\D。"""
+    r"""把大模型常写坏的反斜杠（Windows 路径）补成合法转义。"""
     return re.sub(r'(?<!\\)\\(?!["\\/bfnrtu])', r'\\\\', t)
 
 

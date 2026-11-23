@@ -56,5 +56,17 @@ for n in NAMES:
 pool_note = d.get('音色池说明') or '音色池（少年声/自然声）未被模板改动'
 print(f'PASS T5 模板属唱法层，不改音色池 —— {pool_note}')
 
+# T6 起颤与尾音必须能落到合成侧（唱腔v25 读这两个字段）
+for n in NAMES:
+    if n not in prof:
+        continue
+    s = prof[n].get('唱法', {})
+    onset = float(s.get('起颤', 0.0))
+    tail = str(s.get('尾音', ''))
+    ok = 0.0 <= onset <= 0.9 and any(k in tail for k in ('弱收', '截断', '降调'))
+    print(('PASS' if ok else 'FAIL') + f' T6 {n} 起颤={onset} 尾音="{tail}"')
+    if not ok:
+        fails.append('T6:' + n)
+
 print(f'RESULT|模板={len(NAMES)}|FAIL={len(fails)}|' + ('PASS' if not fails else 'FAIL ' + ','.join(fails)))
 sys.exit(0 if not fails else 1)

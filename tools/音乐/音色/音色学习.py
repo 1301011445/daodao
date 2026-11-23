@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 程序版本：v0.2 | 2026-11-23 | blend() 带出唱法模板（起颤/尾招/唱法），feats 里的 mix 优先生效
 """音色学习：只听「发声特征」，不搬「嗓子身份」。
 
 对每个参考音频算：
@@ -154,14 +155,19 @@ def blend(label):
     p = lib['profiles'].get(label)
     if not p:
         return base
-    f = p['feats']; w = f.get('mix', 0.35)
+    f = p['feats']; w = f.get('mix', p.get('mix', 0.35))
     out = {}
     for k in FEATS:
+        if k not in f:
+            continue
         v = base[k] * (1 - w) + f[k] * w
         # 学的特征只能在道自己的底子上下 ±15% 浮动，防止被某一档带跑、失去自己的音色
         v = min(base[k] * 1.15, max(base[k] * 0.90, v))
         out[k] = v
     out['mix'] = w
+    # 唱法是「怎么唱」，不是音色特征，不受 ±15% 限制，原样带出给唱腔用
+    if p.get('唱法'):
+        out['唱法'] = dict(p['唱法'])
     return out
 
 

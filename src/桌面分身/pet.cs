@@ -2509,7 +2509,9 @@ public class DesktopPet : Form
             if (last == '？' || last == '?' || last == '吗' || last == '呢' || last == '吧') hz += 5;
             else if (last == '！' || last == '!') hz += 2;
         }
-        if (hz == 0) return "+0Hz";
+        // 2026-11-23 语音（副攻第6类 piper/Coqui TTS）：陈述句句末自然下倾 1–3 半音。
+        // 原来一律 +0Hz，一句话从头到尾平着走，收尾听着像被掐断；取 -2Hz，保留呼吸感又不至于沉。
+        if (hz == 0) hz = -2;
         return (hz > 0 ? "+" : "") + hz + "Hz";
     }
 
@@ -7272,11 +7274,19 @@ public class DesktopPet : Form
         float dt = t - walkLastT;
         if (dt < 0f || dt > 0.2f) dt = 0.033f;
         walkLastT = t;
-        float wA = 1f - (float)Math.Pow(1f - 0.18f, dt / 0.033f);
+        // 2026-11-23 走路：起步还是 0.18/33ms（迈出去那一下不能软），停步改成 0.10——
+        // 脚频往回收要慢，收尾才有惯性，不会一停就像被掐住
+        float kAcc = (targetFps > walkFpsCur) ? 0.18f : 0.10f;
+        float wA = 1f - (float)Math.Pow(1f - kAcc, dt / 0.033f);
         walkFpsCur += (targetFps - walkFpsCur) * wA;
         float fps = walkFpsCur;
         // 相位自己累加，不再用 t×fps：帧率一变，t×fps 会整段跳帧，脚就像被人拽了一下
-        walkPhase += fps * dt;
+        // 2026-11-23 帧调度（主攻第2类 Chromium/Skia 合成）：掉帧就丢帧不补帧——
+        // 机器卡一下 dt 到 0.1s 时，相位会一次推两格，脚像被拽；单次推进夹在 1.1 格内，
+        // 卡完从下一格接着走，宁可慢半拍，也不跳帧
+        float step = fps * dt;
+        if (step > 1.1f) step = 1.1f;
+        walkPhase += step;
         if (walkPhase >= 8f) walkPhase -= 8f * (float)Math.Floor(walkPhase / 8f);
         float ph = walkPhase;
         int fi = (int)ph % 8;
@@ -7519,6 +7529,9 @@ public class DesktopPet : Form
             else if (moodKind == 3) exprKind = 0;   // v0.107：难过不再切整图（sad 整图跟立绘差太多，像换了张脸），
                                                     // 改成只走语速 -14% 和低头动作，脸还是同一张
             else if (moodKind == 4) exprKind = 1;   // 4 是「兴奋」，配开心脸才和 +16% 的语速对得上
+            // 2026-11-23 表情映射：5 是好奇/来劲，原来落到平常脸，看着像没反应；
+            // 借开心那套（挑眉亮眼）比再换一张整图稳，跟 +5% 的语速也对得上
+            else if (moodKind == 5) exprKind = 1;
             // 2026-11-22 表情：犯困(moodKind 6) 原来整图换成 sleep 脸，跟立绘差太多像换了张脸。
             // 跟 v0.107 的难过一致——不切整图，只走语速 -9% 和低头眯眼，脸还是同一张
             else if (moodKind == 6) exprKind = 0;
@@ -10117,7 +10130,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 112;
+    public const int APP_VER = 113;
 
     public static void Start()
     {

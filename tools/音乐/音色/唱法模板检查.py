@@ -69,5 +69,14 @@ for n in NAMES:
     if not ok:
         fails.append('T6:' + n)
 
-print(f'RESULT|模板={len(NAMES)}|FAIL={len(fails)}|' + ('PASS' if not fails else 'FAIL ' + ','.join(fails)))
-sys.exit(0 if not fails else 1)
+# T7 放宽只能放单项、不能放 f0（性别会变），且每档最多 3 项
+for n in NAMES:
+    if n not in prof:
+        continue
+    w = prof[n].get('放宽') or {}
+    ok = len(w) <= 3 and 'f0' not in w
+    print(('PASS' if ok else 'FAIL') + f' T7 {n} 放宽={sorted(w.keys())}（≤3 项、不含 f0）')
+    if not ok:
+        fails.append('T7:' + n)
+
+print(f'RESULT|模板={len(NAMES)}|FAIL={len(fails)}|' + ('PASS' if not fails else 'FAIL ' + ','.join(fails)))sys.exit(0 if not fails else 1)

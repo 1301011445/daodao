@@ -156,13 +156,24 @@ def blend(label):
     if not p:
         return base
     f = p['feats']; w = f.get('mix', p.get('mix', 0.35))
+    wide = p.get('放宽') or {}
     out = {}
     for k in FEATS:
         if k not in f:
             continue
         v = base[k] * (1 - w) + f[k] * w
-        # 学的特征只能在道自己的底子上下 ±15% 浮动，防止被某一档带跑、失去自己的音色
-        v = min(base[k] * 1.15, max(base[k] * 0.90, v))
+        # 默认护城河 ±15%；个别项（如气声）在档案里写了「放宽」才按指定幅度放，
+        # 只放单项、不整包放宽，免得被某一档带跑
+        lo, hi = 0.90, 1.15
+        if k in wide:
+            x = wide[k]
+            if isinstance(x, (list, tuple)) and len(x) == 2:
+                lo, hi = None, None          # 直接给绝对值区间
+                v = min(float(x[1]), max(float(x[0]), v))
+            else:
+                lo = 1.0 - float(x); hi = 1.0 + float(x)
+        if lo is not None:
+            v = min(base[k] * hi, max(base[k] * lo, v))
         out[k] = v
     out['mix'] = w
     # 唱法是「怎么唱」，不是音色特征，不受 ±15% 限制，原样带出给唱腔用

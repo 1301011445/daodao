@@ -49,12 +49,12 @@ def frames_rms(y, sr):
 db = lambda x: 20.0 * math.log10(max(x, 1e-9))
 
 
-def split_phrases(rms_db, hop, min_sil=0.12, sil_drop=12.0):
-    """按能量跌落切句：低于（中值-sil_drop）连续 >= min_sil 视为句间静音。"""
+def split_phrases(rms_db, hop, min_sil=0.06, drop_from_peak=30.0):
+    """按能量跌落切句：低于（峰值-drop）连续 >= min_sil 视为句间静音。"""
     if len(rms_db) == 0:
         return []
-    med = np.median(rms_db)
-    thr = med - sil_drop
+    peak = float(np.max(rms_db))
+    thr = peak - drop_from_peak
     sil = rms_db < thr
     need = max(1, int(min_sil / hop))
     phrases = []

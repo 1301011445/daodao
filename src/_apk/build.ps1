@@ -1,4 +1,4 @@
-﻿# 程序版本：v0.1 | 2026-11-22 | 塞 dex 改走 add_dex.py 并硬校验；素材目录清掉 .bak 备份
+﻿# 程序版本：v0.2 | 2026-11-23 | javac 编译失败即中止，不再拿旧 class 打出假包
 $logs = New-Object System.Collections.ArrayList
 function W($s) { [void]$logs.Add([string]$s) }
 

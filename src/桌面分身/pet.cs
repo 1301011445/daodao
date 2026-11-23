@@ -10130,7 +10130,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 113;
+    public const int APP_VER = 114;
 
     public static void Start()
     {

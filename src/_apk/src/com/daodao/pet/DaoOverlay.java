@@ -796,7 +796,16 @@ public class DaoOverlay extends Service {
                     float dx = 0.013f * w * sway * (float) Math.pow(ny, 1.7f)
                              + 0.011f * w * lag * (float) Math.pow(ny, 2.3f);
                     float dy = -0.007f * h * breath * (float) Math.exp(-Math.pow((ny - 0.44) / 0.20, 2));
-                    if (ny < 0.30f) dx += tilt * (0.30f - ny) * h * 0.7f;          // 头部侧倾，脖子以下是支点
+                    if (ny < 0.30f) {
+                        // 2026-11-23 修扭曲：侧倾系数 0.7*h 是按早期大立绘调的，缩到 180px 高以后
+                        // 头顶会横移近 40px，头跟脖子像被撕开、脸也拉歪。改成按头宽（约 0.35w）给幅度，
+                        // 上限 0.05w，小尺寸下只有轻微侧倾，头身不会再错位。
+                        float headShift = tilt * (0.30f - ny) * (0.35f * w) * 0.45f;
+                        float capX = 0.05f * w;
+                        if (headShift > capX) headShift = capX;
+                        if (headShift < -capX) headShift = -capX;
+                        dx += headShift;
+                    }
                     if (peek) {
                         // 靠墙站：别像钉在墙上。呼吸加重、上身随重心慢慢挪、头左右看、空着的手抬一抬
                         dy += -0.003f * h * breath;
@@ -819,8 +828,16 @@ public class DaoOverlay extends Service {
                             float wy = 1f - Math.abs(ny - 0.26f) / 0.20f;
                             if (wy > 0f) {
                                 float s = (float) Math.sin(t * 9.5);
-                                dx += 0.055f * w * wave * wx * wx * s;
-                                dy -= 0.075f * h * wave * wx * wy;
+                                // 2026-11-23 修扭曲：挥手原来是 0.055w / 0.075h 的大位移，桌面大立绘时像抬手，
+                                // 缩到 180px 高就变成整条手臂被抻长、手折到脸边。按像素封顶，小尺寸只抬一点。
+                                float wxAmp = 0.055f * w * wave * wx * wx * s;
+                                float wyAmp = 0.075f * h * wave * wx * wy;
+                                float capXw = 0.022f * w;
+                                float capYw = 0.030f * h;
+                                if (wxAmp > capXw) wxAmp = capXw; else if (wxAmp < -capXw) wxAmp = -capXw;
+                                if (wyAmp > capYw) wyAmp = capYw;
+                                dx += wxAmp;
+                                dy -= wyAmp;
                             }
                         }
                         if (ny < 0.55f) dx -= 0.008f * w * wave * (float) Math.sin(t * 4.7);

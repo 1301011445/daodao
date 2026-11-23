@@ -124,6 +124,17 @@ def realtime_profile(x, sr, breath=0.015, fade_ms=5.0, soften_db=-1.5):
     return y
 
 
+def mix_mono(x, sr, wet=0.18, breath=0.010, soften_db=-1.5, comp=True):
+    """单声道自然混音：不搞延迟叠加（那会带合唱味/电味），只做轻 EQ + 微量气息 + 短混响。"""
+    y = eq_soften(x, sr, shelf_hz=3400.0, cut_db=soften_db, low_hz=150.0, low_db=0.5)
+    y = breath_bed(y, sr, amount=breath)
+    if comp:
+        y = soft_comp(y, sr)
+    y = reverb(y, sr, wet=wet)
+    m = np.max(np.abs(y)) + 1e-9
+    return y / m * 0.90
+
+
 if __name__ == '__main__':
     import sys
     src, dst = sys.argv[1], sys.argv[2]

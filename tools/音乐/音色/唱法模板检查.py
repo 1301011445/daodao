@@ -79,4 +79,5 @@ for n in NAMES:
     if not ok:
         fails.append('T7:' + n)
 
-print(f'RESULT|模板={len(NAMES)}|FAIL={len(fails)}|' + ('PASS' if not fails else 'FAIL ' + ','.join(fails)))sys.exit(0 if not fails else 1)
+print(f'RESULT|模板={len(NAMES)}|FAIL={len(fails)}|' + ('PASS' if not fails else 'FAIL ' + ','.join(fails)))
+sys.exit(0 if not fails else 1)

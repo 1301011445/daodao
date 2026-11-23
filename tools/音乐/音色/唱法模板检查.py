@@ -13,7 +13,7 @@
 import json, io, sys
 
 P = r'F:\Daodao\tools\音乐\音色\音色库.json'
-NAMES = ['单依纯', '李健', '那英', '王菲', '王力宏', '泰勒斯威夫特']
+NAMES = ['单依纯', '李健', '那英', '王菲', '王力宏', '泰勒斯威夫特', '童声']
 d = json.load(io.open(P, encoding='utf-8'))
 base = d['dao_base']
 prof = d['profiles']

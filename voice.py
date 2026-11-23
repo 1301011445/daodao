@@ -33,7 +33,9 @@ WAV = os.path.join(BASE, "heard.wav")
 MODEL_DIR = r"F:\Daodao\voskmodel"
 KEY_FILE = os.path.join(BASE, "key.txt")
 API = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-MODEL = "glm-4-air"
+MODEL = "glm-4-flash"
+# 依次试，前一个 429/超时就退下一个：免费档优先，air 作保底
+MODEL_CHAIN = ("glm-4-flash", "glm-4.7-flash", "glm-4-air")
 VOICE = "zh-CN-XiaoxiaoNeural"
 MEM_FILE = os.path.join(BASE, "brain_mem.json")
 ASK_FILE = os.path.join(BASE, "ask.txt")
@@ -178,15 +180,17 @@ def build_messages(text):
     return msgs
 
 
-def ask_glm(text, timeout=30):
-    return _post(build_messages(text), temperature=0.7, max_tokens=160, timeout=timeout)
+def ask_glm(text, timeout=30, want_model=False):
+    txt, model = _post(build_messages(text), temperature=0.7, max_tokens=160, timeout=timeout)
+    return (txt, model) if want_model else txt
 
 
 def ask_plain(text, sys_prompt, temperature=0.5, max_tokens=400, timeout=30):
-    return _post([
+    txt, _model = _post([
         {"role": "system", "content": sys_prompt},
         {"role": "user", "content": text},
     ], temperature=temperature, max_tokens=max_tokens, timeout=timeout)
+    return txt
 
 
 def split_mood(raw):
@@ -212,25 +216,48 @@ def split_mood(raw):
 
 
 # ---------------- 说 ----------------
-def play_file(mp3path):
-    """把 mp3 放出来。新版 miniaudio 没有 play_file，解码成 PCM 用 sounddevice 播。"""
-    import miniaudio
-    if hasattr(miniaudio, "play_file"):
-        try:
-            miniaudio.play_file(mp3path)
-            return
-        except Exception:
-            pass
+def _soften(pcm, fs):
+    """吐字前先过一道 biquad 人声滤镜：压刺耳高频、补一点胸腔，别让人声发尖。
+    没装滤镜模块就原样放，不影响说话。"""
+    try:
+        from 人声滤镜_biquad import apply_chain
+        x = pcm.astype("float32") / 32768.0
+        y = apply_chain(x, fs)
+        return (y * 32767.0).astype("int16")
+    except Exception:
+        return pcm
+
+
+def play_file(mp3path, fx=False):
+    """把 mp3 放出来。
+    这台机器上 miniaudio 1.73 解不了 mp3（mp3_read_file_s16 / decode_file 都报 -7），
+    所以走 soundfile(libsndfile 1.2.2) 解码，失败的旧机器再退回 miniaudio。"""
     import numpy as np
-    dec = miniaudio.mp3_read_file_s16(mp3path)
-    if isinstance(dec, tuple):
-        samples, nch, fs = dec
-    else:
-        samples, nch, fs = dec.samples, dec.nchannels, dec.sample_rate
-    pcm = np.frombuffer(samples, dtype=np.int16) if isinstance(samples, (bytes, bytearray)) else np.asarray(samples, dtype=np.int16)
-    pcm = pcm.reshape(-1, nch)
+    pcm = None
+    fs = 0
+    try:
+        import soundfile as sf
+        x, fs = sf.read(mp3path, dtype="float32", always_2d=False)
+        pcm = x if x.ndim == 2 else x.reshape(-1, 1)
+    except Exception:
+        import miniaudio
+        dec = miniaudio.mp3_read_file_s16(mp3path)
+        if isinstance(dec, tuple):
+            samples, nch, fs = dec
+        else:
+            samples, nch, fs = dec.samples, dec.nchannels, dec.sample_rate
+        raw = np.frombuffer(samples, dtype=np.int16) if isinstance(samples, (bytes, bytearray)) else np.asarray(samples, dtype=np.int16)
+        pcm = raw.reshape(-1, nch)
+    if pcm is None:
+        return
+    if fx and pcm.shape[1] == 1:
+        i16 = (np.clip(pcm[:, 0], -1, 1) * 32767.0).astype(np.int16)
+        pcm = _soften(i16, fs).reshape(-1, 1)
     import sounddevice as sd
-    sd.play(pcm, fs)
+    if pcm.dtype == np.int16:
+        sd.play(pcm, fs)
+    else:
+        sd.play(np.clip(pcm, -1, 1), fs)
     sd.wait()
 
 def speak(text):
@@ -245,7 +272,7 @@ def speak(text):
         if not os.path.exists(mp3) or os.path.getsize(mp3) < 500:
             log("TTS_EMPTY")
             return
-        play_file(mp3)
+        play_file(mp3, fx=True)
     except Exception as e:
         log("SPEAK_FAIL %r" % (e,))
 

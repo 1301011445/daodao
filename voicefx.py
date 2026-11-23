@@ -10,10 +10,18 @@ def synth(text, voice, mp3path):
 
 
 def load_mp3(path):
-    import miniaudio
-    d = miniaudio.decode_file(path, output_format=miniaudio.SampleFormat.FLOAT32)
-    x = np.frombuffer(d.samples, dtype=np.float32).copy()
-    return x, int(d.sample_rate), int(d.nchannels)
+    """解码 mp3。miniaudio 1.73 在本机解不了 mp3（报 -7），优先 soundfile。"""
+    try:
+        import soundfile as sf
+        x, sr = sf.read(path, dtype="float32", always_2d=False)
+        if x.ndim == 1:
+            x = x.reshape(-1, 1)
+        return np.ascontiguousarray(x), int(sr), int(x.shape[1])
+    except Exception:
+        import miniaudio
+        d = miniaudio.decode_file(path, output_format=miniaudio.SampleFormat.FLOAT32)
+        x = np.frombuffer(d.samples, dtype=np.float32).copy()
+        return x, int(d.sample_rate), int(d.nchannels)
 
 
 def pitch(x, ratio):

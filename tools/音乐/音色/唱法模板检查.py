@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 程序版本：v0.1 | 2026-11-23 | 新建：四位歌手唱法模板的 T1–T5 判据（齐全/mix≤0.55/混后值一致/只带唱法字段/不动音色池）
+# 程序版本：v0.2 | 2026-11-23 | T6 改判机读字段 起颤/尾招（人话字段只给人看）
 """唱法模板检查：四位歌手的模板在不在、混入比例是否守规矩、有没有把「谁在唱」当「怎么唱」。
 
 判据：
@@ -56,15 +56,16 @@ for n in NAMES:
 pool_note = d.get('音色池说明') or '音色池（少年声/自然声）未被模板改动'
 print(f'PASS T5 模板属唱法层，不改音色池 —— {pool_note}')
 
-# T6 起颤与尾音必须能落到合成侧（唱腔v25 读这两个字段）
+# T6 起颤与尾招必须能落到合成侧（唱腔v25 读「起颤」「尾招」两个机读字段）
+ALLOWED = {'弱收', '截断', '降调', '气不散', '稳后颤'}
 for n in NAMES:
     if n not in prof:
         continue
     s = prof[n].get('唱法', {})
     onset = float(s.get('起颤', 0.0))
-    tail = str(s.get('尾音', ''))
-    ok = 0.0 <= onset <= 0.9 and any(k in tail for k in ('弱收', '截断', '降调'))
-    print(('PASS' if ok else 'FAIL') + f' T6 {n} 起颤={onset} 尾音="{tail}"')
+    tail = str(s.get('尾招', ''))
+    ok = 0.0 <= onset <= 0.9 and tail in ALLOWED
+    print(('PASS' if ok else 'FAIL') + f' T6 {n} 起颤={onset} 尾招={tail}')
     if not ok:
         fails.append('T6:' + n)
 

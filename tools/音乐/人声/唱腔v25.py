@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 程序版本：v0.2 | 2026-11-23 | 接唱法模板：延迟起颤（vib 迟到）+ 尾音弱收/截断两种收法，无模板时行为不变
+# 程序版本：v0.3 | 2026-11-23 | 尾音改读「尾招」机读字段（弱收/截断/降调），不再靠字符串包含猜
 """唱腔 v25：把代唱人声过一遍「歌唱家唱法」——颤音、连唱、气口、段落起伏。
 
 音色参数来自 音色库.json：道的底子 + 参考音色的发声特征（最多 55%），
@@ -192,15 +192,18 @@ def sing(x, target_hz, target_len, sr, prof, gain=1.0, fix=None):
     if f > 0 and len(y) > 3 * f:
         y[:f] *= np.linspace(0, 1, f)
         y[-f:] *= np.linspace(1, 0, f)
-    # 尾音收法：弱收拖一点（有"气没断"的余韵），截断干脆（留白的痛感）
-    tail = style.get('尾音', '')
+    # 尾音收法：机读字段「尾招」为准（弱收 / 截断 / 降调 / 气不散 / 稳后颤）
+    tail = style.get('尾招') or ''
     if len(y) > int(sr * 0.18):
-        if '弱收' in tail:
+        if tail == '弱收':
             m = int(sr * 0.09)
             y[-m:] *= np.linspace(1, 0.25, m)     # 收到 0.25 而不是 0，气还在
-        elif '截断' in tail:
+        elif tail == '截断':
             m = int(sr * 0.012)
             y[-m:] *= np.linspace(1, 0, m)
+        elif tail == '降调':
+            m = int(sr * 0.30)
+            y[-m:] *= np.linspace(1, 0.6, m)      # 近似"降调"：音量收、基频由 OLA 外不另做
     return y
 
 

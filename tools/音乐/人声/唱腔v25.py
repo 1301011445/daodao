@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 程序版本：v0.2 | 2026-11-23 | 接唱法模板：延迟起颤（vib 迟到）+ 尾音弱收/截断两种收法，无模板时行为不变
 """唱腔 v25：把代唱人声过一遍「歌唱家唱法」——颤音、连唱、气口、段落起伏。
 
 音色参数来自 音色库.json：道的底子 + 参考音色的发声特征（最多 55%），
@@ -128,6 +129,20 @@ def vibrato(y, sr, rate, depth):
     return np.interp(pos, np.arange(len(y)), y).astype(np.float32)
 
 
+def vibrato_delayed(y, sr, rate, depth, onset=0.55):
+    """延迟起颤：前 onset 比例的音符走直音，之后才进入颤音。
+    王菲/那英那类「先稳后颤」靠这条包络，不是整颗音符抖到底。"""
+    if depth <= 0 or len(y) < 64:
+        return y
+    t = np.arange(len(y)) / float(sr)
+    u = np.clip((t / max(1e-6, t[-1]) - onset) / max(1e-6, 1.0 - onset), 0.0, 1.0)
+    u = u * u * (3 - 2 * u)                      # smoothstep，颤音渐入不突兀
+    step = 1.0 / (1.0 + depth * u * np.sin(2 * math.pi * rate * t))
+    pos = np.cumsum(step)
+    pos = pos / pos[-1] * (len(y) - 1)
+    return np.interp(pos, np.arange(len(y)), y).astype(np.float32)
+
+
 def breath_noise(n, sr, level):
     if level <= 0 or n <= 0:
         return np.zeros(n, dtype=np.float32)
@@ -162,7 +177,13 @@ def sing(x, target_hz, target_len, sr, prof, gain=1.0, fix=None):
     else:
         y = x
     y = ola(y, target_len, sr)
-    y = vibrato(y, sr, prof['vib_rate'], min(0.05, prof['vib_depth'] * fix['vib']))
+    # 有唱法模板就用它：延迟起颤（王菲/那英「先稳后颤」），没有模板还是老样子抖到底
+    style = (prof.get('唱法') or {})
+    onset = float(style.get('起颤', 0.0))
+    if onset > 0.0:
+        y = vibrato_delayed(y, sr, prof['vib_rate'], min(0.05, prof['vib_depth'] * fix['vib']), onset)
+    else:
+        y = vibrato(y, sr, prof['vib_rate'], min(0.05, prof['vib_depth'] * fix['vib']))
     y = y * gain
     n = min(len(y), int(sr * 0.07))
     y[:n] += breath_noise(n, sr, prof['breath'] * fix['breath'] * 0.5)
@@ -171,6 +192,15 @@ def sing(x, target_hz, target_len, sr, prof, gain=1.0, fix=None):
     if f > 0 and len(y) > 3 * f:
         y[:f] *= np.linspace(0, 1, f)
         y[-f:] *= np.linspace(1, 0, f)
+    # 尾音收法：弱收拖一点（有"气没断"的余韵），截断干脆（留白的痛感）
+    tail = style.get('尾音', '')
+    if len(y) > int(sr * 0.18):
+        if '弱收' in tail:
+            m = int(sr * 0.09)
+            y[-m:] *= np.linspace(1, 0.25, m)     # 收到 0.25 而不是 0，气还在
+        elif '截断' in tail:
+            m = int(sr * 0.012)
+            y[-m:] *= np.linspace(1, 0, m)
     return y
 
 

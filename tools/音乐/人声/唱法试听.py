@@ -20,22 +20,29 @@ async def render(label, m, notes, spt, voices):
     ph = sorted([x for x in notes if x['ch'] in (0, 4) and m['t'] <= x['t'] < m['t'] + 8 * cv.BEAT], key=lambda x: x['t'])
     if len(ph) != 8:
         return None
-    print(label, '模板：起颤 %.2f 尾招 %s 气声 %.2f' %
-          (prof.get('唱法', {}).get('起颤', 0), prof.get('唱法', {}).get('尾招', '-'), prof['breath']))
-    words = [(m['text'][i * 2:i * 2 + 2], voices[0]) for i in range(4)]
+    s = prof.get('唱法', {})
+    print(label, '模板：起颤 %.2f 尾招 %s 气声 %.2f' % (s.get('起颤', 0), s.get('尾招', '-'), prof['breath']))
+    # 跟主流程一致：整句 4 个词组，每组切成两个字，每个音符唱一个字（原来我给每个音符塞整组两个字，糊成杂音）
+    words = [(m['text'][wi * 2:wi * 2 + 2], voices[0]) for wi in range(4)]
     await asyncio.gather(*[cv.tts_word(v, w) for w, v in words])
-    buf = np.zeros(int((ph[-1]['t'] + ph[-1]['dur']) * spt * SR) + SR // 5, dtype=np.float32)
-    for i, n in enumerate(ph):
-        w = words[i // 2][0]
-        audio = cv.CACHE.get((words[i // 2][1], w))
-        if audio is None:
+    parts = {wi: cv.split_two(cv.CACHE.get((voices[0], w)), SR) for wi, (w, _) in enumerate(words)}
+    t0 = ph[0]['t']
+    end = ph[-1]['t'] + ph[-1]['dur']
+    buf = np.zeros(int((end - t0) * spt * SR) + SR // 5, dtype=np.float32)
+    for ci, n in enumerate(ph):
+        wi = ci // 2
+        audio = parts[wi][ci % 2]
+        if audio is None or len(audio) == 0:
             continue
-        dur = int(n['dur'] * spt * SR)
+        dur = int(n['dur'] * spt * SR * (0.99 if m.get('chorus') else 0.92))
         hz = 440.0 * (2.0 ** ((n['pitch'] - 69 + cv.VOICE_SHIFT.get(voices[0], 0.0)) / 12.0))
-        y = cv.sing(audio, hz, dur, SR, prof)
-        st = int(n['t'] * spt * SR)
+        y = cv.sing(audio, hz, max(int(SR * 0.12), dur), SR, prof, 1.25 if m.get('chorus') else 1.0)
+        st = int((n['t'] - t0) * spt * SR)
         seg = y[:len(buf) - st]
-        buf[st:st + len(seg)] += seg / 3.0
+        if len(seg) > 0:
+            buf[st:st + len(seg)] += seg
+    pk = float(np.abs(buf).max()) or 1.0
+    buf *= 0.9 / pk
     return buf
 
 

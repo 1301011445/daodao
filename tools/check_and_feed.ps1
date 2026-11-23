@@ -1,4 +1,4 @@
-﻿# 程序版本：v0.4 | 2026-11-22 | 自愈冷却分支去掉重复的「道没在跑」，只留一句冷却说明
+﻿# 程序版本：v0.5 | 2026-11-23 | versionName 按 100 进制换算（1.13→113）再比，修假报两端不一致
 # check_and_feed.ps1 — 定期检查「道」的状态，并把一行结论写进 F:\Daodao\反馈.txt
 # 2026-11-16 新增（用户要求：要有定期检查更新的程序，要及时反馈）
 # 用法：powershell -ExecutionPolicy Bypass -File check_and_feed.ps1
@@ -127,8 +127,12 @@ if ((Test-Path -LiteralPath $apk) -and (Test-Path -LiteralPath $bt)) {
 if ($apkVer -ne '未读' -and $ver -ne '?') {
     # 2026-11-21 修：apk 的 versionName 是 "0.86" 这种带前导 0. 的写法，
      # 原来用 ($apkVer -split '\.')[0] 取到的是 "0"，跟 exe 的 "86" 一比就误报"版本不一致"。
-     # 这里把前导 "0." 去掉，只留主版本号再比。
-     $num = ($apkVer -replace '^\s*0\.', '').Trim()
+     # 2026-11-23 再修：versionName 按 100 进制走（v113 -> "1.13"），原来只去掉前导 "0."，
+     # 现在 "1.13" 会被当成 "1.13" 跟 exe 的 "113" 比，继续误报。改成换算成整数再比。
+    $num = ($apkVer -replace '^\s*0\.', '').Trim()
+    if ($num -match '^(\d+)\.(\d+)$') {
+        $num = [string]([int]$Matches[1] * 100 + [int]$Matches[2])
+    }
     if ($num -ne $ver) { [void]$issues.Add("两端版本不一致：exe v$ver / apk v$apkVer") }
 }
 

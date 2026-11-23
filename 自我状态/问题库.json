@@ -1372,14 +1372,15 @@
       "标题": "线上分发包没跟上本地：短链 exe/apk 体积对不上（两端自用体检 C9/C10）",
       "来源": "体检轮",
       "严重度": "P2",
-      "状态": "open",
+      "状态": "solved",
       "发现时间": "2026-11-23 09:52",
-      "解决时间": "",
-      "解决说明": "2026-11-23 09:51 两端自用体检：线上 exe=9937920 本地=9945600；线上 apk=8196174 本地=13054490。短链 aka.doubaocdn.com/s/SjWvuCXbVj(exe)、/s/H545YSvF9E(apk) 仍是旧文件，要重传 道.exe 与 道.apk 换 data-exe/data-apk，再发一版清单页/落地页。",
-      "scored": false,
+      "解决时间": "2026-11-23 10:37",
+      "解决说明": "已重传 v113 的 道.exe / 道.apk 并换掉清单页与落地页的 data-exe/data-apk：exe 9,945,600 → https://aka.doubaocdn.com/s/3GIepybKBq，apk 13,054,490 → https://aka.doubaocdn.com/s/RYWfDNRHzd；再跑 两端自用体检.py，C9/C10 两项由 FAIL 转 PASS，17/17 全过（报告 巡检报告\\两端自用_20261123_1034.md）。",
+      "scored": true,
       "复发次数": 0,
       "重复登记次数": 0,
-      "键": "online-dist-size"
+      "键": "online-dist-size",
+      "复现": "E:\\Python313\\python.exe F:\\Daodao\\tools\\两端自用体检.py"
     }
   ]
 }

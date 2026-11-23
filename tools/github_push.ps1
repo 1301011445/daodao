@@ -41,12 +41,34 @@ if (-not $remote -or $remote -notmatch 'github') {
 
 # 这台机器上有外部程序（扫描/备份类）会短暂占用 .git 下的锁文件，表现是
 # "Unable to create ...lock: File exists"，但 Get-Process 看不到 git 进程。
-# 处理办法：每次 git 命令前把 .git 下所有 *.lock 递归改名成 .s<时间戳>，失败就重试。
+# 处理办法：每次 git 命令前把 .git 下所有 *.lock 递归改名，失败就重试。
+# 关键坑（2026-11-23）：只在原地改名（*.lock -> *.lock.sHHmmss）会把垃圾留在 refs/ 里，
+# 例如 refs/remotes/origin/main.lock.s073107 会被 git 当成一个真实 ref，fetch 直接报
+# "fatal: bad object refs/remotes/origin/main.lock.s..." 并同步失败。
+# 所以必须把锁文件移出 .git 目录（同盘 Move-Item 等于改名，外部句柄也能绕过）。
 function ClearLocks {
     $gitDir = Join-Path $repo '.git'
+    $junkDir = Join-Path $repo '.git_垃圾'
+    if (-not (Test-Path -LiteralPath $junkDir)) {
+        New-Item -ItemType Directory -Force -Path $junkDir | Out-Null
+    }
+    # 1) 先把历史上误留在 .git 内的锁残骸（*.lock / *.lock.s*）移出去
+    Get-ChildItem -LiteralPath $gitDir -Recurse -Force -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '\.lock(\.|$)' } | ForEach-Object {
+            $tag = [guid]::NewGuid().ToString('N').Substring(0, 6)
+            try {
+                Move-Item -LiteralPath $_.FullName -Destination (Join-Path $junkDir ($_.Name + '_' + $tag)) -Force -ErrorAction Stop
+            } catch {}
+        }
+    # 2) 仍存在的 *.lock 原地改名（最后手段）
     Get-ChildItem -LiteralPath $gitDir -Recurse -Force -Filter '*.lock' -ErrorAction SilentlyContinue | ForEach-Object {
         try { Rename-Item -LiteralPath $_.FullName -NewName ($_.Name + '.s' + (Get-Date -f 'HHmmss')) -Force -ErrorAction Stop } catch {}
     }
+    # 3) 垃圾目录超过 300 个文件就提示（删不掉时只提示，不阻塞推送）
+    try {
+        $n = @(Get-ChildItem -LiteralPath $junkDir -Force -File -ErrorAction SilentlyContinue).Count
+        if ($n -gt 300) { Write-Host "[锁残骸] .git_垃圾 已累积 $n 个文件（删除受外部句柄影响，可稍后清理）" }
+    } catch {}
 }
 
 function GitRetry {

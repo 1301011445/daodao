@@ -64,6 +64,15 @@ def stable_segment(x, sr, f0s, hop=0.01, need=8):
 
 def judge(p):
     x, sr = load(p)
+    # 只取有声区间：整曲里前奏/尾奏大片静音会把频谱重心算成 0
+    hstep = int(sr * 0.01); ww = int(sr * 0.04)
+    rms = np.array([np.sqrt(np.mean(x[i:i + ww] ** 2)) for i in range(0, max(1, len(x) - ww), hstep)])
+    thr = max(0.01, float(np.percentile(rms, 95)) * 0.15) if len(rms) else 0.01
+    voice = np.where(rms > thr)[0]
+    if len(voice) > 8:
+        a = max(0, int(voice[0] * hstep) - ww)
+        b = min(len(x), int(voice[-1] * hstep) + ww)
+        x = x[a:b]
     # 整段只用来看频谱重心与高频占比
     n = min(len(x), 1 << 19)
     segw = x[:n] * np.hanning(n)
@@ -147,11 +156,15 @@ def judge(p):
     # 判据分层：H1–H3 看发声稳定性、H4/H6 看整体频谱、H5 只在「颤音可测」时判
     # 整句带四声时 f0 主峰落在语调（<2Hz），此时颤音不可测，记 UNKN 而不是 FAIL
     h5_measurable = vr >= 2.0
-    # 阈值按发声类型分档：jitter/shimmer 的 1%/3% 出自「持续元音」测法（Praat/MDVP），
-    # 套到整句上必然误判（正常四声与音节过渡就有这个量级），所以整句档放宽到 2% / 25%
-    jit_thr = 0.01 if h5_measurable else 0.02
-    shim_thr = 0.03 if h5_measurable else 0.25
-    tier = '持续音档' if h5_measurable else '整句档'
+    # 阈值按「发声类型」分档：持续元音的 1%/3% 不能套到整句/整曲
+    # —— 整曲里还有句间起伏与音符步进，必然超出，按 2%/25% 判；H5 只对单音有意义
+    if len(x) / sr >= 20:
+        jit_thr, shim_thr, tier = 0.02, 0.25, '整曲档'
+        h5_measurable = False
+    elif h5_measurable:
+        jit_thr, shim_thr, tier = 0.01, 0.03, '持续音档'
+    else:
+        jit_thr, shim_thr, tier = 0.02, 0.25, '整句档'
     rows = [
         ("H1 谐噪比 HNR", "%.1f dB" % hnr, hnr >= 15, "≥15 dB"),
         ("H2 周期抖动 jitter", "%.2f%%" % (jit * 100), jit <= jit_thr, "≤%.0f%%（%s）" % (jit_thr * 100, tier)),

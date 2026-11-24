@@ -28,6 +28,38 @@ def lufs_approx(x):
     return 10 * np.log10(ms) - 0.0
 
 
+def env_rms(x, sr, win=0.05, hop=0.01):
+    """短时 RMS 包络（win 50ms / hop 10ms），返回 (env, hop_idx) */
+    n = int(win * sr); h = int(hop * sr)
+    frames = 1 + max(0, (len(x) - n) // h)
+    idx = np.arange(frames) * h
+    env = np.sqrt(np.array([np.mean(x[i:i + n] ** 2) for i in idx]) + 1e-18)
+    return env, idx
+
+
+def smooth(v, sr, hop, ms):
+    """一阶平滑（attack/release 取同一常数），作用在包络上"""
+    a = np.exp(-hop / sr / (ms / 1000.0))
+    out = np.empty_like(v); s = v[0]
+    for i, val in enumerate(v):
+        s = a * s + (1 - a) * val
+        out[i] = s
+    return out
+
+
+def vocal_priority(v, inst, sr, target_db=7.0, max_boost_db=9.0):
+    """人声优先：逐帧把人声抬到比伴奏高 target_db（最多抬 max_boost_db），
+    只抬不砍，平滑保证不产生泵动感。"""
+    ev, idx = env_rms(v, sr)
+    ei, _ = env_rms(inst, sr)
+    m = min(len(ev), len(ei)); ev, ei = ev[:m], ei[:m]
+    need = 10 ** ((target_db / 20.0)) * ei / (ev + 1e-18)     # 达成目标所需增益
+    g = np.clip(need, 1.0, 10 ** (max_boost_db / 20.0))
+    g = smooth(g, sr, int(0.01 * sr), 220)                     # 220ms 平滑
+    g_full = np.interp(np.arange(len(v)), idx[:m], g, right=g[-1])
+    return v * g_full, float(20 * np.log10(np.mean(g) + 1e-12))
+
+
 def main():
     labels = sys.argv[1:] or ['自然']
     inst = load(INST, SR)
@@ -37,7 +69,10 @@ def main():
         v = np.pad(v, (0, n - len(v)))
         ins = np.pad(inst, (0, n - len(inst)))
         ins = ins / (np.sqrt(np.mean(ins ** 2)) + 1e-12) * 0.048    # 伴奏定在 RMS 0.06
-        v = v / (np.sqrt(np.mean(v ** 2)) + 1e-12) * 0.075         # 人声略低于伴奏能量，但峰值靠前
+        v = v / (np.sqrt(np.mean(v ** 2)) + 1e-12) * 0.075         # 人声先定个基准
+        # 人声优先（大模型评审指出「人声可听度」最低）：逐帧把人声抬到伴奏之上，只抬不砍
+        v, gmean = vocal_priority(v, ins * 0.85, SR, target_db=7.0, max_boost_db=9.0)
+        print('  人声优先：平均抬 %.1f dB（上限 +9 dB，220ms 平滑）' % gmean)
         mix = v + ins * 0.85
         # 母带：先按峰值留 -1dBTP 余量，再逐轮压到 -16 LUFS 附近
         for _ in range(6):

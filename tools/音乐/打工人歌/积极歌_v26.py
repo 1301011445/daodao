@@ -19,7 +19,7 @@ spec = importlib.util.spec_from_file_location(
 arr = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(arr)
 
-BEAT, PPQ, TEMPO = 480, 480, 122
+BEAT, PPQ, TEMPO = 480, 480, 116
 NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 def p(n):
     return 12 * (int(n[-1]) + 1) + NAMES.index(n[:-1])

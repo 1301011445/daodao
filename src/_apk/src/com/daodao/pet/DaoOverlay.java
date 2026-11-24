@@ -458,20 +458,23 @@ public class DaoOverlay extends Service {
         if (now - touchAt < 2000) { walking = false; if (pv != null) pv.walking = false; return; }
         int w = lp.width;
         if (!walking) {
-            if (walkNextAt == 0) walkNextAt = now + 5000 + (long) (Math.random() * 7000);
+            if (walkNextAt == 0) walkNextAt = now + 3000 + (long) (Math.random() * 4000);
             if (now < walkNextAt) return;
             walking = true;
             walkDir = Math.random() < 0.5 ? -1 : 1;
-            walkUntilAt = now + 2000 + (long) (Math.random() * 1800);
+            // 2026-11-24 夜：原来一次只走 2~3.8 秒、一拍挪 0.75dp，一趟在 1080 宽的屏上
+            // 只动 20~30dp，肉眼几乎看不出在走。改成走 3~5.2 秒、一拍 2dp（≈22dp/秒）。
+            walkUntilAt = now + 3000 + (long) (Math.random() * 2200);
             if (pv != null) pv.walking = true;
         }
-        int step = Math.max(1, dp(0.75f));   // 2026-11-22 夜：1.4dp/拍 走得太飘，减半跟 8 帧节奏才好对上
+        int step = Math.max(2, dp(2.0f));
         lp.x += walkDir * step;
         if (lp.x <= dp(2)) { lp.x = dp(2); walkDir = 1; }
         if (lp.x >= sw - w - dp(2)) { lp.x = sw - w - dp(2); walkDir = -1; }
         if (now > walkUntilAt) {
             walking = false;
-            walkNextAt = now + 6000 + (long) (Math.random() * 8000);
+            // 停 3.5~7 秒再来一趟（原来 6~14 秒，等太久看着像不会动）
+            walkNextAt = now + 3500 + (long) (Math.random() * 3500);
             if (pv != null) pv.walking = false;
         }
         try { wm.updateViewLayout(pv, lp); } catch (Exception e) { }
@@ -591,8 +594,7 @@ public class DaoOverlay extends Service {
         private Bitmap ballHappy, ballSleep, ballSur;   // 三种表情：开心 / 困 / 惊讶
         private Bitmap peekArt;      // 贴边探头的半身姿态（assets/peek.png）
         private Bitmap[] frames;     // 八帧拆开存，供网格变形逐帧用
-        private Bitmap standArt;     // 当前形象的立绘（assets/stand_<序号>.png）；八帧少女这套不用它
-        private float walkAmp = 1f;  // 立绘代步时把迈步幅度放大，不然肉眼看不出腿在动
+        private float walkAmp = 1f;  // 迈步额外倍率（烘焙帧本身已有步幅，这里保持 1）
         private long happyUntil = 0;
         // 2026-11-23：打招呼/被戳时抬手挥一挥（网格驱动，不是换图）。只对满身站姿生效，走路和贴边不抢戏。
         private long waveUntil = 0;
@@ -616,12 +618,28 @@ public class DaoOverlay extends Service {
         }
 
         void reloadSheet() {
-            try {
-                BitmapFactory.Options o = new BitmapFactory.Options();
-                o.inScaled = false;
-                sheet = BitmapFactory.decodeStream(getContext().getAssets().open("walk8.png"), null, o);
-            } catch (Exception e) {
-                sheet = null;
+            // 2026-11-24 夜：形象按「序号」各有一套八帧表（walk8_<序号>.png）；
+            // 少女那套是真手绘八帧（walk8.png），其它 13 个是从立绘按骨链位移烘出来的，
+            // 腿会左右交替、脚下有起伏，比"整张立绘斜着切"像走路。缺表就退回少女那套。
+            sheet = null;
+            if (art != ART_WALK) {
+                try {
+                    BitmapFactory.Options o0 = new BitmapFactory.Options();
+                    o0.inScaled = false;
+                    sheet = BitmapFactory.decodeStream(
+                            getContext().getAssets().open("walk8_" + art + ".png"), null, o0);
+                } catch (Exception e) {
+                    sheet = null;
+                }
+            }
+            if (sheet == null) {
+                try {
+                    BitmapFactory.Options o = new BitmapFactory.Options();
+                    o.inScaled = false;
+                    sheet = BitmapFactory.decodeStream(getContext().getAssets().open("walk8.png"), null, o);
+                } catch (Exception e) {
+                    sheet = null;
+                }
             }
             if (sheet != null && sheet.getHeight() > 0) {
                 fh = sheet.getHeight();
@@ -641,7 +659,6 @@ public class DaoOverlay extends Service {
             ballSleep = loadOpt("ball_sleep.png");
             ballSur = loadOpt("ball_sur.png");
             peekArt = loadOpt("peek.png");
-            loadStand();
             // 2026-11-22 夜：形象不再「一张图定住」，改成按骨骼权重做网格变形。
             // 先把八帧拆成独立位图，变形时直接取当前帧，省掉每帧 createBitmap。
             try {
@@ -733,25 +750,9 @@ public class DaoOverlay extends Service {
          * 192×384 画布、底对齐、水平居中（跟八帧同比例），所以满身/贴边都能直接挂上去，
          * 走路用 drawWarp 的迈步变形代一下——腿不会真交替，但人确实在挪、下身会摆。
          */
-        void loadStand() {
-            standArt = null;
-            walkAmp = 1f;
-            if (art == ART_WALK) return;      // 有真腿的这套，走原路径
-            try {
-                BitmapFactory.Options o = new BitmapFactory.Options();
-                o.inScaled = false;
-                standArt = BitmapFactory.decodeStream(
-                        getContext().getAssets().open("stand_" + art + ".png"), null, o);
-                walkAmp = 2.6f;
-            } catch (Exception e) {
-                standArt = null;              // 素材缺了就退回八帧少女，桌面上不能空着
-                walkAmp = 1f;
-            }
-        }
-
         void setArt(int k) {
             art = k;
-            loadStand();
+            reloadSheet();
             invalidate();
         }
 
@@ -782,7 +783,9 @@ public class DaoOverlay extends Service {
             } else {
                 // 走的时候播 8 帧走路，站着就定格第 0 帧；窗口真的在移动，腿才动
                 if (walking) {
-                    fi = fN > 0 ? (int) ((tick / 3) % fN) : 0;   // 2026-11-22 夜：tick/2 太赶，改 3 拍一帧
+                    // 一拍 180ms → 5.5fps。原来 270ms 才换一帧（3.7fps），配 22dp/秒的步速，
+                    // 腿看着像在原地小碎步，跟脚的位移对不上
+                    fi = fN > 0 ? (int) ((tick / 2) % fN) : 0;
                     bob = (int) (Math.sin(tick / 4.0) * (h * 0.006f));
                 } else {
                     fi = 0;
@@ -814,11 +817,7 @@ public class DaoOverlay extends Service {
             if (vm == MODE_PEEK && side == SIDE_RIGHT) { c.translate(w, 0); c.scale(-1f, 1f); }   // 在右边扒边，手要朝右
             if (vm == MODE_PEEK) { c.rotate((float) Math.sin(tick / 38.0) * 1.2f, w / 2f, h * 0.98f); }  // 探头时轻轻晃，不是一张死图
             c.translate(lean, 0);
-            if (standArt != null && !standArt.isRecycled()) {
-                // 其它形象的立绘：满身时迈步 + 站定呼吸，贴边时挂上探头那套轻晃。
-                // 这一支必须排在 peekArt 前面，否则贴边永远是那半个少女
-                drawWarp(c, standArt, 0, bob, w, h + bob, tick / 30.0, walking, vm == MODE_PEEK, waveAmp, nodAmp);
-            } else if (vm == MODE_PEEK && peekArt != null && !peekArt.isRecycled()) {
+            if (vm == MODE_PEEK && art == ART_WALK && peekArt != null && !peekArt.isRecycled()) {
                 drawWarp(c, peekArt, 0, bob, w, h + bob, tick / 30.0, false, true, 0f, 0f);   // 贴边：半身探头 + 慢晃 + 呼吸 + 左右看
             } else if (frames != null && fi >= 0 && fi < frames.length) {
                 drawWarp(c, frames[fi], 0, bob, w, h + bob, tick / 30.0, walking, false, waveAmp, nodAmp);

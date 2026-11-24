@@ -7839,18 +7839,22 @@ public class DesktopPet : Form
         const int strips = 48;
         float stripH = targetH / strips;
         float imgScale = bmp.Height / targetH;
-        float amp = running ? 9.0f : (walking ? 5.4f : 0.62f);
-        if (actAmt > 0.02f && actKind == 4) amp += 2.4f * actAmt;   // 跳舞只留一点摆动，大幅切条就是折叠
+        // 2026-11-24 夜（桌宠骨链第一步）：切条幅度整体收小。
+        // 原来走路 amp=5.4 / 抬腿 7.5 / 手臂 7，整条横带一推就是 7~9px，
+        // 手臂那条细带跟躯干错开之后会断开成独立色块（自检帧里量到 9~10px 的孤立岛），
+        // 看着就是"肢体不协调"。现在上身只摆 3.6px、手臂 3.2、抬腿 3.2，先保证轮廓连续。
+        float amp = running ? 6.0f : (walking ? 3.6f : 0.5f);
+        if (actAmt > 0.02f && actKind == 4) amp += 1.8f * actAmt;   // 跳舞只留一点摆动，大幅切条就是折叠
         float ph = t * (running ? 12.0f : 8.4f);
         if (actAmt > 0.02f && actKind == 4) ph = t * 8.0f;           // 节拍降下来，切条推太快就成抽搐
-        float legLift = running ? 13.0f : (walking ? 7.5f : 0f);
+        float legLift = running ? 6.0f : (walking ? 3.2f : 0f);
         bool stepping = (running || walking || (actAmt > 0.3f && actKind == 4)) && hopPend <= 0;
         // 手臂的张合幅度：走路跑跳最大，站着也有一点，御剑和骑坐骑手要扶着就不摆
         float armAmp = 0f;
         bool handsBusy = (actAmt > 0.25f && (actKind == 2 || actKind == 3 || actKind == 5 || actKind == 7 || actKind == 8));
-        if (!handsBusy) armAmp = running ? 9.0f : (walking ? 7.0f : 4.4f);
-        if (waving) armAmp = 12.0f;
-        if (actAmt > 0.25f && actKind == 4) armAmp = 7.0f;
+        if (!handsBusy) armAmp = running ? 4.4f : (walking ? 3.2f : 1.4f);
+        if (waving) armAmp = 8.0f;
+        if (actAmt > 0.25f && actKind == 4) armAmp = 4.0f;
         // 走路时手臂必须和腿同频反相（左腿抬起时右手往前），不同频整只就像牌子在晃
         float armPh = running ? (ph + (float)Math.PI)
             : (waving ? t * 9.0f : (stepping ? ph + (float)Math.PI : t * 3.2f));
@@ -7883,20 +7887,15 @@ public class DesktopPet : Form
                 off += amp * 0.55f * swayTailA * wt * (float)Math.Sin(swayTailPh - 2.9f);
             }
             // 手臂：上半身中段反向摆，用余弦窗口收边，进出没有硬拐角
-            if (stepping && fy > 0.38f && fy < 0.63f)
-            {
-                float w2 = (float)Math.Sin(Math.PI * (fy - 0.38f) / 0.25f);
-                // v0.107：原来这段是 2.4*Sin(ph*0.9-0.4)，跟腿不同频（0.9 倍）、还带固定相位，
-                // 走快了手臂就在"甩"，像钟摆不跟步子。改成 armAmp 驱动 + armPh（腿的反相），
-                // 幅度也跟跑/走/站三档走同一套参数。
-                off -= (armAmp * 0.34f) * w2 * (float)Math.Sin(armPh);
-            }
+            // 2026-11-24 夜：这里原来还有一条 -0.34×armAmp 的反向小项（窗口 0.38~0.63），
+            // 跟下面 0.36~0.66 那条叠在一起，窗口边界错开 0.02 就形成台阶，
+            // 手臂带被推走一格、躯干没跟，轮廓就裂开。现在只留下面唯一一条正弦窗口。
             // 招手：只晃上半身
             if (waving && fy < 0.68f)
                 off += 9.0f * (0.68f - fy) * (float)Math.Sin(t * 13.0);
 
             float yy = -targetH + i * stripH;
-            float sh = stripH + 1.1f;
+            float sh = stripH + 2.4f;      // 竖着重叠 2.4px：相邻条横向差一格也不会漏洞
             float syp = i * stripH * imgScale;
             float shp = Math.Min(bmp.Height - syp, sh * imgScale);
             if (shp <= 0.5f) continue;
@@ -7924,12 +7923,12 @@ public class DesktopPet : Form
                 float hw = baseW / 2f;
                 float hbw = bmp.Width / 2f;
                 g.DrawImage(bmp,
-                    new RectangleF(-baseW / 2f + off, yy + liftL, hw + 1.2f, sh),
-                    new RectangleF(0f, syp, hbw + 1f, shp),
+                    new RectangleF(-baseW / 2f + off, yy + liftL, hw + 1.8f, sh),
+                    new RectangleF(0f, syp, hbw + 1.8f, shp),
                     GraphicsUnit.Pixel);
                 g.DrawImage(bmp,
                     new RectangleF(-baseW / 2f + off + hw, yy + liftR, hw, sh),
-                    new RectangleF(hbw - 1f, syp, hbw + 1f, shp),
+                    new RectangleF(hbw - 1.8f, syp, hbw + 1.8f, shp),
                     GraphicsUnit.Pixel);
             }
             else
@@ -10069,6 +10068,29 @@ public class DesktopPet : Form
         }
         p.walkTicks = 0;
 
+        // 2026-11-24 夜：6 号（蓝双马尾少女）以前没有八帧走路素材，只能走切条路径；
+        // 现在给它烘了一套 walk8_6_1..8，这里固定抓一遍，确认走路已改走换帧。
+        p.species = 6;
+        p.ApplyPose(6);
+        p.walkTicks = 80;
+        p.walkDirX = 1;
+        for (int wi = 0; wi < 8; wi++)
+        {
+            p.t = 0.36f + wi * 0.09f;
+            DumpOne(p, Path.Combine(dir, "selfcheck_walk6_" + wi + ".png"));
+        }
+        p.walkTicks = 0;
+        // 11 号（机甲）同样是今天补的八帧素材，抓一遍确认脚真的在换
+        p.species = 11;
+        p.ApplyPose(11);
+        p.walkTicks = 80;
+        p.walkDirX = 1;
+        for (int wi = 0; wi < 8; wi++)
+        {
+            p.t = 0.36f + wi * 0.09f;
+            DumpOne(p, Path.Combine(dir, "selfcheck_walk11_" + wi + ".png"));
+        }
+        p.walkTicks = 0;
         // 银发剑客 = 8：也抓一遍八帧，确认换到这个形象后走路是全身在迈步，
         // 不是半身像平移，也不是两只脚原地不动
         p.species = 8;

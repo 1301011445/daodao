@@ -7359,13 +7359,16 @@ public class DesktopPet : Form
         float bob = -3.1f * riseBob + 1.2f * EaseOutQuint(press);
         if (lieAmt > 0.02f) bob -= 34f * lieAmt;
 
+        // 2026-11-24 八域[动作]：走路时整只左右摆一点，像重心换脚，不再是直线平移。
+        // 只做整像素平移、不旋转不缩放——透明键窗口里一旋转边缘就混出粉紫描边。
+        float swayX = 1.6f * (float)Math.Sin(ph * (float)Math.PI / 4f);
         float footY = cy + 68f;
         float targetH = pb.Height;
         float baseW = pb.Width;
         DrawScenery(g, cx, footY + bob, baseW, targetH, t, sceneIdx, 1f);
 
         GraphicsState st = g.Save();
-        g.TranslateTransform((float)Math.Floor(cx), (float)Math.Floor(footY + bob));
+        g.TranslateTransform((float)Math.Floor(cx + swayX), (float)Math.Floor(footY + bob));
         g.SmoothingMode = SmoothingMode.None;
         g.InterpolationMode = InterpolationMode.NearestNeighbor;
         g.PixelOffsetMode = PixelOffsetMode.None;
@@ -7513,9 +7516,73 @@ public class DesktopPet : Form
         g.Restore(st);
     }
 
+    // 2026-11-24 八域[形象]：立绘勾边（1px 实色，浅蓝白）。
+    // 窗口是透明键（洋红，LWA_COLORKEY）模式，不认逐像素 alpha：任何半透明像素都会被
+    // 染成粉边，所以柔光/外发光这条做不了，只能在不透明像素外沿补一圈实色，做出勾边感。
+    static readonly Color RimColor = Color.FromArgb(255, 178, 216, 240);
+    bool rimOn = true;
+    Dictionary<Bitmap, Bitmap> rimCache = new Dictionary<Bitmap, Bitmap>();
+
+    Bitmap GetRim(Bitmap src)
+    {
+        if (!rimOn || src == null) return src;
+        Bitmap cached;
+        if (rimCache.TryGetValue(src, out cached)) return cached;
+        int w = src.Width, h = src.Height;
+        if (w < 3 || h < 3) return src;
+        Bitmap dst = null;
+        try
+        {
+            int stride0 = 0;
+            byte[] px;
+            BitmapData d1 = src.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                stride0 = d1.Stride;
+                px = new byte[stride0 * h];
+                Marshal.Copy(d1.Scan0, px, 0, px.Length);
+            }
+            finally
+            {
+                src.UnlockBits(d1);
+            }
+            bool[] add = new bool[w * h];
+            for (int y = 0; y < h; y++)
+            {
+                int row = y * stride0;
+                for (int x = 0; x < w; x++)
+                {
+                    if (px[row + x * 4 + 3] >= 200) continue;   // 本身就不透明，不用管
+                    bool near = false;
+                    if (x > 0 && px[row + (x - 1) * 4 + 3] >= 200) near = true;
+                    if (!near && x < w - 1 && px[row + (x + 1) * 4 + 3] >= 200) near = true;
+                    if (!near && y > 0 && px[row - stride0 + x * 4 + 3] >= 200) near = true;
+                    if (!near && y < h - 1 && px[row + stride0 + x * 4 + 3] >= 200) near = true;
+                    if (near) add[y * w + x] = true;
+                }
+            }
+            dst = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+            using (Graphics g2 = Graphics.FromImage(dst))
+            {
+                g2.DrawImage(src, 0, 0);
+            }
+            for (int i = 0; i < add.Length; i++)
+                if (add[i]) dst.SetPixel(i % w, i / w, RimColor);
+            rimCache[src] = dst;
+            return dst;
+        }
+        catch
+        {
+            if (dst != null) dst.Dispose();
+            rimOn = false;          // 勾边出错就整体退掉，宁可没边也不能崩
+            return src;
+        }
+    }
+
     void DrawBmpAlpha(Graphics g, Bitmap b, Rectangle r, float alpha)
     {
         if (b == null || alpha <= 0.02f) return;
+        b = GetRim(b);
         // 全不透明的时候直接贴，不要过 ColorMatrix：一旦走混合，
         // 不透明像素也会和窗口的洋红底混一道边，看着就是一圈粉紫描边
         if (alpha >= 0.995f)

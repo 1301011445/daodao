@@ -10,7 +10,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 INST = os.environ.get('DAO_INST', r"F:\Daodao\tools\音乐\打工人歌\out\把好日子扛在肩上_v25.wav")
 NAME = os.environ.get('DAO_NAME', '把好日子扛在肩上')
 VOCAL = os.environ.get('DAO_VOCAL', '整曲人声')
-SR = 22050
+SR = 44100   # 2026-11-25：原来在这里降到 22050，裸 np.interp 折叠，成品沙哑的一半来自这一步
 INST_GAIN = 0.85
 VOCAL_BASE = 0.075
 INST_BASE = 0.048
@@ -18,12 +18,33 @@ TARGET_DB = 10.0
 MAX_BOOST_DB = 12.0
 
 
+
+def _lowpass(x, sr, cutoff, taps=65):
+    if cutoff >= sr * 0.45:
+        return x
+    n = np.arange(taps) - (taps - 1) / 2.0
+    fc = cutoff / sr
+    h = 2.0 * fc * np.sinc(2.0 * fc * n) * np.hamming(taps)
+    ssum = h.sum()
+    if ssum <= 1e-9:
+        return x
+    return np.convolve(x, h / ssum, 'same')
+
+
+def resample_aa(x, newn, sr):
+    if newn <= 0:
+        return x[:0]
+    k = newn / float(len(x))
+    src = _lowpass(x, sr, 0.45 * sr * k) if k < 0.98 else x
+    return np.interp(np.linspace(0, len(src) - 1, newn), np.arange(len(src)), src)
+
+
 def load(p, sr):
     x, s = sf.read(p, dtype='float64')
     if x.ndim > 1:
         x = x.mean(axis=1)
     if s != sr:
-        x = np.interp(np.linspace(0, len(x) - 1, int(len(x) * sr / s)), np.arange(len(x)), x)
+        x = resample_aa(x, int(len(x) * sr / s), s)
     return x
 
 
@@ -101,7 +122,8 @@ def main():
                 break
             gain = 10 ** ((-16.0 - lufs) / 20.0)
             mix = mix * gain
-            knee = 0.95
+            # 原来 knee=0.95 的 tanh 等于硬削，母带这一步自己造出了毛刺
+            knee = 2.2
             mix = np.tanh(mix / knee) * knee
             pk = np.max(np.abs(mix)) + 1e-12
             if pk > 0.891:

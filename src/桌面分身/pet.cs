@@ -521,7 +521,68 @@ public class DesktopPet : Form
         }
         // 以前这里把透明像素刷成洋红透明键，结果人物周围在场景上"打洞"，
         // 透出桌面/网页底色，看着就是一块白板。改成保留真 alpha，叠在场景上正常混合。
+        // 2026-11-24 夜：但窗口是 LWA_COLORKEY 洋红透明键，半透明像素既不会被抠掉、
+        // 也不等于键色，于是围成一圈粉边（实机抓图 _live_newver_1124.png 可见）。
+        // 这里把 alpha 二值化，被提上来的那圈颜色取邻近实心像素，边缘就干净了。
+        HardenAlpha(bmp);
         return bmp;
+    }
+
+    // 把 ARGB 的 alpha 掰成 0/255，并给半透明那圈补上邻近实心像素的颜色。
+    // 立绘、表情整图全都走这里，一次改动通杀所有"贴图边缘发粉"的情况
+    void HardenAlpha(Bitmap bmp)
+    {
+        int w = bmp.Width, h = bmp.Height;
+        if (w <= 0 || h <= 0) return;
+        Rectangle rect = new Rectangle(0, 0, w, h);
+        BitmapData bd = bmp.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
+        int stride = bd.Stride;
+        byte[] buf = new byte[stride * h];
+        System.Runtime.InteropServices.Marshal.Copy(bd.Scan0, buf, 0, buf.Length);
+        byte[] a0 = new byte[w * h];
+        for (int y = 0; y < h; y++)
+        {
+            int o = y * stride;
+            for (int x = 0; x < w; x++) a0[y * w + x] = buf[o + x * 4 + 3];
+        }
+        for (int y = 0; y < h; y++)
+        {
+            int o = y * stride;
+            for (int x = 0; x < w; x++)
+                buf[o + x * 4 + 3] = (a0[y * w + x] >= 110) ? (byte)255 : (byte)0;
+        }
+        // 原来介于 110~199 的边：颜色是跟透明底混过的，看着偏白，取邻域实心色替代
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                byte a = a0[y * w + x];
+                if (a < 110 || a >= 200) continue;
+                int sr = 0, sg = 0, sb = 0, n = 0;
+                for (int dy = -1; dy <= 1 && n < 3; dy++)
+                {
+                    int ny = y + dy;
+                    if (ny < 0 || ny >= h) continue;
+                    for (int dx = -1; dx <= 1 && n < 3; dx++)
+                    {
+                        int nx = x + dx;
+                        if (nx < 0 || nx >= w) continue;
+                        if (a0[ny * w + nx] < 200) continue;
+                        int o2 = ny * stride + nx * 4;
+                        sb += buf[o2]; sg += buf[o2 + 1]; sr += buf[o2 + 2]; n++;
+                    }
+                }
+                if (n > 0)
+                {
+                    int o = y * stride + x * 4;
+                    buf[o] = (byte)(sb / n);
+                    buf[o + 1] = (byte)(sg / n);
+                    buf[o + 2] = (byte)(sr / n);
+                }
+            }
+        }
+        System.Runtime.InteropServices.Marshal.Copy(buf, 0, bd.Scan0, buf.Length);
+        bmp.UnlockBits(bd);
     }
 
     // 单文件版：把内嵌的大脑钥匙、知识库与语音/翻译脚本释放到程序目录，
@@ -821,9 +882,10 @@ public class DesktopPet : Form
                     }
                 }
                 catch { sf = null; }
-                if (sf != null) swordFlyMap[sp2] = sf;
+                // 2026-11-25：只认手办质感的踩剑图（188 高以上）。8 号那张是 96×152 的
+                // 卡通图，一御剑手办人就切成卡通风，宁可不认，退回程序画的那把剑
+                if (sf != null && sf.Height >= 168) swordFlyMap[sp2] = sf;
             }
-
             // 表情整图：expr_{sp}_{key}.png，四张齐了才登记
             // 2026-11-18（v58）：4/5/9/10 这四只重新按新人形立绘做了四套表情整图，
             // 五官是真改了（开心弯眼上扬、难过垂眼、生气压眉、睡着闭眼），不再贴任何符号，
@@ -5203,7 +5265,7 @@ public class DesktopPet : Form
         }
         catch { }
         info += "\r\n今天是：" + CurName() + "（每天自动换一种）";
-        MessageBox.Show(info, "道", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        QuickInfo("道 · 本机状态", info);
     }
 
     void MenuRecycle(object s, EventArgs e)
@@ -5973,7 +6035,7 @@ public class DesktopPet : Form
             int show = lines.Length > 20 ? 20 : lines.Length;
             string body = "";
             for (int i = lines.Length - show; i < lines.Length; i++) body += lines[i] + "\r\n";
-            MessageBox.Show(body, "道记得的事", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            QuickInfo("道记得的事", body);
             Say("我记住了 " + lines.Length + " 件事。");
         }
         catch { }
@@ -6100,7 +6162,7 @@ public class DesktopPet : Form
             }
             if (n == 0) return false;
             Say("今天学了 " + n + " 条，念给你听。");
-            MessageBox.Show(body.Trim(), "道 · 今天学到的", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            QuickInfo("道 · 今天学到的", body.Trim());
             return true;
         }
         catch { return false; }
@@ -6122,8 +6184,7 @@ public class DesktopPet : Form
         string body = parts.Length > 2 ? parts[2] : line;
 
         Say(body);
-        MessageBox.Show(body, "我今天学到的 · " + cat + " · " + title,
-            MessageBoxButtons.OK, MessageBoxIcon.Information);
+        QuickInfo("我今天学到的 · " + cat + " · " + title, body);
     }
 
     string ReadWallpaperTitle()
@@ -6192,10 +6253,61 @@ public class DesktopPet : Form
         return info;
     }
 
+    // 2026-11-25：信息类弹窗统一换成自绘的轻量信息板。
+    // 原来全走系统 MessageBox，弹出就压在屏幕正中、必须手动点"确定"，
+    // 连着问两句就满屏都是窗口（用户说的"无效弹窗多"）。现在改成右下角无边框小卡片，
+    // 点一下就关，12 秒自己收，不打断手上正在做的事
+    void QuickInfo(string title, string body)
+    {
+        try
+        {
+            Form f = new Form();
+            f.FormBorderStyle = FormBorderStyle.None;
+            f.StartPosition = FormStartPosition.Manual;
+            f.BackColor = Color.FromArgb(28, 30, 38);
+            f.TopMost = true;
+            f.ShowInTaskbar = false;
+            f.Width = 460;
+            f.Height = 330;
+            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+            f.Left = wa.Right - f.Width - 24;
+            f.Top = wa.Bottom - f.Height - 24;
+
+            Label cap = new Label();
+            cap.Text = title;
+            cap.ForeColor = Color.FromArgb(255, 214, 140);
+            cap.Font = new Font("Microsoft YaHei UI", 10f, FontStyle.Bold);
+            cap.SetBounds(16, 10, f.Width - 32, 26);
+
+            RichTextBox tb = new RichTextBox();
+            tb.Text = body;
+            tb.ReadOnly = true;
+            tb.BorderStyle = BorderStyle.None;
+            tb.BackColor = f.BackColor;
+            tb.ForeColor = Color.FromArgb(220, 224, 232);
+            tb.Font = new Font("Microsoft YaHei UI", 9f);
+            tb.SetBounds(16, 42, f.Width - 32, f.Height - 58);
+            tb.ScrollBars = RichTextBoxScrollBars.Vertical;
+
+            f.Controls.Add(cap);
+            f.Controls.Add(tb);
+
+            Timer tclose = new Timer();
+            tclose.Interval = 12000;
+            tclose.Tick += delegate { tclose.Stop(); try { f.Close(); } catch { } };
+            f.Click += delegate { try { f.Close(); } catch { } };
+            cap.Click += delegate { try { f.Close(); } catch { } };
+            tb.Click += delegate { try { f.Close(); } catch { } };
+            tclose.Start();
+            f.Show();
+        }
+        catch { }
+    }
+
     void MenuBrief(object s, EventArgs e)
     {
         Say(BuildBrief());
-        MessageBox.Show(BuildDetail(), "道 · 今日简报", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        QuickInfo("道 · 今日简报", BuildDetail());
     }
 
     string AskText(string tip)
@@ -7164,8 +7276,12 @@ public class DesktopPet : Form
     {
         ForceLayer();
         g.Clear(Color.FromArgb(255, 0, 255));
+        // 2026-11-25：缩放比按客户区/设计尺寸算，正常窗口就是 1.0；
+        // 只要不是整数倍，人物边缘会被重采样成半透明，落到洋红透明键上就是粉边。
+        // 所以这里只在必须缩放时才允许采样，其余情况保持 1:1（见下面 HardenKey 兜底）。
         float s = Math.Min(cw / (float)W, ch / (float)H);
         if (s <= 0.01f) s = 1f;
+        if (Math.Abs(s - 1f) < 0.02f) s = 1f;
         if (diagCount < 3)
         {
             diagCount++;
@@ -7708,12 +7824,15 @@ public class DesktopPet : Form
         float sy = 1f + 0.016f * breathe;
         float sx = 1f - 0.010f * breathe;
         float bob = 0f;
-        // 坐下歇着：明显压矮、变宽，整体往下沉，像一屁股坐在地上
+        // 坐着时上身往下落多少（0 = 没坐）
+        float sitSink = 0f;
+        // 坐下歇着：2026-11-25 改法。以前整体 sy*=0.72，人是被拍矮的一张纸，
+        // 膝盖没有折角。现在不压身高，改成上身分段下沉，腿留在地上（见切条循环里的 sitSink）。
         if (sitting && lieAmt < 0.5f)
         {
-            sy *= 0.72f;
-            sx *= 1.14f;
-            bob += 5.0f;
+            sx *= 1.08f;
+            bob += 4.0f;
+            sitSink = 13.0f;
         }
         // 犯困：比坐着再塌一点，头往下垂
         if (sleepy && lieAmt < 0.5f)
@@ -7783,13 +7902,19 @@ public class DesktopPet : Form
         float baseW = targetH * ratio;
         float footY = cy + 68f;
 
-        // 蹦跳：整只腾空，落地瞬间压扁
+        // 蹦跳：整只腾空。落地压扁原来靠 sy 缩放，但透明键窗口一缩放就出粉边，
+        // 常态已经禁掉缩放了，压扁改成"切条行距收紧"（vScale<1 时条与条重叠变多，画面被压矮，
+        // 脚底还踩在地上），再叠腿段上收，这样才看得出是"跳"，不是一张图上下飘
         float hopY = 0f;
+        float hopV = 1f;
+        float hopLegTuck = 0f;
         if (hopPend > 0)
         {
-            float hp = 1f - hopPend / 34f;
+            float hp = 1f - hopPend / 34f;                 // 0 起跳 → 1 落地
             hopY = -26f * (float)Math.Sin(hp * Math.PI);
-            if (hp > 0.80f) { sx *= 1.16f; sy *= 0.84f; }
+            if (hp < 0.20f) hopV = 1f - 0.10f * (1f - hp / 0.20f);          // 起跳先蹲一下
+            else if (hp > 0.80f) hopV = 1f - 0.16f * ((hp - 0.80f) / 0.20f); // 落地压一下
+            if (hp > 0.20f && hp < 0.85f) hopLegTuck = -4f;                  // 空中腿收起来
         }
 
         // 披风飞和御剑是腾空的，脚离地，还得轻轻上下飘
@@ -7830,16 +7955,27 @@ public class DesktopPet : Form
             danceRot = 4.0f * actAmt * (float)Math.Sin(beat);
         }
         g.TranslateTransform(cx + danceX, footY + hopY + bob + airY + danceY);
-        // 赶路时再往前压一点，像侧着身子赶；翻面靠横向取负缩放，连带披风、坐骑一起跟过去
-        g.RotateTransform(tiltNow + danceRot + (travel ? sideDir * 4.5f : 0f)
-            + (watching ? 18f * sideDir : 0f)
-            + ((actAmt > 0.25f && actKind == 3) ? sideDir * 6f : 0f));
-        // 躺着不再整只旋转：只在倾斜上收一点，让躺姿稳当
-        g.ScaleTransform((travel || watching) ? sx * sideDir : sx, sy);
-        // 抽点缩放（NearestNeighbor）会把眼睛、嘴角这些一两像素的细线随机丢掉，脸就糊；
-        // 双三次是对邻域加权平均，细线保留得更完整，边缘也更柔
-        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        // 2026-11-25：透明键窗口只要发生任何非整数采样，边缘就会被洋红键色染成粉边。
+        // 所以站着/走路/招手这些常态一律不旋转不缩放，只做整像素平移；呼吸改成 1px 上下弹。
+        // 只有躺、赶路、看电视、跳舞这几个本来就要侧身/压扁的状态才允许采样，
+        // 那时轮廓边缘有点混色，比动作完全不动要划算。
+        bool leanMode = travel || watching || lieAmt > 0.02f || (actAmt > 0.25f && actKind == 4);
+        if (leanMode)
+        {
+            g.RotateTransform(tiltNow + danceRot + (travel ? sideDir * 4.5f : 0f)
+                + (watching ? 18f * sideDir : 0f)
+                + ((actAmt > 0.25f && actKind == 3) ? sideDir * 6f : 0f));
+            g.ScaleTransform((travel || watching) ? sx * sideDir : sx, sy);
+        }
+        else
+        {
+            bob += (float)Math.Round(1.6f * breathe);
+        }
+        // 2026-11-25：双三次会把alpha混成半透明，透明键窗口把两格之间那圈半透明染成洋红粉边。
+        // 立绘本来就已缩到显示尺寸（188），这里只要不混色，边缘就是硬的；
+        // 细线会不会丢，交给 NearestNeighbor 的半像素对齐来兜（PixelOffsetMode.None）。
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.None;
 
         // 床和被子改到恢复坐标之后再画：那些东西不该跟着人物一起被压扁，
         // 床要是也压扁了就成了纸片，看着不像家具
@@ -7856,16 +7992,16 @@ public class DesktopPet : Form
         // 原来走路 amp=5.4 / 抬腿 7.5 / 手臂 7，整条横带一推就是 7~9px，
         // 手臂那条细带跟躯干错开之后会断开成独立色块（自检帧里量到 9~10px 的孤立岛），
         // 看着就是"肢体不协调"。现在上身只摆 3.6px、手臂 3.2、抬腿 3.2，先保证轮廓连续。
-        float amp = running ? 6.0f : (walking ? 3.6f : 0.5f);
+        float amp = running ? 7.0f : (walking ? 4.6f : 0.8f);
         if (actAmt > 0.02f && actKind == 4) amp += 1.8f * actAmt;   // 跳舞只留一点摆动，大幅切条就是折叠
         float ph = t * (running ? 12.0f : 8.4f);
         if (actAmt > 0.02f && actKind == 4) ph = t * 8.0f;           // 节拍降下来，切条推太快就成抽搐
-        float legLift = running ? 6.0f : (walking ? 3.2f : 0f);
+        float legLift = running ? 7.0f : (walking ? 4.2f : 0f);
         bool stepping = (running || walking || (actAmt > 0.3f && actKind == 4)) && hopPend <= 0;
         // 手臂的张合幅度：走路跑跳最大，站着也有一点，御剑和骑坐骑手要扶着就不摆
         float armAmp = 0f;
         bool handsBusy = (actAmt > 0.25f && (actKind == 2 || actKind == 3 || actKind == 5 || actKind == 7 || actKind == 8));
-        if (!handsBusy) armAmp = running ? 4.4f : (walking ? 3.2f : 1.4f);
+        if (!handsBusy) armAmp = running ? 5.0f : (walking ? 3.8f : 1.8f);
         if (waving) armAmp = 8.0f;
         if (actAmt > 0.25f && actKind == 4) armAmp = 4.0f;
         // 走路时手臂必须和腿同频反相（左腿抬起时右手往前），不同频整只就像牌子在晃
@@ -7903,11 +8039,22 @@ public class DesktopPet : Form
             // 2026-11-24 夜：这里原来还有一条 -0.34×armAmp 的反向小项（窗口 0.38~0.63），
             // 跟下面 0.36~0.66 那条叠在一起，窗口边界错开 0.02 就形成台阶，
             // 手臂带被推走一格、躯干没跟，轮廓就裂开。现在只留下面唯一一条正弦窗口。
-            // 招手：只晃上半身
+            // 招手：只晃上半身（2026-11-25 幅度收到 6px、节拍放到 7Hz，原来 9px/13Hz 像抽搐）
             if (waving && fy < 0.68f)
-                off += 9.0f * (0.68f - fy) * (float)Math.Sin(t * 13.0);
+                off += 6.0f * (0.68f - fy) * (float)Math.Sin(t * 7.0f);
 
-            float yy = -targetH + i * stripH;
+            float yy = -targetH * hopV + i * stripH * hopV;
+            // 空中把腿段往上收一点，像真把脚提起来，而不是整只平移
+            if (hopLegTuck != 0f && fy > 0.66f) yy += hopLegTuck * ((fy - 0.66f) / 0.34f);
+            // 坐：上身整条往下落、胯到腿这一段线性收回来，小腿和脚原地不动，
+            // 这样是"膝盖折起来坐下"，不是把人压扁
+            if (sitSink > 0f)
+            {
+                if (fy <= 0.52f) yy += sitSink;
+                else if (fy < 0.74f) yy += sitSink * (0.74f - fy) / 0.22f;
+            }
+            // 招手时头点一点：只有最上面那几条动，幅度小于手，不然整只都在晃
+            if (waving && fy < 0.24f) yy += 2.0f * (float)Math.Sin(t * 7.0f + 1.1f);
             float sh = stripH + 2.4f;      // 竖着重叠 2.4px：相邻条横向差一格也不会漏洞
             float syp = i * stripH * imgScale;
             float shp = Math.Min(bmp.Height - syp, sh * imgScale);

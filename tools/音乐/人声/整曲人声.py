@@ -52,6 +52,49 @@ def wsola(x, k, N=1024, Hs=256, search=32):
     return out[:o] / wsum[:o]
 
 
+def _lowpass(x, sr, cutoff, taps=65):
+    """窗函数素 sinc 低通。压缩重采样前必须先过它，否则高频折叠回 4~8k，
+    听起来就是一片沙哑（2026-11-25 查到的根因之一）。"""
+    if cutoff >= sr * 0.45:
+        return x
+    n = np.arange(taps) - (taps - 1) / 2.0
+    fc = cutoff / sr
+    h = 2.0 * fc * np.sinc(2.0 * fc * n) * np.hamming(taps)
+    s = h.sum()
+    if s <= 1e-9:
+        return x
+    h /= s
+    return np.convolve(x, h, 'same')
+
+
+def resample_aa(x, newn, sr):
+    """重采样到 newn 点；压缩时先低通，避免折叠出沙哑。"""
+    if newn <= 0:
+        return x[:0]
+    k = newn / float(len(x))
+    src = _lowpass(x, sr, 0.45 * sr * k) if k < 0.98 else x
+    return np.interp(np.linspace(0, len(src) - 1, newn), np.arange(len(src)), src)
+
+
+def deess(x, sr, lo=4000.0, hi=8200.0):
+    """齿音/沙哑抑制：只压 4~8k 这一段的爆点，按能量包络动态给衰减，别一刀切。"""
+    import importlib.util as iu
+    sp = iu.spec_from_file_location('mx2', os.path.join(HERE, '..', '音色', '道音色融合.py'))
+    m2 = iu.module_from_spec(sp); sp.loader.exec_module(m2)
+    b1, a1 = m2._biquad(x, sr, 'highpass', lo, 0.0, 0.7071)
+    band = m2._lfilter(b1, a1, x)
+    band = _lowpass(band, sr, hi)          # 上沿用 FIR 低通（biquad 里没有 lowpass 分支）
+    # 包络：15ms 滑动平均
+    w = max(1, int(0.015 * sr))
+    env = np.convolve(np.abs(band), np.ones(w) / w, 'same')
+    ref = float(np.percentile(env, 90)) + 1e-9
+    r = np.clip(env / ref, 0.0, 2.0)
+    g = 1.0 / (1.0 + 2.4 * r)                 # 爆点最多压到 -8 dB 左右
+    gw = max(1, int(0.010 * sr))
+    g = np.convolve(g, np.ones(gw) / gw, 'same')
+    return x - band + band * g
+
+
 def f0_of(x, sr):
     seg = x[int(0.1 * sr):int(0.1 * sr) + 4096]
     ac = np.correlate(seg - seg.mean(), seg - seg.mean(), 'full')[len(seg) - 1:]
@@ -60,13 +103,21 @@ def f0_of(x, sr):
 
 
 def apply_contour(x, sr, f0_curve, base):
-    """按目标 f0 曲线变速（连续，不做切段），再把时长拉回原长。"""
+    """按目标 f0 曲线变速（连续，不做切段），再把时长拉回原长。
+    2026-11-25：这里原来是裸 np.interp，rate 到 1.40 时等于硬抽点，
+    4~8k 直接折叠回来，成品听着沙哑。现在压缩段先低通再插值。"""
     n = len(x)
     t = np.arange(n) / sr
     target = np.interp(t, np.linspace(0, t[-1], len(f0_curve)), f0_curve)
     rate = np.clip(target / base, 0.72, 1.40)
     pos = np.cumsum(rate)
-    y = np.interp(np.linspace(0, pos[-1], n), pos, x)
+    pos = pos - pos[0]
+    span = pos[-1]
+    src = x
+    k = n / max(span, 1e-9)          # 输出点数 / 输入跨度
+    if k < 0.98:
+        src = _lowpass(src, sr, 0.45 * sr * k)
+    y = np.interp(np.linspace(0, span, n), pos, src)
     return y
 
 
@@ -111,7 +162,7 @@ def main():
             x = x.mean(axis=1)
         x = x.astype(np.float64)
         if sr != SR:
-            x = np.interp(np.linspace(0, len(x) - 1, int(len(x) * SR / sr)), np.arange(len(x)), x)
+            x = resample_aa(x, int(len(x) * SR / sr), sr)
         # 自适应语速：先用 -8% 量一遍，按需要改成一次语速，把 WSOLA 残余拉伸压到 <10%
         ratio = len(x) / max(1, want)
         if abs(ratio - 1) > 0.06:
@@ -123,7 +174,7 @@ def main():
                 x = x.mean(axis=1)
             x = x.astype(np.float64)
             if sr != SR:
-                x = np.interp(np.linspace(0, len(x) - 1, int(len(x) * SR / sr)), np.arange(len(x)), x)
+                x = resample_aa(x, int(len(x) * SR / sr), sr)
         x = wsola(x, want / max(1, len(x)))
         x = x[:want] if len(x) >= want else np.pad(x, (0, want - len(x)))
         # 连续音高曲线：以「本句中位音」为 0，只做句内相对起伏（不整体升降调）
@@ -151,12 +202,16 @@ def main():
     sp = iu.spec_from_file_location('mx', os.path.join(HERE, '..', '音色', '道音色融合.py'))
     mx = iu.module_from_spec(sp); sp.loader.exec_module(mx)
     # 软饱和：只抬谐波不削波，等价于磁带/话放的那点非线性
-    buf = np.tanh(buf * 1.25) / np.tanh(1.25)
+    # 2026-11-25：驱动量从 1.25 收到 0.50。原来那个量在人声峰值处生出
+    # 一堆三、五次谐波，听感就是"毛、沙"，HNR 反而被它拖低
+    buf = np.tanh(buf * 0.50) / np.tanh(0.50)
     for kind, f, g, q in [('highpass', 80.0, 0.0, 0.7071), ('lowshelf', 180.0, 1.4, 0.60),
                           ('lowshelf', 320.0, 0.8, 0.70), ('peaking', 900.0, -1.2, 0.80),
                           ('highshelf', 5000.0, -1.0, 0.7071)]:
         b, a = mx._biquad(buf, SR, kind, f, g, q)
         buf = mx._lfilter(b, a, buf)
+    # 去齿音：4~8k 爆点动态压制（沙哑的另一半根源）
+    buf = deess(buf, SR)
     buf = buf / (np.max(np.abs(buf)) + 1e-9) * 0.88
     out = os.path.join(OUT, '%s_%s.wav' % ('整曲人声' + ('_' + tag if tag else ''), label))
     sf.write(out, buf, SR)

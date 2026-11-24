@@ -83,8 +83,10 @@ async def synth(text, voice, rate, path):
 
 def main():
     label = sys.argv[1] if len(sys.argv) > 1 else '低语'
+    tlf = sys.argv[2] if len(sys.argv) > 2 else os.path.join(OUT, '代唱_v25_时间轴.json')
+    tag = sys.argv[3] if len(sys.argv) > 3 else ''
     voice, shift, vibsemi = VOICES[label]
-    items = json.load(open(os.path.join(OUT, '代唱_v25_时间轴.json'), encoding='utf-8'))
+    items = json.load(open(tlf, encoding='utf-8'))
     lines = []
     for it in items:
         if not lines or lines[-1][0] != it['line']:
@@ -153,7 +155,7 @@ def main():
         b, a = mx._biquad(buf, SR, kind, f, g, q)
         buf = mx._lfilter(b, a, buf)
     buf = buf / (np.max(np.abs(buf)) + 1e-9) * 0.88
-    out = os.path.join(OUT, '整曲人声_%s.wav' % label)
+    out = os.path.join(OUT, '%s_%s.wav' % ('整曲人声' + ('_' + tag if tag else ''), label))
     sf.write(out, buf, SR)
     print('写入 %s | %d 句 | %.1fs | peak %.2f'
           % (out, len(lines), len(buf) / SR, float(np.max(np.abs(buf)))))

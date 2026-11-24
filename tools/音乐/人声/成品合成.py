@@ -6,7 +6,9 @@ import numpy as np
 import soundfile as sf
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-INST = r"F:\Daodao\tools\音乐\打工人歌\out\把好日子扛在肩上_v25.wav"
+INST = os.environ.get('DAO_INST', r"F:\Daodao\tools\音乐\打工人歌\out\把好日子扛在肩上_v25.wav")
+NAME = os.environ.get('DAO_NAME', '把好日子扛在肩上')
+VOCAL = os.environ.get('DAO_VOCAL', '整曲人声')   # 人声轨文件名前缀，不带 _后缀
 SR = 22050
 
 
@@ -30,9 +32,10 @@ def main():
     labels = sys.argv[1:] or ['自然']
     inst = load(INST, SR)
     for lb in labels:
-        v = load(os.path.join(HERE, 'out', '整曲人声_%s.wav' % lb), SR)
-        n = min(len(v), len(inst))
-        v, ins = v[:n], inst[:n]
+        v = load(os.path.join(HERE, 'out', '%s_%s.wav' % (VOCAL, lb)), SR)
+        n = max(len(v), len(inst))
+        v = np.pad(v, (0, n - len(v)))
+        ins = np.pad(inst, (0, n - len(inst)))
         ins = ins / (np.sqrt(np.mean(ins ** 2)) + 1e-12) * 0.048    # 伴奏定在 RMS 0.06
         v = v / (np.sqrt(np.mean(v ** 2)) + 1e-12) * 0.075         # 人声略低于伴奏能量，但峰值靠前
         mix = v + ins * 0.85
@@ -45,7 +48,8 @@ def main():
         peak = np.max(np.abs(mix)) + 1e-12
         if peak > 0.891:      # ≈ -1.0 dBFS
             mix = mix / peak * 0.891
-        out = os.path.join(HERE, 'out', '成品_把好日子扛在肩上_%s.wav' % lb)
+        out = os.path.join(HERE, 'out', '成品_%s_%s.wav' % (NAME, lb))
+        os.makedirs(os.path.dirname(out), exist_ok=True)
         sf.write(out, mix.astype(np.float32), SR)
         # 用真正的响度表（响度体检）闭环校正，不用自己那个粗糙估算
         import subprocess, re

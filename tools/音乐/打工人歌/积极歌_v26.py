@@ -168,9 +168,9 @@ def build():
         ('V2', 'lyric', PROG_V, 8, 'verse', VERSES2),
         ('C2', 'lyric', PROG_C, 8, 'chorus', CHORUS),
         ('B',  'lyric', PROG_B, 8, 'bridge', BRIDGE),
-        ('I3', 'inst', PROG_C, 16, 'build', None),
+        ('I3', 'inst', PROG_C, 8, 'build', None),
         ('C3', 'lyric', PROG_C, 8, 'chorus', CHORUS),
-        ('O',  'inst', PROG_O, 8, 'fadeout', None),
+        ('O',  'inst', PROG_O, 16, 'fadeout', None),
     ]
     for tag, kind, prog, bars, level, lines in plan:
         start = t

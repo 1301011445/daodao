@@ -105,6 +105,13 @@ def main():
         'source': os.path.basename(wav),
         'frames': frames,
         'duration_s': round(frames / fps, 3),
+        # 学自 LiveTalking：音频分块驱动口型，每块一个 viseme（20ms 块 ≈ 50 块/秒）
+        'viseme_chunk_ms': 20,
+        'visemes': [
+            {'t': round(i / fps, 3), 'level': int(lvl[i]),
+             'viseme': ['闭', 'i', 'e_o', 'a'][int(lvl[i])]}
+            for i in range(frames)
+        ],
         'metrics': {
             'offset_ms': round(offset_ms, 1),
             'min_hold': int(min_hold),

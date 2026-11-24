@@ -311,6 +311,13 @@ public class DesktopPet : Form
     float moveSpeedPxPerSec = 0f;
     float walkPhase = 0f;     // 走路相位（0..8，一帧一格），自己累加，帧率变化也不会跳帧
     float walkLastT = -1f;
+    // ==== 二次动作（第3类 Live2D 摆锤 / Spine PhysicsConstraint 的落地）====
+    // 发梢、衣角这类挂件比主动骨晚半拍起、停步后还余摆两下再收。
+    // 幅度按阻尼比衰减（对应 Cubism 摆锤的「收敛速度」、Spine 的 physicsRotationInheritanceFactor）。
+    float swayTailA = 0f;     // 余摆幅度 0..1
+    float swayTailT = 0f;     // 上次采样时间，用来算真实 dt
+    float swayTailPh = 0f;    // 余摆自己的相位（停步后继续自己走）
+    const float SwayTailDamp = 0.86f;   // 每帧(60fps)乘性衰减 ≈ 阻尼比 0.9
     int thinkTicks = 0;
     int thinkWait = 300;
     int diagCount = 0;
@@ -389,7 +396,7 @@ public class DesktopPet : Form
     static readonly float[] rigY = { 0.20f, 0.42f, 0.62f, 0.80f, 0.90f, 1.00f };
     static readonly float[] rigW = { 0.34f, 0.42f, 0.52f, 0.62f, 0.86f, 1.00f };
     static readonly float[] rigL = { 0.00f, 0.55f, 1.15f, 1.75f, 2.30f, 2.90f };
-    static readonly float rigSum = 3.36f;
+    static readonly float rigSum = 3.76f;   // = ΣrigW（3.76）；原来是 3.36，会让摆幅超过 1.0 约 12%，顶端会过冲
 
     // 某个高度（0 脚底 ~ 1 头顶）被骨链推开多少，返回的是"幅值倍数"
     static float BoneSway(float fy, float ph)
@@ -7733,11 +7740,33 @@ public class DesktopPet : Form
         float armPh = running ? (ph + (float)Math.PI)
             : (waving ? t * 9.0f : (stepping ? ph + (float)Math.PI : t * 3.2f));
 
+        // 二次动作：踩步时把余摆喂到 1，停步后按 60fps 0.86 的乘性衰减收掉；余摆相位继续自己走
+        float dTail = t - swayTailT;
+        if (dTail < 0f || dTail > 0.5f) dTail = 1f / 60f;
+        swayTailT = t;
+        if (stepping)
+        {
+            swayTailA = Math.Min(1f, swayTailA + dTail * 11f);
+            swayTailPh = ph;
+        }
+        else
+        {
+            swayTailA *= (float)Math.Pow(SwayTailDamp, dTail * 60f);
+            if (swayTailA < 0.02f) swayTailA = 0f;
+            swayTailPh += dTail * 8.4f;
+        }
+
         for (int i = 0; i < strips; i++)
         {
             float fy = (i + 0.5f) / strips;
             // 摆动交给骨链：越靠上叠得越多、相位越晚，头和发尾晚半拍跟上
             float off = amp * BoneSway(fy, ph);
+            // 挂件余摆：只作用于发梢/衣摆这一段（fy>0.78），比主干晚 2.9 rad，停步后自己衰减
+            if (swayTailA > 0.01f && fy > 0.78f)
+            {
+                float wt = (fy - 0.78f) / 0.22f;
+                off += amp * 0.55f * swayTailA * wt * (float)Math.Sin(swayTailPh - 2.9f);
+            }
             // 手臂：上半身中段反向摆，用余弦窗口收边，进出没有硬拐角
             if (stepping && fy > 0.38f && fy < 0.63f)
             {
@@ -10130,7 +10159,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 114;
+    public const int APP_VER = 115;
 
     public static void Start()
     {

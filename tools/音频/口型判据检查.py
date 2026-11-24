@@ -29,8 +29,10 @@ def main():
         fails.append('P1')
 
     lo, hi = m['min_hold'], m['max_hold']
-    ok2 = lo >= 2 and hi <= 4
-    print('%s P2 口型停留 %d–%d 帧 @%.0ffps（阈值 2–4 帧）' % ('PASS' if ok2 else 'FAIL', lo, hi, fps))
+    med = m.get('median_hold', lo)
+    ok2 = lo >= 2 and med <= 4
+    print('%s P2 口型停留 最短 %d 帧 / 中位 %d 帧 / 最长 %d 帧 @%.0ffps（阈值 最短≥2 且 中位≤4；长音允许超过 4）'
+          % ('PASS' if ok2 else 'FAIL', lo, med, hi, fps))
     if not ok2:
         fails.append('P2')
 

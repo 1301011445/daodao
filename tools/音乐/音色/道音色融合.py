@@ -51,16 +51,31 @@ def _biquad(x, sr, kind, f0, gain_db=0.0, q=0.7071):
     return b, a
 
 
-def apply_eq(x, sr):
-    """道自己的音色链：胸声托底、齿音收敛、气声保留但不糊。"""
-    chain = [
+CHAINS = {
+    "v1": [
         ("highpass", 90.0, 0.0, 0.7071),      # 去掉次声轰鸣
         ("lowshelf", 230.0, 1.2, 0.70),       # 胸腔共鸣 +1.2dB，补「有厚度但不闷」
         ("peaking", 620.0, -0.8, 1.0),        # 收掉童声鼻音共鸣
         ("highshelf", 3200.0, -0.9, 0.7071),  # 去锯齿/去毛刺，压电音感
         ("peaking", 4500.0, -0.8, 0.9),       # 齿音收敛
         ("highshelf", 9000.0, -0.6, 0.7071),  # 高频柔化，避免合成感发亮
-    ]
+    ],
+    # v2（2026-11-24 用户「音色全换」后）：更暗、更厚、少亮少细
+    "v2": [
+        ("highpass", 80.0, 0.0, 0.7071),
+        ("lowshelf", 160.0, 2.0, 0.60),       # 胸声再往下托，补低频厚度
+        ("lowshelf", 300.0, 1.0, 0.70),
+        ("peaking", 900.0, -1.5, 0.80),       # 收箱音/鼻音，去「细嗓子」
+        ("peaking", 2600.0, -1.0, 0.90),      # 压中高频的刺
+        ("highshelf", 5000.0, -2.0, 0.7071),  # 砍亮：这是「听起来不像人」的主因
+        ("highshelf", 11000.0, -1.2, 0.7071),
+    ],
+}
+
+
+def apply_eq(x, sr, chain_name="v1"):
+    """道自己的音色链：胸声托底、齿音收敛、气声保留但不糊。"""
+    chain = CHAINS.get(chain_name, CHAINS["v1"])
     y = x.astype(np.float64)
     for kind, f, g, q in chain:
         b, a = _biquad(y, sr, kind, f, g, q)
@@ -140,12 +155,12 @@ def metrics(x, sr):
             "动态范围dB": round(float(dyn), 1), "f0估Hz": round(f0, 1)}
 
 
-def process(src, dst, target_peak=0.92):
+def process(src, dst, target_peak=0.92, chain_name="v1"):
     x, sr = sf.read(src, dtype="float64")
     if x.ndim > 1:
         x = x.mean(axis=1)
     before = metrics(x, sr)
-    y = apply_eq(x, sr)
+    y = apply_eq(x, sr, chain_name)
     y = soft_deess(y, sr)
     y = y / (np.max(np.abs(y)) + 1e-12) * target_peak
     after = metrics(y, sr)
@@ -157,5 +172,7 @@ if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("用法: 道音色融合.py 输入.wav 输出.wav")
         raise SystemExit(1)
-    b, a = process(sys.argv[1], sys.argv[2])
+    pk = float(sys.argv[3]) if len(sys.argv) > 3 else 0.92
+    cn = sys.argv[4] if len(sys.argv) > 4 else "v1"
+    b, a = process(sys.argv[1], sys.argv[2], target_peak=pk, chain_name=cn)
     print(json.dumps({"处理前": b, "处理后": a}, ensure_ascii=False))

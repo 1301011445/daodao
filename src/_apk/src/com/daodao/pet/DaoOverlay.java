@@ -64,6 +64,13 @@ public class DaoOverlay extends Service {
     static final String A_MODE = "com.daodao.pet.OV_MODE";
     static final String A_SIDE = "com.daodao.pet.OV_SIDE";
     static final String A_STOP = "com.daodao.pet.OV_STOP";
+    static final String A_ART = "com.daodao.pet.OV_ART";   // 换形象（通知按钮 / 长按桌宠）
+
+    // 悬浮窗也能换形象（2026-11-24 夜：以前只有 walk8.png 一套，桌面上永远是同一个少女）
+    // 顺序跟 dao.html 的 _ks 完全一致，两端「第几个形象」说得上是同一个
+    static final int[] ARTS = { 12, 13, 6, 7, 8, 11, 0, 1, 2, 3, 4, 5, 9, 10 };
+    // 只有这个形象有真八帧走路素材，其它 13 个用立绘 + 网格变形代步
+    static final int ART_WALK = 6;
 
     private WindowManager wm;
     private SharedPreferences sp;
@@ -73,6 +80,7 @@ public class DaoOverlay extends Service {
 
     private int mode = MODE_PEEK;
     private int side = SIDE_RIGHT;
+    private int art = ART_WALK;        // 当前桌面形象（face 文件序号），默认还是那个有八帧素材的少女
     private int sw = 0, sh = 0;
     private boolean added = false;
     private boolean screenOn = true;
@@ -164,6 +172,7 @@ public class DaoOverlay extends Service {
         sp = getSharedPreferences(SP, MODE_PRIVATE);
         mode = sp.getInt("mode", MODE_PEEK);
         side = sp.getInt("side", SIDE_RIGHT);
+        art = sp.getInt("art", ART_WALK);
         measure();
 
         screenRx = new BroadcastReceiver() {
@@ -204,6 +213,7 @@ public class DaoOverlay extends Service {
             side = (side == SIDE_LEFT) ? SIDE_RIGHT : SIDE_LEFT;
             sp.edit().putInt("side", side).apply();
         }
+        if (A_ART.equals(a)) cycleArt();
         if (m >= 0) {
             mode = m;
             sp.edit().putInt("mode", mode).apply();
@@ -492,6 +502,18 @@ public class DaoOverlay extends Service {
 
     // ---------------- 通知 ----------------
 
+    /** 换形象：按 ARTS 的顺序往下轮一个，转一圈回到开头。通知按钮和长按桌宠都走这里 */
+    private void cycleArt() {
+        try {
+            int at = 0;
+            for (int i = 0; i < ARTS.length; i++) if (ARTS[i] == art) at = i;
+            art = ARTS[(at + 1) % ARTS.length];
+            sp.edit().putInt("art", art).apply();
+            if (pv != null) pv.setArt(art);
+            refreshNotif();
+        } catch (Exception e) { }
+    }
+
     private String modeText() {
         switch (mode) {
             case MODE_FULL: return "满身站在桌面上";
@@ -541,6 +563,7 @@ public class DaoOverlay extends Service {
         try {
             b.addAction(0, "满身", servicePi(A_MODE, MODE_FULL, 21));
             b.addAction(0, "贴边", servicePi(A_MODE, MODE_PEEK, 22));
+            b.addAction(0, "换形象", servicePi(A_ART, -1, 25));
             b.addAction(0, "球", servicePi(A_MODE, MODE_BALL, 23));
             b.addAction(0, "收起", servicePi(A_STOP, -1, 24));
         } catch (Exception e) { }
@@ -568,6 +591,8 @@ public class DaoOverlay extends Service {
         private Bitmap ballHappy, ballSleep, ballSur;   // 三种表情：开心 / 困 / 惊讶
         private Bitmap peekArt;      // 贴边探头的半身姿态（assets/peek.png）
         private Bitmap[] frames;     // 八帧拆开存，供网格变形逐帧用
+        private Bitmap standArt;     // 当前形象的立绘（assets/stand_<序号>.png）；八帧少女这套不用它
+        private float walkAmp = 1f;  // 立绘代步时把迈步幅度放大，不然肉眼看不出腿在动
         private long happyUntil = 0;
         // 2026-11-23：打招呼/被戳时抬手挥一挥（网格驱动，不是换图）。只对满身站姿生效，走路和贴边不抢戏。
         private long waveUntil = 0;
@@ -616,6 +641,7 @@ public class DaoOverlay extends Service {
             ballSleep = loadOpt("ball_sleep.png");
             ballSur = loadOpt("ball_sur.png");
             peekArt = loadOpt("peek.png");
+            loadStand();
             // 2026-11-22 夜：形象不再「一张图定住」，改成按骨骼权重做网格变形。
             // 先把八帧拆成独立位图，变形时直接取当前帧，省掉每帧 createBitmap。
             try {
@@ -701,6 +727,34 @@ public class DaoOverlay extends Service {
             }
         }
 
+        /**
+         * 2026-11-24 夜：桌面上换形象。
+         * 只有 ART_WALK 那个少女有真八帧走路素材（walk8.png）；其它 13 个的立绘是
+         * 192×384 画布、底对齐、水平居中（跟八帧同比例），所以满身/贴边都能直接挂上去，
+         * 走路用 drawWarp 的迈步变形代一下——腿不会真交替，但人确实在挪、下身会摆。
+         */
+        void loadStand() {
+            standArt = null;
+            walkAmp = 1f;
+            if (art == ART_WALK) return;      // 有真腿的这套，走原路径
+            try {
+                BitmapFactory.Options o = new BitmapFactory.Options();
+                o.inScaled = false;
+                standArt = BitmapFactory.decodeStream(
+                        getContext().getAssets().open("stand_" + art + ".png"), null, o);
+                walkAmp = 2.6f;
+            } catch (Exception e) {
+                standArt = null;              // 素材缺了就退回八帧少女，桌面上不能空着
+                walkAmp = 1f;
+            }
+        }
+
+        void setArt(int k) {
+            art = k;
+            loadStand();
+            invalidate();
+        }
+
         void setMode(int m) {
             vm = m;
             invalidate();
@@ -760,7 +814,11 @@ public class DaoOverlay extends Service {
             if (vm == MODE_PEEK && side == SIDE_RIGHT) { c.translate(w, 0); c.scale(-1f, 1f); }   // 在右边扒边，手要朝右
             if (vm == MODE_PEEK) { c.rotate((float) Math.sin(tick / 38.0) * 1.2f, w / 2f, h * 0.98f); }  // 探头时轻轻晃，不是一张死图
             c.translate(lean, 0);
-            if (vm == MODE_PEEK && peekArt != null && !peekArt.isRecycled()) {
+            if (standArt != null && !standArt.isRecycled()) {
+                // 其它形象的立绘：满身时迈步 + 站定呼吸，贴边时挂上探头那套轻晃。
+                // 这一支必须排在 peekArt 前面，否则贴边永远是那半个少女
+                drawWarp(c, standArt, 0, bob, w, h + bob, tick / 30.0, walking, vm == MODE_PEEK, waveAmp, nodAmp);
+            } else if (vm == MODE_PEEK && peekArt != null && !peekArt.isRecycled()) {
                 drawWarp(c, peekArt, 0, bob, w, h + bob, tick / 30.0, false, true, 0f, 0f);   // 贴边：半身探头 + 慢晃 + 呼吸 + 左右看
             } else if (frames != null && fi >= 0 && fi < frames.length) {
                 drawWarp(c, frames[fi], 0, bob, w, h + bob, tick / 30.0, walking, false, waveAmp, nodAmp);
@@ -817,8 +875,8 @@ public class DaoOverlay extends Service {
                         }
                     }
                     if (walk && ny > 0.55f) {                                       // 走路：下半身前后摆，脚下跟着起伏
-                        dx += 0.020f * w * step * (ny - 0.55f) / 0.45f;
-                        dy += -Math.abs(step) * 0.010f * h * ny * ny;
+                        dx += 0.020f * w * walkAmp * step * (ny - 0.55f) / 0.45f;
+                        dy += -Math.abs(step) * 0.010f * walkAmp * h * ny * ny;
                     }
                     if (wave > 0.01f) {
                         // 挥手：只抬画面右侧那条手臂。肩在 0.12~0.30 高度，前臂按 9.5 弧度/秒来回摆，
@@ -933,6 +991,8 @@ public class DaoOverlay extends Service {
                     long dt = System.currentTimeMillis() - t0;
                     if (!moved && dt < 400) {
                         onTap();
+                    } else if (!moved) {
+                        cycleArt();          // 长按不动 = 换形象（跟通知里那颗按钮同一个口子）
                     } else {
                         onDrop();
                     }

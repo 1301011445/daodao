@@ -7359,9 +7359,9 @@ public class DesktopPet : Form
         float bob = -3.1f * riseBob + 1.2f * EaseOutQuint(press);
         if (lieAmt > 0.02f) bob -= 34f * lieAmt;
 
-        // 2026-11-24 八域[动作]：走路时整只左右摆一点，像重心换脚，不再是直线平移。
-        // 只做整像素平移、不旋转不缩放——透明键窗口里一旋转边缘就混出粉紫描边。
-        float swayX = 1.6f * (float)Math.Sin(ph * (float)Math.PI / 4f);
+        // 2026-11-24：左右摆整只平移，脚底也跟着滑，看着像"贴着地溜"，肢体不协调。
+        // 已停用（保留 0 值），要动上半身得切角色骨骼，不能整张平移。
+        float swayX = 0f;
         float footY = cy + 68f;
         float targetH = pb.Height;
         float baseW = pb.Width;
@@ -7519,8 +7519,10 @@ public class DesktopPet : Form
     // 2026-11-24 八域[形象]：立绘勾边（1px 实色，浅蓝白）。
     // 窗口是透明键（洋红，LWA_COLORKEY）模式，不认逐像素 alpha：任何半透明像素都会被
     // 染成粉边，所以柔光/外发光这条做不了，只能在不透明像素外沿补一圈实色，做出勾边感。
+    // 2026-11-24：加了一圈 1px 勾边，实拍发现白衣服边上像糊了一层白边（浅蓝压在白上等于发白），
+    // 用户否了，整体停用。代码留着，rimOn 改 true 就能再开。
     static readonly Color RimColor = Color.FromArgb(255, 178, 216, 240);
-    bool rimOn = true;
+    bool rimOn = false;
     Dictionary<Bitmap, Bitmap> rimCache = new Dictionary<Bitmap, Bitmap>();
 
     Bitmap GetRim(Bitmap src)

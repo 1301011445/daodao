@@ -62,6 +62,42 @@ REG = {
 rng = random.Random(20261124)
 GAP = 170
 
+# 段落级音色参数：优先用大模型总结产出的 音色应用.json，并做安全下限钳制
+# （大模型常把 bre/vib_len 给成 0，全 0 会渲成干声，所以下限由这里兜住，规则写死、可复查）
+APP_JSON = r"F:\Daodao\tools\音乐\音色\音色应用.json"
+FLOOR = {
+    "前奏": {"bre": 12, "dyn": 12, "vib_len": 30, "vib_depth": 12, "voi": 42},
+    "主歌": {"bre": 10, "dyn": 12, "vib_len": 40, "vib_depth": 16, "voi": 72},
+    "预副歌": {"bre": 12, "dyn": 18, "vib_len": 55, "vib_depth": 22, "voi": 84},
+    "副歌": {"bre": 12, "dyn": 26, "vib_len": 70, "vib_depth": 28, "voi": 100},
+    "桥段": {"bre": 16, "dyn": 20, "vib_len": 60, "vib_depth": 20, "voi": 62},
+    "尾奏": {"bre": 16, "dyn": 14, "vib_len": 34, "vib_depth": 14, "voi": 48},
+}
+try:
+    import json as _json
+    _raw = _json.load(io.open(APP_JSON, encoding="utf-8")).get("段落参数") or {}
+except Exception:
+    _raw = {}
+
+
+def sec_key(name):
+    return name.rstrip("0123456789")
+
+
+PARAM = {}
+for name, _lines in STRUCT:
+    k = sec_key(name)
+    base = dict(FLOOR.get(k, FLOOR["主歌"]))
+    got = _raw.get(k) or {}
+    for f in ("bre", "dyn", "vib_len", "vib_depth", "voi"):
+        try:
+            v = float(got.get(f))
+        except Exception:
+            v = None
+        if v is not None and v >= base[f]:
+            base[f] = v
+    PARAM[name] = base
+
 
 def walk_melody(n, start, end):
     """在五声音阶索引空间里从 start 走到 end，恰好 n 个音，步长限制在 ±2 内。"""
@@ -102,7 +138,7 @@ for sec, lines in STRUCT:
             mel = walk_melody(n, *REG[sec])
             last_flag = [False] * (n - 1) + [True]
         for ch, tone_idx, d, lf in zip(chars, mel, durs, last_flag):
-            notes.append((pos, PENTA[tone_idx], d, ch, lf))
+            notes.append((pos, PENTA[tone_idx], d, ch, lf, PARAM[sec]))
             pos += d
         pos += GAP
 
@@ -111,7 +147,7 @@ total_dur = pos * MS_TICK / 1000.0
 print("音符 %d 个，总长 %.1f 秒" % (len(notes), total_dur))
 
 blocks = []
-for p, tone, d, ch, last in notes:
+for p, tone, d, ch, last, PRM in notes:
     dur_ms = d * MS_TICK
     detune = rng.uniform(-1.2, 1.2)
     scoop = -rng.uniform(5.0, 9.0)
@@ -121,10 +157,13 @@ for p, tone, d, ch, last in notes:
            (max(60.0, dur_ms * 0.55), detune + drift),
            (max(80.0, dur_ms - 55), detune), (dur_ms, detune + fall)]
     body = '\n'.join(['      - x: %.1f\n        y: %.1f\n        shape: io' % (x, y) for x, y in pts])
-    vib_len = 60 if last else int(d * 0.45)
-    depth = 22 if last else 14
-    bre = 10 if last else 6
-    dyn = 4 if last else 10
+    vib_len = min(int(d * PRM["vib_len"] / 100), d - 40) if d > 80 else 0
+    if last:
+        vib_len = max(vib_len, min(60, d - 40))
+    depth = int(PRM["vib_depth"]) + (4 if last else 0)
+    bre = int(PRM.get("bre", 10))
+    voi = int(PRM.get("voi", 80))
+    dyn = int(PRM.get("dyn", 14)) + (4 if last else 0)
     blocks.append("""  - position: %d
     duration: %d
     tone: %d
@@ -135,7 +174,7 @@ for p, tone, d, ch, last in notes:
       snap_first: true
     vibrato:
       length: %d
-      period: 180
+      period: 150
       depth: %d
       in: 60
       out: 80
@@ -143,10 +182,11 @@ for p, tone, d, ch, last in notes:
       drift: 20
     expressions:
       bre: %d
+      voi: %d
       dyn: %d
     tuning: 0
     tildes: 0
-""" % (p, d, tone, ch, body, vib_len, depth, bre, dyn))
+""" % (p, d, tone, ch, body, vib_len, depth, bre, voi, dyn))
 
 raw = io.open(SRC, encoding="utf-8").read()
 head = raw.split("tracks:")[0].replace("bpm: 120", "bpm: %d" % BPM)

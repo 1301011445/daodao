@@ -33,8 +33,8 @@ def main():
         v = load(os.path.join(HERE, 'out', '整曲人声_%s.wav' % lb), SR)
         n = min(len(v), len(inst))
         v, ins = v[:n], inst[:n]
-        ins = ins / (np.sqrt(np.mean(ins ** 2)) + 1e-12) * 0.06    # 伴奏定在 RMS 0.06
-        v = v / (np.sqrt(np.mean(v ** 2)) + 1e-12) * 0.055         # 人声略低于伴奏能量，但峰值靠前
+        ins = ins / (np.sqrt(np.mean(ins ** 2)) + 1e-12) * 0.048    # 伴奏定在 RMS 0.06
+        v = v / (np.sqrt(np.mean(v ** 2)) + 1e-12) * 0.075         # 人声略低于伴奏能量，但峰值靠前
         mix = v + ins * 0.85
         # 母带：先按峰值留 -1dBTP 余量，再逐轮压到 -16 LUFS 附近
         for _ in range(6):

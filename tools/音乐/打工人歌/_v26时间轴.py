@@ -17,8 +17,9 @@ for meta in mel:
     t0 = meta['t']
     ph = sorted([x for x in notes if x['ch'] in VCH and t0 <= x['t'] < t0 + 8 * BEAT], key=lambda x: x['t'])
     text = meta['text']
+    vc = '少年' if meta['chorus'] else '自然'     # 大模型评审：副歌要更亮更高 → 副歌用少年声
     for ch, n in zip(text, ph):
-        rows.append(dict(line=text, char=ch,
+        rows.append(dict(line=text, char=ch, voice=vc,
                          t=round(n['t'] / BEAT * spb, 3),
                          dur=round(n['dur'] / BEAT * spb, 3),
                          midi=int(round(n['pitch']))))

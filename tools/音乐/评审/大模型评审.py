@@ -53,11 +53,21 @@ def feats(inst_p, voc_p, mix_p, tl_p, bpm):
         a = lines[k][1][-1]; b = lines[k + 1][1][0]
         gaps.append(round(b['t'] - (a['t'] + a['dur']), 1))
     dur = max(x['t'] + x['dur'] for x in it)
-    # 人声/伴奏按段比
+    # 人声/伴奏按段比（走真实混音流程：人声优先抬升后再测，别拿旧常数骗自己）
+    import importlib.util
+    sp = importlib.util.spec_from_file_location('mx', os.path.join(ROOT, r'tools\音乐\人声\成品合成.py'))
+    mx = importlib.util.module_from_spec(sp); sp.loader.exec_module(mx)
+    inst0 = load(inst_p).copy()
+    v0 = load(voc_p).copy()
+    nn = max(len(v0), len(inst0))
+    v0 = np.pad(v0, (0, nn - len(v0))); inst0 = np.pad(inst0, (0, nn - len(inst0)))
+    inst0 = inst0 / (np.sqrt(np.mean(inst0 ** 2)) + 1e-12) * mx.INST_BASE * mx.INST_GAIN
+    v0 = v0 / (np.sqrt(np.mean(v0 ** 2)) + 1e-12) * mx.VOCAL_BASE
+    v0, gmean = mx.vocal_priority(v0, inst0, mx.SR)
     seg_ratio = []
-    for a in range(0, int(min(len(v), len(i)) / SR) - 5, 10):
-        blk_v = np.sqrt(np.mean(v[int(a * SR):int((a + 5) * SR)] ** 2))
-        blk_i = np.sqrt(np.mean(i[int(a * SR):int((a + 5) * SR)] ** 2)) * 0.85
+    for a in range(0, int(nn / mx.SR) - 5, 10):
+        blk_v = np.sqrt(np.mean(v0[int(a * mx.SR):int((a + 5) * mx.SR)] ** 2))
+        blk_i = np.sqrt(np.mean(inst0[int(a * mx.SR):int((a + 5) * mx.SR)] ** 2))
         if blk_v > 1e-4 and blk_i > 1e-4:
             seg_ratio.append(round(20 * np.log10(blk_v / blk_i), 1))
     return dict(
@@ -68,7 +78,7 @@ def feats(inst_p, voc_p, mix_p, tl_p, bpm):
         句尾净升降=[round(t, 1) for t in tails],
         最长句间空窗秒=max(gaps) if gaps else 0, 句间空窗=gaps,
         人声轨RMS=round(float(vr), 4), 伴奏轨RMS=round(float(ir), 4),
-        人声比伴奏dB=round(float(20 * np.log10(vr / (ir * 0.85))), 1),
+        人声比伴奏dB=round(gmean, 1),
         分段人声比伴奏dB=seg_ratio[:12],
         成品LUFS=None, 成品峰值=None,
         音色分配='主歌自然声 / 副歌少年声' if True else '')

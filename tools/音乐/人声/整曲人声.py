@@ -98,11 +98,14 @@ def main():
     d = os.path.join(OUT, '_tts_line')
     os.makedirs(d, exist_ok=True)
     for li, (text, its) in enumerate(lines):
-        path = os.path.join(d, '%s_%02d.mp3' % (label, li))
+        vc = its[0].get('voice', label) if isinstance(its[0], dict) else label
+        vv = VOICES.get(vc, VOICES[label])
+        vname, vshift, vvib = vv[0], vv[1], vv[2]
+        path = os.path.join(d, '%s_%02d_%s.mp3' % (label, li, vc))
         t0 = its[0]['t']; t1 = its[-1]['t'] + its[-1]['dur']
         want = int((t1 - t0) * SR)
         if not os.path.exists(path) or os.path.getsize(path) < 2000:
-            asyncio.run(synth(text, voice, -8, path))
+            asyncio.run(synth(text, vname, -8, path))
         x, sr = sf.read(path, dtype='float32')
         if x.ndim > 1:
             x = x.mean(axis=1)
@@ -114,7 +117,7 @@ def main():
         if abs(ratio - 1) > 0.06:
             new_rate = int(np.clip(round((1.0 / ratio - 1.0) * 100) - 2, -50, 50))
             path2 = path.replace('.mp3', '_r.mp3')
-            asyncio.run(synth(text, voice, new_rate, path2))
+            asyncio.run(synth(text, vname, new_rate, path2))
             x, sr = sf.read(path2, dtype='float32')
             if x.ndim > 1:
                 x = x.mean(axis=1)
@@ -137,7 +140,7 @@ def main():
         x = apply_contour(x, SR, f0_curve, base)
         # 轻颤（4.8Hz / ±0.6 半音），相位连续
         tt = np.arange(len(x)) / SR
-        wob = np.cumsum(1 + (2 ** (vibsemi / 12) - 1) * np.sin(2 * np.pi * 4.8 * tt))
+        wob = np.cumsum(1 + (2 ** (vvib / 12) - 1) * np.sin(2 * np.pi * 4.8 * tt))
         wob = wob / wob[-1] * (len(x) - 1)
         x = np.interp(wob, np.arange(len(x)), x)
         st = int(t0 * SR); en = min(len(buf), st + len(x))

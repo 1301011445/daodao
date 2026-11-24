@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 道的大脑（电脑端）：听 -> 想 -> 说，外加干活的几条腿
 
@@ -37,6 +37,14 @@ MODEL = "glm-4-flash"
 # 依次试，前一个 429/超时就退下一个：免费档优先，air 作保底
 MODEL_CHAIN = ("glm-4-flash", "glm-4.7-flash", "glm-4-air")
 VOICE = "zh-CN-XiaoxiaoNeural"
+# 三声型（2026-11-24，与演唱同源）：少年声/自然声/低语声，按情绪号选
+SPEECH_MAP = {1: "zh-CN-YunxiaNeural", 2: "zh-CN-YunxiaNeural", 4: "zh-CN-YunxiaNeural",
+              5: "zh-CN-YunxiaNeural", 8: "zh-CN-YunxiaNeural",
+              3: "zh-CN-YunjianNeural", 6: "zh-CN-YunjianNeural"}
+
+
+def voice_for(mood=0):
+    return SPEECH_MAP.get(int(mood or 0), VOICE)
 MEM_FILE = os.path.join(BASE, "brain_mem.json")
 ASK_FILE = os.path.join(BASE, "ask.txt")
 
@@ -260,7 +268,7 @@ def play_file(mp3path, fx=False):
         sd.play(np.clip(pcm, -1, 1), fs)
     sd.wait()
 
-def speak(text):
+def speak(text, mood=0):
     """在线合成，然后本地播放。失败就只写状态，不打断流程。"""
     if not text:
         return
@@ -268,7 +276,7 @@ def speak(text):
         import edge_tts
         import miniaudio
         mp3 = os.path.join(BASE, "_say.mp3")
-        asyncio.run(edge_tts.Communicate(text, VOICE).save(mp3))
+        asyncio.run(edge_tts.Communicate(text, voice_for(mood)).save(mp3))
         if not os.path.exists(mp3) or os.path.getsize(mp3) < 500:
             log("TTS_EMPTY")
             return

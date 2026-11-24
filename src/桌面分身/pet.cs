@@ -2469,11 +2469,19 @@ public class DesktopPet : Form
     };
     int vIdx = -1;
 
+    // 音色三声型（2026-11-24）：跟演唱同源的三个 edge-tts 声源
+    // 少年声 Yunxia 清亮偏高（开心/得意/兴奋/惊讶）、自然声 Xiaoxiao 日常、低语声 Yunjian 低缓（难过/犯困）
+    const string VOICE_YOUNG = "zh-CN-YunxiaNeural";
+    const string VOICE_NATURAL = "zh-CN-XiaoxiaoNeural";
+    const string VOICE_LOW = "zh-CN-YunjianNeural";
+
     string CurVoice()
     {
+        // 用户手动选过声音档案就尊重选择；没选过就按情绪走三声型
         if (vIdx >= 0 && vIdx < VId.Length) return VId[vIdx];
-        if (faceCount > 0) return faceVoices[species % faceCount];
-        return "zh-CN-XiaoxiaoNeural";
+        if (moodKind == 1 || moodKind == 2 || moodKind == 4 || moodKind == 5 || moodKind == 8) return VOICE_YOUNG;
+        if (moodKind == 3 || moodKind == 6) return VOICE_LOW;
+        return VOICE_NATURAL;
     }
 
     string CurFx()

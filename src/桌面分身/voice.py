@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 道的大脑（电脑端）：听 -> 想 -> 说，外加干活的几条腿
 
@@ -37,6 +37,14 @@ MODEL = "glm-4-flash"
 # 依次试，前一个 429/超时就退下一个：免费档优先，air 作保底
 MODEL_CHAIN = ("glm-4-flash", "glm-4.7-flash", "glm-4-air")
 VOICE = "zh-CN-XiaoxiaoNeural"
+# 三声型（2026-11-24，与演唱同源）：少年声/自然声/低语声，按情绪号选
+SPEECH_MAP = {1: "zh-CN-YunxiaNeural", 2: "zh-CN-YunxiaNeural", 4: "zh-CN-YunxiaNeural",
+              5: "zh-CN-YunxiaNeural", 8: "zh-CN-YunxiaNeural",
+              3: "zh-CN-YunjianNeural", 6: "zh-CN-YunjianNeural"}
+
+
+def voice_for(mood=0):
+    return SPEECH_MAP.get(int(mood or 0), VOICE)
 MEM_FILE = os.path.join(BASE, "brain_mem.json")
 ASK_FILE = os.path.join(BASE, "ask.txt")
 
@@ -149,43 +157,21 @@ def recognize(wav_path=WAV, fs=16000):
     return hear.recognize(wav_path)
 
 def _post(messages, temperature=0.7, max_tokens=160, timeout=30):
-    """按 MODEL_CHAIN 依次试模型：429（访问量过大）/超时/5xx 才往下退，
-    参数错误这类硬失败不重试，免得白等。返回 (正文, 用的模型名)。"""
-    import urllib.request, urllib.error, time
+    import urllib.request
     key = open(KEY_FILE, "r", encoding="utf-8").read().strip()
-    last = None
-    for model in MODEL_CHAIN:
-        body = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-        req = urllib.request.Request(API, data=data, method="POST")
-        req.add_header("Content-Type", "application/json")
-        req.add_header("Authorization", "Bearer " + key)
-        t0 = time.time()
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                obj = json.loads(resp.read().decode("utf-8"))
-            txt = obj["choices"][0]["message"]["content"].strip()
-            if not txt:
-                raise ValueError("empty content")
-            log("MODEL %s %.1fs" % (model, time.time() - t0))
-            return txt, model
-        except urllib.error.HTTPError as e:
-            code = e.code
-            last = e
-            log("MODEL %s http %s" % (model, code))
-            if code in (429, 500, 502, 503, 504):
-                continue
-            raise
-        except Exception as e:
-            last = e
-            log("MODEL %s fail %r" % (model, e))
-            continue
-    raise last if last else RuntimeError("no model")
+    body = {
+        "model": MODEL,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(API, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Authorization", "Bearer " + key)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        obj = json.loads(resp.read().decode("utf-8"))
+    return obj["choices"][0]["message"]["content"].strip()
 
 
 def build_messages(text):
@@ -282,7 +268,7 @@ def play_file(mp3path, fx=False):
         sd.play(np.clip(pcm, -1, 1), fs)
     sd.wait()
 
-def speak(text):
+def speak(text, mood=0):
     """在线合成，然后本地播放。失败就只写状态，不打断流程。"""
     if not text:
         return
@@ -290,7 +276,7 @@ def speak(text):
         import edge_tts
         import miniaudio
         mp3 = os.path.join(BASE, "_say.mp3")
-        asyncio.run(edge_tts.Communicate(text, VOICE).save(mp3))
+        asyncio.run(edge_tts.Communicate(text, voice_for(mood)).save(mp3))
         if not os.path.exists(mp3) or os.path.getsize(mp3) < 500:
             log("TTS_EMPTY")
             return
@@ -427,6 +413,45 @@ def do_listen():
     return 0
 
 
+def do_wake():
+    """常驻听：一轮接一轮地录、认，每句打一行 JSON；stdin 收 p 暂停、收 r 继续。
+    以前是每句都重新起一次 python，冷启动 1-2 秒，唤醒总是慢半拍。
+    现在进程不重启，模型只加载一次，中间只等 VAD 说完。"""
+    import sys
+    import threading
+    import time
+    _pause = {"v": False}
+
+    def watch():
+        try:
+            for line in sys.stdin:
+                c = (line or "").strip().lower()
+                if c == "p":
+                    _pause["v"] = True
+                elif c == "r":
+                    _pause["v"] = False
+                elif c == "q":
+                    os._exit(0)
+        except Exception:
+            pass
+
+    threading.Thread(target=watch, daemon=True).start()
+    while True:
+        try:
+            if _pause["v"]:
+                time.sleep(0.2)
+                continue
+            audio = record()
+            import numpy as np
+            rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2))) if audio.size else 0.0
+            text = recognize()
+            print(json.dumps({"rms": round(rms, 1), "text": text}, ensure_ascii=False), flush=True)
+            time.sleep(0.05)
+        except Exception as e:
+            print(json.dumps({"rms": 0, "text": "", "err": repr(e)}, ensure_ascii=False), flush=True)
+            time.sleep(0.5)
+
+
 def do_probe():
     out = {}
     try:
@@ -470,6 +495,8 @@ def main():
             return do_chat()
         if cmd == "listen":
             return do_listen()
+        if cmd == "wake":
+            return do_wake()
         if cmd == "say":
             speak(" ".join(args) if args else "你好，我是道。")
             return 0

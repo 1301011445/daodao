@@ -7048,6 +7048,44 @@ public class DesktopPet : Form
         try { SetLayeredWindowAttributes(this.Handle, ColorTranslator.ToWin32(TransparencyKey), 255, LWA_COLORKEY); } catch { }
     }
 
+    // 2026-11-24 第1类（微软 dotnet/winforms）落地：跨显示器 DPI 变化要自己接。
+    // 进程已声明 SetProcessDPIAware，系统就不再替我们位图缩放，会把 WM_DPICHANGED(0x02E0)
+    // 连同"建议矩形"一起发过来。不按建议矩形调整，就会出现把窗口拖到另一块屏后
+    // 尺寸/位置错一半、鼠标相对位置漂移（MS Learn: High DPI Desktop App Development）。
+    // 这里按新 DPI 重算 uiScale 与窗口尺寸，再落到系统给出的矩形，避免递归 DPI 变化。
+    int lastDpi = 96;
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == 0x02E0)
+        {
+            try
+            {
+                int newDpi = (int)((m.WParam.ToInt64() >> 16) & 0xFFFF);
+                if (newDpi <= 0) newDpi = 96;
+                if (lastDpi <= 0) lastDpi = 96;
+                if (newDpi != lastDpi)
+                {
+                    float r = newDpi / (float)lastDpi;
+                    uiScale = uiScale * r;
+                    lastDpi = newDpi;
+                    Size = new Size((int)(W * uiScale), (int)(H * uiScale));
+                }
+                int rx = Marshal.ReadInt32(m.LParam, 0);
+                int ry = Marshal.ReadInt32(m.LParam, 4);
+                int rw = Marshal.ReadInt32(m.LParam, 8);
+                int rh = Marshal.ReadInt32(m.LParam, 12);
+                if (rw > 0 && rh > 0)
+                    SetWindowPos(this.Handle, IntPtr.Zero, rx, ry, rw, rh, 0x0004 | 0x0010 | 0x0040);
+                ForceLayer();
+                Invalidate();
+                m.Result = IntPtr.Zero;
+                return;
+            }
+            catch { }
+        }
+        base.WndProc(ref m);
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         Stopwatch dgSw = Stopwatch.StartNew();
@@ -10167,7 +10205,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 115;
+    public const int APP_VER = 116;
 
     public static void Start()
     {

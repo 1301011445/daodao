@@ -1545,7 +1545,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '114';
+  var HTML_VER = '115';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -2478,18 +2478,30 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     var hd = el('div', 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;');
     hd.appendChild(el('div', 'font-size:15px;opacity:.8;', '道自己的歌（手机本地放）'));
     var box = el('div', 'display:flex;align-items:center;');
-    var pp = el('div', 'padding:5px 12px;margin-right:6px;font-size:13px;border-radius:9px;background:rgba(118,158,255,.22);', '暂停');
+    // 2026-11-24：播放条一律用图标按钮，不再写「暂停/快进/停止」文字（手机端一眼就能按）
+    var SVG_PAUSE = '<svg viewBox="0 0 24 24" width="16" height="16"><rect x="6" y="4" width="4" height="16" rx="1" fill="#dbe8ff"/><rect x="14" y="4" width="4" height="16" rx="1" fill="#dbe8ff"/></svg>';
+    var SVG_PLAY = '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 4.5 L19 12 L7 19.5 Z" fill="#dbe8ff"/></svg>';
+    var SVG_FF = '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 5 L12 12 L4 19 Z" fill="#dbe8ff"/><path d="M12 5 L20 12 L12 19 Z" fill="#dbe8ff"/></svg>';
+    var SVG_STOP = '<svg viewBox="0 0 24 24" width="16" height="16"><rect x="6" y="6" width="12" height="12" rx="2" fill="#dbe8ff"/></svg>';
+    function iconBtn(icon, label) {
+      var b = el('div', 'width:40px;height:32px;margin-right:6px;border-radius:9px;background:rgba(118,158,255,.22);' +
+        'display:flex;align-items:center;justify-content:center;touch-action:manipulation;', '');
+      b.innerHTML = icon;
+      if (label) { b.setAttribute('aria-label', label); b.title = label; }
+      return b;
+    }
+    var pp = iconBtn(SVG_PAUSE, '暂停');
     pp.addEventListener('click', function (ev) {
       if (ev && ev.stopPropagation) ev.stopPropagation();
       try {
         if (window.DaoNative && DaoNative.isPaused && DaoNative.isPaused()) {
-          DaoNative.resumeSong(); pp.textContent = '暂停';
+          DaoNative.resumeSong(); pp.innerHTML = SVG_PAUSE; pp.setAttribute('aria-label', '暂停');
         } else {
-          DaoNative.pauseSong(); pp.textContent = '继续';
+          DaoNative.pauseSong(); pp.innerHTML = SVG_PLAY; pp.setAttribute('aria-label', '继续');
         }
       } catch (e) { }
     });
-    var ff = el('div', 'padding:5px 12px;margin-right:6px;font-size:13px;border-radius:9px;background:rgba(118,158,255,.22);', '快进');
+    var ff = iconBtn(SVG_FF, '快进');
     // 2026-11-22 夜：原来是死板的「+30 秒」。改成按住不放连续快进（每 0.4 秒跳 5 秒），
     // 松手就停；点一下仍是短跳 10 秒。想精确就到下面的进度条点/拖。
     var ffT = null;
@@ -2518,7 +2530,7 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     ff.addEventListener('pointerup', ffEnd);
     ff.addEventListener('pointercancel', ffEnd);
     ff.addEventListener('pointerleave', ffEnd);
-    var sp = el('div', 'padding:5px 12px;margin-right:6px;font-size:13px;border-radius:9px;background:rgba(118,158,255,.22);', '停止');
+    var sp = iconBtn(SVG_STOP, '停止');
     sp.addEventListener('click', function (ev) {
       if (ev && ev.stopPropagation) ev.stopPropagation();
       stopAudio(); setStatus('停了；再点一行就重新放');

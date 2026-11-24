@@ -731,7 +731,12 @@ public class DesktopPet : Form
         {
             string[] order = { "stand", "wave", "walk", "cheer", "sit" };
             Dictionary<int, Bitmap[]> map = new Dictionary<int, Bitmap[]>();
-            for (int sp = 0; sp < 12; sp++)
+            // 2026-11-24 夜（用户要求「形象还是 2D，有的话都要改正」）：
+            // pose_* 那套是 76×152 的卡通 chibi 图，画在桌面上是张纸片，跟手办质感立绘差一档。
+            // 这里停掉整套姿势图，全部改走 face_* 手办立绘 + 烘出来的八帧步态。
+            // 资源和代码都留着，UseChibiPose 改 true 就能退回卡通那套。
+            bool UseChibiPose = false;
+            for (int sp = 0; UseChibiPose && sp < 12; sp++)
             {
                 List<Bitmap> bl = new List<Bitmap>();
                 for (int i = 0; i < order.Length; i++)
@@ -766,7 +771,7 @@ public class DesktopPet : Form
                 if (bl.Count == order.Length) map[sp] = bl.ToArray();
             }
             // 八帧走路：只有配了整套的形象才有，缺一张就整套不用
-            for (int sp = 0; sp < 12; sp++)
+            for (int sp = 0; sp < faceCount; sp++)
             {
                 Bitmap[] wf = new Bitmap[8];
                 bool wok = true;
@@ -796,7 +801,7 @@ public class DesktopPet : Form
                 if (wok) walkMap[sp] = wf;
             }
             // 御剑：每个形象最多一张踩剑姿势图，有就用真图，没有就退回程序画的那把剑
-            for (int sp2 = 0; sp2 < 12; sp2++)
+            for (int sp2 = 0; sp2 < faceCount; sp2++)
             {
                 Bitmap sf = null;
                 try
@@ -1757,6 +1762,7 @@ public class DesktopPet : Form
             int total = me.faceCount > 0 ? me.faceCount : 7;
             if (n < 0 || n >= total) return;
             me.species = n;
+            me.ApplyPose(n);   // 远程换形象也要把八帧步态一起换，不然还走上一只的腿
             me.Invalidate();
         }
         catch { }
@@ -2601,6 +2607,9 @@ public class DesktopPet : Form
         LoadScenes();
         LoadNodThreshold();   // v61：说话点头按谱子拍长
         species = PickDailySpecies();
+        // 2026-11-24 夜：不再依赖 pose_* 那套卡通图，今天的形象一选出来就要把
+        // 自己的八帧步态和御剑图挂上，否则走起来没帧可用，只能退回原地推纸片
+        ApplyPose(species);
         // 有整套动作图的形象才有手脚能真动，所以每天就在这几个里换一个；
         // 一个都没有的时候才退回原来的随机单张静态图
         if (poseKinds != null && poseKinds.Length > 0)
@@ -5414,6 +5423,7 @@ public class DesktopPet : Form
         ToolStripMenuItem mi = (ToolStripMenuItem)s;
         int i = (int)mi.Tag;
         species = i;
+        ApplyPose(i);   // 换了人就把自己的八帧步态、御剑图一起换上
         SaveTodayPick(i);
         Say("今天就是" + CurName() + "了，明天再换。");
     }
@@ -5422,6 +5432,7 @@ public class DesktopPet : Form
     {
         try { System.IO.File.Delete(TodayPickPath()); } catch { }
         species = PickDailySpecies();
+        ApplyPose(species);
         Say("好，还是跟着日子走，今天是" + CurName() + "。");
     }
 
@@ -5433,6 +5444,7 @@ public class DesktopPet : Form
             int next = species;
             for (int i = 0; i < 8 && next == species; i++) next = rnd.Next(total);
             species = next;
+            ApplyPose(next);
         }
         Say("换个样子：现在是" + CurName() + "。");
     }
@@ -7001,6 +7013,7 @@ public class DesktopPet : Form
         {
             dayStamp = DateTime.Today;
             species = PickDailySpecies();
+            ApplyPose(species);
             // 跨天时也跟着换一套动作，不然重启前后都是同一只
             if (poseKinds != null && poseKinds.Length > 0)
             {

@@ -94,7 +94,7 @@ class Chain:
     def __init__(self, sr=44100, soft=True):
         self.sr = sr
         self.stages = [
-            _Biquad(_high_shelf(sr, 3200.0, -2.0)),
+            _Biquad(_high_shelf(sr, 3200.0, -3.0)),
             _Biquad(_peaking(sr, 4500.0, -1.5, q=0.9)),
             _Biquad(_low_shelf(sr, 140.0, 1.0)),
         ]

@@ -665,6 +665,7 @@ public class DaoOverlay extends Service {
     };
     private Bitmap[] mounts = new Bitmap[MOUNT_FILES.length];
     private Bitmap[] rides = new Bitmap[14];   // 14 张骑姿立绘，下标 = 形象序号
+        private Bitmap waveArt;                    // v134 挥手动作立绘
         private long happyUntil = 0;
         // 2026-11-23：打招呼/被戳时抬手挥一挥（网格驱动，不是换图）。只对满身站姿生效，走路和贴边不抢戏。
         private long waveUntil = 0;
@@ -741,7 +742,10 @@ public class DaoOverlay extends Service {
             // 2026-11-25：原来站着时停在八帧的第 0 帧，那是个侧身迈步的姿势，看着像永远在走路。
             // 现在单独加载正面站姿，站着就面向你。
             standArt = loadOpt("stand_" + art + ".png");
+            // v134：挥手专用动作立绘（14 只各一张，抬右手招手），挥手时直接换这张
+            waveArt = loadOpt("wave_" + art + ".png");
             if (standArt != null && !standArt.isRecycled()) matteInPlace(standArt);
+            if (waveArt != null && !waveArt.isRecycled()) matteInPlace(waveArt);
             // 2026-11-25 坐骑素材：五只都是透明底，进来先过一遍 matte，免得边上带白
             for (int i = 0; i < MOUNT_FILES.length; i++) {
                 mounts[i] = loadOpt(MOUNT_FILES[i]);
@@ -1152,6 +1156,12 @@ public class DaoOverlay extends Service {
             c.translate(lean, 0);
             if (vm == MODE_PEEK && art == ART_WALK && peekArt != null && !peekArt.isRecycled()) {
                 drawWarp(c, peekArt, 0, bob, w, h + bob, tick / 30.0, 0f, false, true, waveAmp, 0f);   // 贴边：半身探头 + 慢晃 + 呼吸 + 左右看
+            } else if (vm != MODE_PEEK && !walkDraw && waveAmp > 0f
+                    && waveArt != null && !waveArt.isRecycled()) {
+                // v134：挥手换成真动作立绘（抬右手那张），只叠轻摆；网格硬掰看不出手在抬
+                int dyW = (int) (h * (1f - squash));
+                drawWarp(c, waveArt, 0, bob - (int) hop + dyW, w, (int) (h * squash) + bob,
+                        tick / 30.0, 0f, false, false, 0f, nodAmp);
             } else if (vm != MODE_PEEK && !walkDraw && standArt != null && !standArt.isRecycled()) {
                 int dyAct = (int) (h * (1f - squash));
                 drawWarp(c, standArt, 0, bob - (int) hop + dyAct, w, (int) (h * squash) + bob,

@@ -83,6 +83,7 @@ public class DaoOverlay extends Service {
     private int mode = MODE_PEEK;
     private int side = SIDE_RIGHT;
     private int art = ART_WALK;        // 当前桌面形象（face 文件序号），默认还是那个有八帧素材的少女
+    private int tapSeq = -1;           // 单击轮演动作的游标（-1 → 0 招手起步）
     // 2026-11-26：App 里点「换形象」也要让桌面上这只立刻跟着换
     private static DaoOverlay sSvc;
     // 2026-11-26 悬浮窗会走会飞：攒不够 1dp 的位移，别因为取整原地抖
@@ -285,15 +286,18 @@ public class DaoOverlay extends Service {
     private int petH() {
         // 2026-11-26 用户：悬浮窗太小、看不出模样。7.5% 屏高 / 66dp 顶 → 15% / 150dp 顶，下限 52dp → 100dp。
         // 1080×2400 上约 360px 高、180px 宽，胳膊腿和脸都能看清；再大会挡图标。
-        int h = (int) (sh * 0.15f);
-        int cap = dp(150);
+        // 2026-11-25 用户：15% 还是小，轮廓看不清。再放到 20% 屏高、上限 210dp、下限 150dp。
+        // 1080×2400 上约 480px 高、240px 宽：脸、肩线、裙摆转折都看得清了。
+        int h = (int) (sh * 0.20f);
+        int cap = dp(210);
         if (h > cap) h = cap;
-        if (h < dp(100)) h = dp(100);
+        if (h < dp(150)) h = dp(150);
         return h;
     }
 
     private int ballSize() {
-        return dp(42);
+        // 球头像也放大一档（42 → 56dp），小图上五官挤在一起看不出表情
+        return dp(56);
     }
 
     private void layout(int m, boolean resetPos) {
@@ -719,6 +723,10 @@ public class DaoOverlay extends Service {
     private Bitmap[] mounts = new Bitmap[MOUNT_FILES.length];
     private Bitmap[] rides = new Bitmap[14];   // 14 张骑姿立绘，下标 = 形象序号
         private Bitmap waveArt;                    // v134 挥手动作立绘
+        // 2026-11-25 表情立绘：expr_<序号>_happy/sad/angry/sleep.png（与桌面同一套素材）
+        private Bitmap exHappy, exSad, exAngry, exSleep;
+        private long exprUntil = 0;      // 表情持续到什么时候
+        private int exprKind = -1;       // 0 开心 1 难过 2 生气 3 困
         private long happyUntil = 0;
         // 2026-11-23：打招呼/被戳时抬手挥一挥（网格驱动，不是换图）。只对满身站姿生效，走路和贴边不抢戏。
         private long waveUntil = 0;
@@ -798,6 +806,15 @@ public class DaoOverlay extends Service {
             // v134：挥手专用动作立绘（14 只各一张，抬右手招手），挥手时直接换这张
             waveArt = loadOpt("wave_" + art + ".png");
             if (standArt != null && !standArt.isRecycled()) matteInPlace(standArt);
+            // 2026-11-25：表情立绘（与桌面同一套），没有这只的就为 null，绘制时自动跳过
+            exHappy = loadOpt("expr_" + art + "_happy.png");
+            exSad = loadOpt("expr_" + art + "_sad.png");
+            exAngry = loadOpt("expr_" + art + "_angry.png");
+            exSleep = loadOpt("expr_" + art + "_sleep.png");
+            if (exHappy != null && !exHappy.isRecycled()) matteInPlace(exHappy);
+            if (exSad != null && !exSad.isRecycled()) matteInPlace(exSad);
+            if (exAngry != null && !exAngry.isRecycled()) matteInPlace(exAngry);
+            if (exSleep != null && !exSleep.isRecycled()) matteInPlace(exSleep);
             if (waveArt != null && !waveArt.isRecycled()) matteInPlace(waveArt);
             // 2026-11-25 坐骑素材：五只都是透明底，进来先过一遍 matte，免得边上带白
             for (int i = 0; i < MOUNT_FILES.length; i++) {
@@ -1207,6 +1224,7 @@ public class DaoOverlay extends Service {
             if (vm == MODE_PEEK && side == SIDE_RIGHT) { c.translate(w, 0); c.scale(-1f, 1f); }   // 在右边扒边，手要朝右
             if (vm == MODE_PEEK) { c.rotate((float) Math.sin(tick / 38.0) * 1.2f, w / 2f, h * 0.98f); }  // 探头时轻轻晃，不是一张死图
             c.translate(lean, 0);
+            Bitmap exB = activeExpr();
             if (vm == MODE_PEEK && art == ART_WALK && peekArt != null && !peekArt.isRecycled()) {
                 drawWarp(c, peekArt, 0, bob, w, h + bob, tick / 30.0, 0f, false, true, waveAmp, 0f);   // 贴边：半身探头 + 慢晃 + 呼吸 + 左右看
             } else if (vm != MODE_PEEK && !walkDraw && waveAmp > 0f
@@ -1215,6 +1233,11 @@ public class DaoOverlay extends Service {
                 int dyW = (int) (h * (1f - squash));
                 drawWarp(c, waveArt, 0, bob - (int) hop + dyW, w, (int) (h * squash) + bob,
                         tick / 30.0, 0f, false, false, 0f, nodAmp);
+            } else if (vm != MODE_PEEK && !walkDraw && exB != null && !exB.isRecycled()) {
+                // 2026-11-25：有表情就换表情立绘（同一套网格变形，脸会跟着呼吸/点头动）
+                int dyE = (int) (h * (1f - squash));
+                drawWarp(c, exB, 0, bob - (int) hop + dyE, w, (int) (h * squash) + bob,
+                        tick / 30.0, 0f, false, false, waveAmp, nodAmp);
             } else if (vm != MODE_PEEK && !walkDraw && standArt != null && !standArt.isRecycled()) {
                 int dyAct = (int) (h * (1f - squash));
                 drawWarp(c, standArt, 0, bob - (int) hop + dyAct, w, (int) (h * squash) + bob,
@@ -1234,6 +1257,20 @@ public class DaoOverlay extends Service {
          *   腰部以下摆、发梢延迟跟随、胸腔随呼吸起伏、头部轻侧倾、走路时下身前后剪切。
          * 顶点按高度给权重，所以不会出现切图拼接的接缝。
          */
+        /** 当前该显示哪张表情：动作挂的表情优先，夜里（22–7 点）默认困脸 */
+        Bitmap activeExpr() {
+            long now = System.currentTimeMillis();
+            if (now < exprUntil) {
+                if (exprKind == 0) return exHappy;
+                if (exprKind == 1) return exSad;
+                if (exprKind == 2) return exAngry;
+                if (exprKind == 3) return exSleep;
+            }
+            int hh = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+            if (hh < 7 || hh > 22) return exSleep;
+            return null;
+        }
+
         void drawWarp(Canvas c, Bitmap bm, float left, float top, float w, float h, double t, float phase,
                       boolean walk, boolean peek, float wave, float nod) {
             if (bm == null || bm.isRecycled()) return;
@@ -1485,7 +1522,15 @@ public class DaoOverlay extends Service {
             if (vm == MODE_BALL || vm == MODE_PEEK) {
                 setModeInternal(MODE_FULL);
             }
-            greet(true);
+            // 2026-11-25 用户：悬浮窗「没有动作系统」。单击改成轮流演一个动作
+            // （招手 → 点头 → 小跳 → 蹲一下），动作带表情；话只偶尔应一句，别一戳就啰嗦。
+            if (pv != null) {
+                tapSeq = (tapSeq + 1) % 4;
+                pv.playAction(tapSeq);
+                if ((tapSeq & 1) == 0) greet(true);
+            } else {
+                greet(true);
+            }
         }
 
         // 2026-11-23 学来的：对称的 sin(πp) 起落一样慢，看起来机械。真实动作是
@@ -1544,6 +1589,11 @@ public class DaoOverlay extends Service {
             else if (k == ACT_NOD) nodUntil = now + 1400;
             else if (k == ACT_HOP) hopUntil = now + 900;
             else if (k == ACT_SQUAT) squatUntil = now + 1600;
+            // 2026-11-25：动作同时挂上表情，别再是一张不动脸
+            if (k == ACT_WAVE) { exprKind = 0; exprUntil = now + WAVE_MS; }        // 招手 → 开心
+            else if (k == ACT_NOD) { exprKind = 0; exprUntil = now + 1800; }       // 点头 → 开心
+            else if (k == ACT_HOP) { exprKind = 0; exprUntil = now + 1400; }       // 小跳 → 开心
+            else if (k == ACT_SQUAT) { exprKind = 3; exprUntil = now + 2000; }     // 蹲一下 → 困（打哈欠）
             postInvalidate();
         }
 

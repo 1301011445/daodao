@@ -158,6 +158,11 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
   walkSheet.onerror = function () { walkSheetOk = false; };
   walkSheet.src = 'walk8.png';
 
+  // 2026-11-25：坐骑改真贴图（mount_horse.png）。以前那个椭圆小兽看着像只蜗牛，已删
+  var mountHorse = new Image(), mountHorseOk = false;
+  mountHorse.onload = function () { mountHorseOk = true; };
+  mountHorse.src = 'mount_horse.png';
+
   var scenes = [], sceneIdx = 0;
   SCENE_FILES.forEach(function (n, k) {
     var sim = new Image();
@@ -395,14 +400,14 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
     if (actAmt < 0.03 || actKind !== 3) return;
     var a = actAmt;
     if (!front) {
-      // 坐骑：一只侧身的小兽，一头一尾
-      ctx.fillStyle = 'rgba(122,96,70,' + 0.92 * a + ')';
-      ctx.beginPath(); ctx.ellipse(0, -8, TARGET_H * 0.48, TARGET_H * 0.16, 0, 0, 6.284); ctx.fill();
-      ctx.beginPath(); ctx.arc(-TARGET_H * 0.44, -TARGET_H * 0.22, TARGET_H * 0.10, 0, 6.284); ctx.fill();
-      ctx.fillStyle = 'rgba(92,72,54,' + 0.9 * a + ')';
-      ctx.beginPath(); ctx.moveTo(TARGET_H * 0.46, -TARGET_H * 0.14);
-      ctx.quadraticCurveTo(TARGET_H * 0.58, -TARGET_H * 0.24, TARGET_H * 0.52, -TARGET_H * 0.04);
-      ctx.fill();
+      // 坐骑：贴真马（mount_horse.png）。没素材就什么都不画，绝不退回去画那只像蜗牛的椭圆兽
+      if (mountHorseOk && mountHorse.naturalWidth) {
+        var mh = TARGET_H * 0.62;
+        var mw = mh * (mountHorse.naturalWidth / mountHorse.naturalHeight);
+        ctx.globalAlpha = a;
+        ctx.drawImage(mountHorse, -mw / 2, -mh * 0.86, mw, mh);
+        ctx.globalAlpha = 1;
+      }
     }
   }
 
@@ -1098,7 +1103,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '139';
+  var HTML_VER = '140';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;

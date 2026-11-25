@@ -7637,27 +7637,6 @@ public class DesktopPet : Form
 
     // 御剑专属画法：没有整套姿势图的形象，御剑时直接贴这张踩剑姿势。
     // 剑是画在图里的，脚真的踩在剑上，人前倾，不是正面站姿配一把飘着的剑
-    void DrawSwordPose(Graphics g, float cx, float cy, float breathe)
-    {
-        Bitmap sf = null;
-        if (swordFlyMap != null && swordFlyMap.ContainsKey(species)) sf = swordFlyMap[species];
-        if (sf == null) return;
-        float bob = 1.2f * breathe;
-        if (lieAmt > 0.02f) bob -= 34f * lieAmt;
-        float footY = cy + 68f;
-        // 御剑是腾空的：脚离地，还得轻轻上下飘，跟有姿势图那条路一致
-        float airY = -22f * actAmt - 4f * actAmt * (float)Math.Sin(t * 1.7);
-        DrawScenery(g, cx, footY + bob + airY, sf.Width, sf.Height, t, 5, 1f);
-        GraphicsState st = g.Save();
-        // 只平移、不旋转不缩放：透明键窗口里一采样就会混出粉紫描边
-        g.TranslateTransform((float)Math.Floor(cx), (float)Math.Floor(footY + bob + airY));
-        g.SmoothingMode = SmoothingMode.None;
-        g.InterpolationMode = InterpolationMode.NearestNeighbor;
-        g.PixelOffsetMode = PixelOffsetMode.None;
-        int hw = sf.Width / 2;
-        g.DrawImage(sf, new Rectangle(-hw, -sf.Height, sf.Width, sf.Height));
-        g.Restore(st);
-    }
 
     // 有姿势集时的画法：选一张最贴当前状态的姿势图贴上去，切换时做交叉淡化。
     // 走路、挥手、欢呼、坐下都是图里本来就有的四肢动作，不再靠整张图平移或切条
@@ -7773,7 +7752,10 @@ public class DesktopPet : Form
         float footY = cy + 68f;
         float targetH = pb.Height;
         float baseW = pb.Width;
-        DrawScenery(g, cx, footY + bob, baseW, targetH, t, sceneIdx, 1f);
+        // 2026-11-25：走路时不铺脚下的景。景是画在同一个窗口里的，窗口一挪，
+        // 那块地就跟着滑，看着像人踩在一张贴片上、跟桌面不是一个图层。
+        if (runTicks <= 0 && walkTicks <= 0)
+            DrawScenery(g, cx, footY + bob, baseW, targetH, t, sceneIdx, 1f);
 
         GraphicsState st = g.Save();
         g.TranslateTransform((float)Math.Floor(cx + swayX), (float)Math.Floor(footY + bob));
@@ -7793,38 +7775,6 @@ public class DesktopPet : Form
     // 跳舞：借八帧走路那套真手脚动作，按舞蹈节拍来回摆着播（0→7→0），
     // 再叠上整只的左右摇、落拍往下沉。只做整体平移，不切条也不旋转，
     // 免得透明键边缘混出粉紫描边
-    void DrawDanceFrames(Graphics g, float cx, float cy, float breathe)
-    {
-        if (walkFrames == null || walkFrames.Length < 8) return;
-        float fps = 11.0f + 4.0f * actAmt;
-        float ph = t * fps;
-        int s16 = (int)ph % 16;
-        if (s16 < 0) s16 += 16;
-        int fi = s16 < 8 ? s16 : 15 - s16;   // 来回摆：像踩点踏步，不是一直往前走
-        Bitmap pb = walkFrames[fi];
-        if (pb == null) return;
-        float beat = t * 3.6f;
-        float swayX = 9.0f * actAmt * (float)Math.Sin(beat);
-        float swayY = -6.0f * actAmt * (float)Math.Abs((float)Math.Sin(beat * 2.0f));
-        if (lieAmt > 0.02f) swayY -= 34f * lieAmt;
-
-        float footY = cy + 68f;
-        float targetH = pb.Height;
-        float baseW = pb.Width;
-        DrawScenery(g, cx + swayX, footY + swayY, baseW, targetH, t, 3, 1f);
-
-        GraphicsState st = g.Save();
-        g.TranslateTransform((float)Math.Floor(cx + swayX), (float)Math.Floor(footY + swayY));
-        g.SmoothingMode = SmoothingMode.None;
-        g.InterpolationMode = InterpolationMode.NearestNeighbor;
-        g.PixelOffsetMode = PixelOffsetMode.None;
-        DrawActProps(g, baseW, targetH, false);
-        int hw = (int)baseW / 2;
-        int hh = (int)targetH;
-        Rectangle r = new Rectangle(-hw, -hh, (int)baseW, hh);
-        DrawBmpAlpha(g, pb, r, 1f);
-        g.Restore(st);
-    }
 
     void DrawPosePicture(Graphics g, float cx, float cy, float breathe)
     {
@@ -7894,7 +7844,8 @@ public class DesktopPet : Form
             // 2026-11-25：只剩骑坐骑，其余动作的景随动作一起删
             if (actKind == 3) scIdx = 1;
         }
-        DrawScenery(g, cx, footY + bob, baseW, targetH, t, scIdx, 1f);
+        if (!(walkTicks > 0 || runTicks > 0))
+            DrawScenery(g, cx, footY + bob, baseW, targetH, t, scIdx, 1f);
 
         GraphicsState st = g.Save();
         // 平移必须落在整像素上：坐标带小数就会让贴图落在半像素上，
@@ -7982,9 +7933,98 @@ public class DesktopPet : Form
         }
     }
 
+    // 2026-11-25 用户反馈「像不在同一图层」：窗口是洋红透明键，只认全透明/全不透明。
+    // 只要图上有半透明像素（缩放采样出来的软边也算），贴上去就会和洋红混出一道粉边，
+    // 看着就是一整只被抠下来贴在桌面上。这里统一把 alpha 夹成 0/255，并把洋红残留剔掉。
+    Dictionary<Bitmap, Bitmap> hardCache = new Dictionary<Bitmap, Bitmap>();
+
+    Bitmap Hard(Bitmap src)
+    {
+        if (src == null) return null;
+        Bitmap cached;
+        if (hardCache.TryGetValue(src, out cached)) return cached;
+        Bitmap dst = null;
+        try
+        {
+            int w = src.Width, h = src.Height;
+            dst = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+            BitmapData ds = dst.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+            BitmapData ss = src.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                int st = ss.Stride, dt = ds.Stride;
+                byte[] buf = new byte[st * h];
+                Marshal.Copy(ss.Scan0, buf, 0, buf.Length);
+                byte[] outb = new byte[dt * h];
+                for (int y = 0; y < h; y++)
+                {
+                    int so = y * st, dob = y * dt;
+                    for (int x = 0; x < w; x++)
+                    {
+                        byte a = buf[so + x * 4 + 3];
+                        byte r = buf[so + x * 4 + 2], gg = buf[so + x * 4 + 1], b2 = buf[so + x * 4];
+                        if (a < 200 || (r > 190 && gg < 90 && b2 > 190)) a = 0;   // 半透明/洋红残留直接抠掉
+                        else a = 255;
+                        outb[dob + x * 4 + 3] = a;
+                        outb[dob + x * 4 + 2] = r;
+                        outb[dob + x * 4 + 1] = gg;
+                        outb[dob + x * 4] = b2;
+                    }
+                }
+                Marshal.Copy(outb, 0, ds.Scan0, outb.Length);
+            }
+            finally
+            {
+                src.UnlockBits(ss);
+                dst.UnlockBits(ds);
+            }
+            hardCache[src] = dst;
+            return dst;
+        }
+        catch
+        {
+            if (dst != null) dst.Dispose();
+            return src;
+        }
+    }
+
+    // 先把立绘一次性缩到显示尺寸（高质量采样），再按 1:1 切片。
+    // 以前每条切片现场从原图采样，每条边都会混出半透明，窗口把散边染成粉边。
+    Dictionary<Bitmap, KeyValuePair<int, Bitmap>> dispCache = new Dictionary<Bitmap, KeyValuePair<int, Bitmap>>();
+
+    Bitmap GetDisplay(Bitmap src, int w, int h)
+    {
+        if (src == null || w <= 0 || h <= 0) return src;
+        KeyValuePair<int, Bitmap> kv;
+        int key = w * 100000 + h;
+        if (dispCache.TryGetValue(src, out kv) && kv.Key == key) return kv.Value;
+        Bitmap dst = null;
+        try
+        {
+            dst = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+            using (Graphics g2 = Graphics.FromImage(dst))
+            {
+                g2.Clear(Color.Transparent);
+                g2.CompositingMode = CompositingMode.SourceCopy;
+                g2.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g2.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g2.DrawImage(src, new Rectangle(0, 0, w, h));
+            }
+            dst = Hard(dst);
+            dispCache[src] = new KeyValuePair<int, Bitmap>(key, dst);
+            return dst;
+        }
+        catch
+        {
+            if (dst != null) dst.Dispose();
+            return src;
+        }
+    }
+
     void DrawBmpAlpha(Graphics g, Bitmap b, Rectangle r, float alpha)
     {
         if (b == null || alpha <= 0.02f) return;
+        b = Hard(b);
         b = GetRim(b);
         // 全不透明的时候直接贴，不要过 ColorMatrix：一旦走混合，
         // 不透明像素也会和窗口的洋红底混一道边，看着就是一圈粉紫描边
@@ -8185,7 +8225,8 @@ public class DesktopPet : Form
             // 2026-11-25：只剩骑坐骑一种动作，场景只跟它对；其余动作的景（云海/日落/花丛/客厅/街头）随动作一起删了
             if (actKind == 3) scIdx = 1;                 // 骑坐骑：乡野田间
         }
-        DrawScenery(g, cx, footY + hopY + bob + airY, baseW, targetH, t, scIdx, 1f);
+        if (!walking && !running)
+            DrawScenery(g, cx, footY + hopY + bob + airY, baseW, targetH, t, scIdx, 1f);
 
         GraphicsState st = g.Save();
         // 2026-11-25：跳舞下线，整只位移/摇摆这一段一起删了，只剩坐骑与日常的平移
@@ -8222,6 +8263,8 @@ public class DesktopPet : Form
         const int strips = 48;
         float stripH = targetH / strips;
         float imgScale = bmp.Height / targetH;
+        // 2026-11-25：整张贴图先缩好、过一遍硬边，切片只做 1:1 搬运，边缘不再有粉毛
+        Bitmap dsp = GetDisplay(bmp, (int)Math.Max(4f, baseW), (int)Math.Max(4f, targetH));
         // 2026-11-24 夜（桌宠骨链第一步）：切条幅度整体收小。
         // 原来走路 amp=5.4 / 抬腿 7.5 / 手臂 7，整条横带一推就是 7~9px，
         // 手臂那条细带跟躯干错开之后会断开成独立色块（自检帧里量到 9~10px 的孤立岛），
@@ -8295,8 +8338,8 @@ public class DesktopPet : Form
             // 招手时头点一点：只有最上面那几条动，幅度小于手，不然整只都在晃
             if (waving && fy < 0.24f) yy += 2.0f * (float)Math.Sin(t * 7.0f + 1.1f);
             float sh = stripH + 2.4f;      // 竖着重叠 2.4px：相邻条横向差一格也不会漏洞
-            float syp = i * stripH * imgScale;
-            float shp = Math.Min(bmp.Height - syp, sh * imgScale);
+            float syp = i * stripH;
+            float shp = Math.Min(dsp.Height - syp, sh);
             if (shp <= 0.5f) continue;
 
             // 手臂：肩到腰这一段整条轻轻摆，站着不动也有一点摆幅，不然整只像块牌子。
@@ -8321,20 +8364,20 @@ public class DesktopPet : Form
             {
                 float hw = baseW / 2f;
                 float hbw = bmp.Width / 2f;
-                g.DrawImage(bmp,
+                g.DrawImage(dsp,
                     new RectangleF(-baseW / 2f + off, yy + liftL, hw + 1.8f, sh),
                     new RectangleF(0f, syp, hbw + 1.8f, shp),
                     GraphicsUnit.Pixel);
-                g.DrawImage(bmp,
+                g.DrawImage(dsp,
                     new RectangleF(-baseW / 2f + off + hw, yy + liftR, hw, sh),
                     new RectangleF(hbw - 1.8f, syp, hbw + 1.8f, shp),
                     GraphicsUnit.Pixel);
             }
             else
             {
-                g.DrawImage(bmp,
+                g.DrawImage(dsp,
                     new RectangleF(-baseW / 2f + off, yy, baseW, sh),
-                    new RectangleF(0f, syp, bmp.Width, shp),
+                    new RectangleF(0f, syp, dsp.Width, shp),
                     GraphicsUnit.Pixel);
             }
         }
@@ -9302,6 +9345,35 @@ public class DesktopPet : Form
         // 2026-11-25：道具只服务坐骑。披风飞、御剑、跳舞、茶杯、电视、滑板、轮滑的绘制
         // 全部下线，这里直接挡住，免得哪天有人把 actKind 又设成别的值、那些旧道具又冒出来。
         if (actKind != 3) return;
+        // 2026-11-25：坐骑只画在身前：贴真马（骨架\mount.png 或 exe 目录 mount.png），
+        // 让马身盖住人物脚踝以下，看上去才是"骑在马上"；没有贴图就什么都不画，
+        // 兜底那只椭圆小兽（像蜗牛）已经彻底删掉。
+        if (front)
+        {
+            Bitmap mt = GetMountArt();
+            if (mt != null)
+            {
+                float mh = targetH * 0.70f;
+                float mw = mh * mt.Width / (float)mt.Height;
+                float bob2 = (float)Math.Sin(t * 6.4f) * targetH * 0.012f;
+                float lx2 = -mw * 0.5f + (float)Math.Sin(t * 3.1f) * targetH * 0.006f;
+                int daw = Math.Max(8, (int)mw), dah = Math.Max(8, (int)mh);
+                Bitmap mtS = new Bitmap(daw, dah, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                using (Graphics gs = Graphics.FromImage(mtS))
+                {
+                    gs.Clear(Color.Transparent);
+                    gs.CompositingMode = CompositingMode.SourceOver;
+                    gs.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    gs.DrawImage(mt, 0, 0, daw, dah);
+                }
+                g.CompositingMode = CompositingMode.SourceOver;
+                g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                g.PixelOffsetMode = PixelOffsetMode.Half;
+                g.DrawImageUnscaled(mtS, (int)Math.Round(lx2), (int)Math.Round(6f - mh * 0.62f + bob2));
+                g.PixelOffsetMode = PixelOffsetMode.None;
+                mtS.Dispose();
+            }
+        }
         float half = baseW / 2f;
         // 道具尺度按身高算，不按图的宽度算：恐龙、剑客这类竖长条形象身体只有几十像素宽，
         // 按宽度算披风就细成一根带子，电视也小得看不见
@@ -9594,88 +9666,7 @@ public class DesktopPet : Form
             }
             else if (actKind == 3)
             {
-                Bitmap mt = GetMountArt();
-                if (mt != null)
-                {
-                    // 真贴图：脚底贴地，body 轻颠（每步一下），riding 时人踩在鞍上
-                    float mh = targetH * 0.34f;
-                    float mw = mh * mt.Width / (float)mt.Height;
-                    float bob2 = (float)Math.Sin(t * 6.4f) * targetH * 0.012f;
-                    float lx2 = -mw * 0.5f + (float)Math.Sin(t * 3.1f) * targetH * 0.006f;
-                    // 先离屏缩好再整块贴：直接 DrawImage 缩放在有些合成模式下会被当成空图
-                    int daw = Math.Max(8, (int)mw), dah = Math.Max(8, (int)mh);
-                    Bitmap mtS = new Bitmap(daw, dah, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
-                    using (Graphics gs = Graphics.FromImage(mtS))
-                    {
-                        gs.Clear(Color.Transparent);
-                        gs.CompositingMode = CompositingMode.SourceOver;
-                        gs.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        gs.DrawImage(mt, 0, 0, daw, dah);
-                    }
-                    g.CompositingMode = CompositingMode.SourceOver;
-                    g.InterpolationMode = InterpolationMode.NearestNeighbor;
-                    g.PixelOffsetMode = PixelOffsetMode.Half;
-                    g.DrawImageUnscaled(mtS, (int)Math.Round(lx2), (int)Math.Round(8f + slide - mh + bob2));
-                    g.PixelOffsetMode = PixelOffsetMode.None;
-                    mtS.Dispose();
-                }
-                else
-                {
-                // 兜底：身下一匹矮脚小兽，四条腿交替倒腾，尾巴左右甩
-                // 骑坐骑：身子只比人略宽一点，太宽就成了个大坐垫把人裹住
-                // 人物横向被压窄过，坐骑按反比放宽，视觉上才比人宽出一圈
-                float my = 10f + slide;
-                // 以前按 1.55 倍身高画，宽得像一张大坐垫把整个人裹进去；
-                // 收到 1.05 倍、矮一点，才像一匹驮着人的矮脚兽
-                float mw = targetH * 1.05f;
-                float mh = targetH * 0.36f;
-                int ma = (int)(na * 0.95f);
-                using (SolidBrush mb = new SolidBrush(Color.FromArgb(ma, 196, 158, 116)))
-                {
-                    g.FillEllipse(mb, -mw * 0.5f, my - mh, mw, mh);
-                }
-                using (SolidBrush msh = new SolidBrush(Color.FromArgb(ma, 172, 132, 94)))
-                {
-                    g.FillEllipse(msh, -mw * 0.5f, my - mh * 0.62f, mw * 0.44f, mh * 0.60f);
-                }
-                // 脑袋伸到右前方
-                using (SolidBrush mhd = new SolidBrush(Color.FromArgb(ma, 206, 170, 128)))
-                {
-                    g.FillEllipse(mhd, mw * 0.28f, my - mh * 1.16f, mw * 0.26f, mh * 0.50f);
-                }
-                // 四条腿：按正弦交替抬落
-                using (Pen lp = new Pen(Color.FromArgb(ma, 158, 116, 82), 2.4f))
-                {
-                    for (int i = 0; i < 4; i++)
-                    {
-                        float lx = -mw * 0.32f + (i % 2) * mw * 0.60f;
-                        float ph2 = t * 11f + i * 1.6f;
-                        float lift = -Math.Abs((float)Math.Sin(ph2)) * 4.5f;
-                        g.DrawLine(lp, lx, my - 3f + lift, lx + (float)Math.Sin(ph2) * 2f, my + 7f + lift);
-                    }
-                }
-                // 尾巴
-                using (Pen tp = new Pen(Color.FromArgb(255, 138, 98, 64), 2.6f))
-                {
-                    float tw = (float)Math.Sin(t * 3.4) * 5f;
-                    g.DrawBezier(tp,
-                        new PointF(-mw * 0.46f, my - mh * 0.72f),
-                        new PointF(-mw * 0.64f, my - mh * 0.44f + tw),
-                        new PointF(-mw * 0.72f, my - mh * 0.94f + tw),
-                        new PointF(-mw * 0.62f, my - mh * 1.26f + tw));
-                }
-                using (SolidBrush eb = new SolidBrush(Color.FromArgb(255, 44, 36, 30)))
-                {
-                    g.FillEllipse(eb, mw * 0.40f, my - mh * 1.12f, 3.6f, 3.6f);
-                    g.FillEllipse(eb, mw * 0.50f, my - mh * 1.12f, 3.6f, 3.6f);
-                }
-                // 一对耳朵，别让它就是个圆球
-                using (SolidBrush ear = new SolidBrush(Color.FromArgb(255, 172, 132, 94)))
-                {
-                    g.FillEllipse(ear, mw * 0.30f, my - mh * 1.42f, mw * 0.09f, mh * 0.20f);
-                    g.FillEllipse(ear, mw * 0.44f, my - mh * 1.44f, mw * 0.09f, mh * 0.20f);
-                }
-                }
+                // 2026-11-25：坐骑改到身前分支画（见函数顶部的 front 块），这里什么都不画
             }
             else if (actKind == 7)
             {
@@ -10789,7 +10780,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 140;
+    public const int APP_VER = 143;
 
     public static void Start()
     {

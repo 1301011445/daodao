@@ -427,6 +427,20 @@ public class DesktopPet : Form
     float walkPhaseHint = -1f;
     int posePrev = 0;
     float poseFade = 2f;
+
+    // ==== 2026-11-26 动作连贯性：整帧交叉溶解 ====
+    // 用户反馈「动作要有连贯性，不是图片之间的切换」。站↔骑↔坐↔招手↔躺 这几套画法
+    // 原来是硬切（上一帧还是站姿，下一帧整个人换成骑乘图），看上去就是两张图"啪"一下换掉。
+    // 现在整帧走 0.22 秒的交叉溶解：旧帧淡出、新帧淡入，中间没有透明空洞。
+    // 八帧走路、跳跃是连续相位，不参与溶解（否则每帧都糊一层，反而更晃）。
+    Bitmap[] sceneBufs = new Bitmap[2];
+    int sceneBufIdx = 0;
+    string visSig = "";
+    float visT = -100f;
+    const float BLEND_DUR = 0.30f;
+    // 坐骑的连续小跑相位：自己累加，不受帧率变化影响（原来直接 t*6.4 换算，帧率一变相位就跳）
+    float ridePhase = 0f;
+    float rideLastT = -1f;
     int poseOwner = -1;   // 这套姿势属于哪个形象序号；-1 表示该形象还没有姿势集
     // 哪个形象有完整一套动作。有动作的形象才能上桌，所以每天就在这几个里轮，
     // 一个形象都没有动作的时候退回原来的随机形象 + 单张静态图
@@ -7746,7 +7760,61 @@ public class DesktopPet : Form
         }
     }
 
+    // 2026-11-26：整帧交叉溶解的壳。真正画画还是 PaintScene，这里只管
+    // ① 判断"整套画法"有没有换（站/骑/坐/招手/躺）② 换了就在新旧两帧之间做 0.22s 的溶解。
+    // 走路帧、跳跃相位属于同一套画法内的连续变化，signature 不变，所以不会被反复糊。
     public void PaintAll(Graphics g, int cw, int ch)
+    {
+        if (cw <= 0 || ch <= 0) return;
+        // 判断「整套画法」有没有变：这里用 actHold 而不是 actAmt——actAmt 是在 PaintScene 里
+        // 才推进的，等它过了 0.25 才换 signature，画面已经先切过去了，溶解就等于没生效。
+        // 用 actHold 可以提前一帧开始溶解：真正换图那几帧正好被旧帧压着褪下去。
+        bool riding = (actKind == 3 && actHold > 0 && !sitting && lieAmt < 0.02f);
+        bool moving = walkTicks > 0 || runTicks > 0;
+        string sig = (riding ? "R" : "N") + (sitting ? "s" : "-") + (lying ? "y" : "-")
+                   + ((waveTicks > 0 && !riding) ? "w" : "-") + species + petMode
+                   + (moving ? "m" : "p") + ((poses != null) ? poseIdx : 0);
+        if (sig != visSig)
+        {
+            visSig = sig;
+            visT = t;
+        }
+        float wF = (t - visT) / BLEND_DUR;
+        if (wF < 0f) wF = 0f;
+        // 每帧都先画进缓冲：这样"上一帧"永远是真实的上一次画面，不会拿几秒前的旧图去溶
+        int cur = 1 - sceneBufIdx, pvIdx = sceneBufIdx;
+        if (sceneBufs[cur] == null || sceneBufs[cur].Width != cw || sceneBufs[cur].Height != ch)
+        {
+            if (sceneBufs[cur] != null) sceneBufs[cur].Dispose();
+            sceneBufs[cur] = new Bitmap(cw, ch, PixelFormat.Format32bppPArgb);
+        }
+        using (Graphics gs = Graphics.FromImage(sceneBufs[cur]))
+        {
+            gs.Clear(Color.Transparent);
+            PaintScene(gs, cw, ch);
+        }
+        if (wF < 1f)
+        {
+            // 两边都"半进半出"：新帧从 0 淡入、旧帧从 1 淡出，在中间那一两帧会有一点叠影，
+            // 但那一点叠影正是从"站着"过渡到"骑上"的中间状态，比硬切自然。
+            // 只让旧帧淡出、新帧一上来就全不透明的话，马腿会先"啪"地冒出来。
+            Bitmap pv = sceneBufs[pvIdx];
+            bool hasPv = pv != null && pv.Width == cw && pv.Height == ch;
+            float wIn = EaseOutCubic(Math.Min(1f, wF * 1.8f));
+            float aOut = EaseOutCubic(Math.Min(1f, (1f - wF) * 1.8f));
+            if (hasPv && aOut > 0.02f)
+                DrawBmpAlpha(g, pv, new Rectangle(0, 0, cw, ch), aOut);
+            if (hasPv) DrawBmpAlpha(g, sceneBufs[cur], new Rectangle(0, 0, cw, ch), wIn);
+            else g.DrawImage(sceneBufs[cur], new Rectangle(0, 0, cw, ch));
+        }
+        else
+        {
+            g.DrawImage(sceneBufs[cur], new Rectangle(0, 0, cw, ch));
+        }
+        sceneBufIdx = cur;
+    }
+
+    public void PaintScene(Graphics g, int cw, int ch)
     {
         ForceLayer();
         if (alphaLayer) g.Clear(Color.Transparent); else g.Clear(Color.FromArgb(255, 0, 255));
@@ -7954,7 +8022,8 @@ public class DesktopPet : Form
         float ph = walkPhase;
         int fi = (int)ph % 8;
         if (fi < 0) fi += 8;
-        Bitmap pb = walkFrames[fi];
+        // 尺寸归一：八帧素材是高 144 的小图，站姿是 188，直接 1:1 贴会"一走路就缩一圈"
+        Bitmap pb = NormArt(walkFrames[fi], 186f);
         if (pb == null) return;
         // 落地时沉一点、通过位弹一点，和这一帧的姿势对上，才不会像原地抽动
         // 2026-11-17：原来按正弦等速起伏，看着像机械振动。
@@ -8047,14 +8116,15 @@ public class DesktopPet : Form
         }
 
         float footY = cy + 68f;
-        Bitmap pb = poses[poseIdx];
+        // 尺寸归一：整套姿势图只有 126 高，和 188 的站姿差一大截，先按 alpha 包围盒放到 186
+        Bitmap pb = NormArt(poses[poseIdx], 186f);
         // 这个形象配了八帧走路：走起来直接换帧，手脚是画出来的
         // 11 帧/秒，八帧一圈约 0.72 秒，正好是正常步速
         if ((walkTicks > 0 || runTicks > 0) && walkFrames != null && walkFrames.Length >= 8)
         {
             int fi = (int)(t * 11.0f) % 8;
             if (fi < 0) fi += 8;
-            pb = walkFrames[fi];
+            pb = NormArt(walkFrames[fi], 186f);
         }
         // 2026-11-25：御剑的专属踩剑姿势随御剑一起删了
         // 图已经是显示尺寸（152 高），照着它本来的大小贴
@@ -8245,8 +8315,84 @@ public class DesktopPet : Form
         }
     }
 
+    // 2026-11-26 连贯性（尺寸归一）：素材是分批出的，站姿 188 高、八帧走路 144 高、
+    // 整套姿势 126 高，一走路人物就缩一圈，看着像"换了一张图"。
+    // 这里统一按"画面里人物实际占多高"（alpha 包围盒）换算到同一个身高，底边对齐地线、
+    // 水平按包围盒居中，走路 / 姿势 / 招手都用同一个身形。
+    static Dictionary<string, Bitmap> normCache = new Dictionary<string, Bitmap>();
+    static Dictionary<Bitmap, Rectangle> alphaBbCache = new Dictionary<Bitmap, Rectangle>();
+
+    Rectangle AlphaBounds(Bitmap b)
+    {
+        Rectangle r;
+        if (alphaBbCache.TryGetValue(b, out r)) return r;
+        int w = b.Width, h = b.Height;
+        int minX = w, minY = h, maxX = -1, maxY = -1;
+        BitmapData d = null;
+        try
+        {
+            d = b.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            int stride = d.Stride;
+            byte[] px = new byte[stride * h];
+            Marshal.Copy(d.Scan0, px, 0, px.Length);
+            for (int y = 0; y < h; y++)
+            {
+                int row = y * stride;
+                for (int x = 0; x < w; x++)
+                {
+                    if (px[row + x * 4 + 3] < 26) continue;
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
+        catch { }
+        finally { if (d != null) b.UnlockBits(d); }
+        if (maxX < minX || maxY < minY) r = new Rectangle(0, 0, w, h);
+        else r = new Rectangle(minX, minY, maxX - minX + 1, maxY - minY + 1);
+        alphaBbCache[b] = r;
+        return r;
+    }
+
+    Bitmap NormArt(Bitmap src, float contentH)
+    {
+        if (src == null || contentH < 8f) return src;
+        string key = ((long)System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(src)).ToString()
+                   + "_" + (int)Math.Round(contentH * 10f);
+        Bitmap c0;
+        if (normCache.TryGetValue(key, out c0)) return c0;
+        Bitmap outB = null;
+        try
+        {
+            Rectangle gb = AlphaBounds(src);
+            if (gb.Width < 2 || gb.Height < 2) return src;
+            int h = Math.Max(4, (int)Math.Round(contentH));
+            float sc = h / (float)gb.Height;
+            int w = Math.Max(4, (int)Math.Round(gb.Width * sc));
+            outB = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+            using (Graphics g2 = Graphics.FromImage(outB))
+            {
+                g2.Clear(Color.Transparent);
+                g2.CompositingQuality = CompositingQuality.HighQuality;
+                g2.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g2.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g2.DrawImage(src, new Rectangle(0, 0, w, h), gb, GraphicsUnit.Pixel);
+            }
+            normCache[key] = outB;
+            return outB;
+        }
+        catch
+        {
+            if (outB != null) outB.Dispose();
+            return src;
+        }
+    }
+
     void DrawBmpAlpha(Graphics g, Bitmap b, Rectangle r, float alpha)
     {
+
         if (b == null || alpha <= 0.02f) return;
         b = Hard(b);
         b = GetRim(b);
@@ -8287,13 +8433,25 @@ public class DesktopPet : Form
                 float fw = fh * rf.Width / Math.Max(1f, rf.Height);
                 // 骑坐骑时它其实一直在往前挪（walkTicks 反复置 40），这里用走路的相位给个蹄子落地的颠，
                 // 幅度按身高比例收，别像整只在跳
-                float stepPh = walkTicks > 0 ? t * 8.4f : t * 6.4f;
-                float bobF = (float)Math.Abs(Math.Sin(stepPh)) * tHf * 0.008f
-                           - (float)Math.Sin(t * 6.4f) * tHf * 0.004f;
+                // 连续小跑：相位自己累加（帧率抖动不会让蹄子节奏跳），速度越快蹄频越高；
+                // 起骑/收骑时幅度按 actAmt 渐入渐出，不会"啪"一下从静止到颠动
+                float dtR = rideLastT < 0f ? 1f / 60f : t - rideLastT;
+                if (dtR <= 0f || dtR > 0.2f) dtR = 1f / 60f;
+                rideLastT = t;
+                float trotFreq = walkTicks > 0 ? 2.30f : 1.20f;          // 每秒落蹄次数
+                ridePhase += dtR * trotFreq * (float)Math.PI;            // 半步一个落蹄
+                if (ridePhase > (float)(Math.PI * 2000)) ridePhase -= (float)(Math.PI * 2000);
+                float trotW = Math.Min(1f, actAmt * 1.25f);
+                float rise = (float)Math.Abs(Math.Sin(ridePhase));        // 0 落地 → 1 腾空
+                // 落地压、腾空抬，用 easeOutCubic 让落地脆、回升柔；偏移 -1 是把中位对齐在地线上
+                float bobF = (2.6f * EaseOutCubic(rise) - 1.0f) * tHf * 0.012f * trotW;
+                // 落蹄那一下身子微微前俯、腾空回正：整只不是上下平推，而是有俯仰的连续起伏
+                float pitchF = -(float)Math.Cos(ridePhase) * 1.25f * trotW;
                 int dwF = Math.Max(8, (int)Math.Round(fw)), dhF = Math.Max(8, (int)Math.Round(fh));
                 GraphicsState stF = g.Save();
                 // 蹄子落在脚下这条线上：底边对齐 y=0，和站姿立绘同一个落地基准
                 g.TranslateTransform(SnapX(cx), SnapX(cy + 66f - bobF));
+                if (Math.Abs(pitchF) > 0.01f) g.RotateTransform(pitchF);
                 g.SmoothingMode = SmoothingMode.None;
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
@@ -10984,7 +11142,7 @@ public class DesktopPet : Form
             bool isFirst = true;
             // 2026-11-25：--dump / --dumpexpr 是自检出图模式，不能受单实例锁影响。
             // 以前道在桌面上跑着时开 --dump，进程拿到 isFirst=false 就静默退出，一张图都不出（A9 评审一直没图可看）。
-            bool cliDump = args.Length > 0 && (args[0] == "--dump" || args[0] == "--dumpexpr" || args[0] == "--shakecheck");
+            bool cliDump = args.Length > 0 && (args[0] == "--dump" || args[0] == "--dumpexpr" || args[0] == "--shakecheck" || args[0] == "--dumpblend");
             try { singleLock = new System.Threading.Mutex(true, "DaoPetSingleInstance", out isFirst); }
             catch { isFirst = true; }
             if (!isFirst && !cliDump) return;
@@ -11004,6 +11162,29 @@ public class DesktopPet : Form
             if (args.Length > 0 && args[0] == "--dump")
             {
                 DumpSelf();
+                return;
+            }
+            // 2026-11-26 连贯性专项自检：站→骑 的交叉溶解 + 坐骑小跑，按 30fps 连续出帧
+            if (args.Length > 0 && args[0] == "--dumpblend")
+            {
+                string bd = Path.GetDirectoryName(Application.ExecutablePath);
+                DesktopPet bp = new DesktopPet();
+                bp.species = 8;
+                try { bp.ApplyPose(bp.species); } catch { }   // 关键：直接把 species 改掉不会重挂八帧，会用到上一个形象的走路图
+                bp.sitting = false; bp.lying = false;
+                bp.actKind = 0; bp.actHold = 0; bp.actAmt = 0f; bp.lieAmt = 0f;
+                bp.t = 0.4f;
+                for (int bi = 0; bi < 6; bi++)
+                {
+                    bp.t += 1f / 30f;
+                    DumpOne(bp, Path.Combine(bd, "_blend_pre" + bi + ".png"));
+                }
+                bp.actKind = 3; bp.actHold = 460; bp.walkTicks = 40;
+                for (int bi = 0; bi < 24; bi++)
+                {
+                    bp.t += 1f / 30f;
+                    DumpOne(bp, Path.Combine(bd, "_blend_ride" + bi.ToString("00") + ".png"));
+                }
                 return;
             }
             // 表情图专项自检：把 8 号的四种表情各出一张，顺带把加载状态写出来
@@ -11092,7 +11273,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 146;
+    public const int APP_VER = 147;
 
     public static void Start()
     {

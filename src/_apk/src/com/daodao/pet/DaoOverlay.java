@@ -288,10 +288,12 @@ public class DaoOverlay extends Service {
         // 1080×2400 上约 360px 高、180px 宽，胳膊腿和脸都能看清；再大会挡图标。
         // 2026-11-25 用户：15% 还是小，轮廓看不清。再放到 20% 屏高、上限 210dp、下限 150dp。
         // 1080×2400 上约 480px 高、240px 宽：脸、肩线、裙摆转折都看得清了。
-        int h = (int) (sh * 0.20f);
-        int cap = dp(210);
+        // 2026-11-26 用户第三次说小：窗口本身放到 27% 屏高（上限 300dp、下限 190dp），
+        // 外面还留了一圈安全边（见 onDraw 的 PAD_* 常量），所以人物实际可见高度也比 20% 那一版大。
+        int h = (int) (sh * 0.27f);
+        int cap = dp(300);
         if (h > cap) h = cap;
-        if (h < dp(150)) h = dp(150);
+        if (h < dp(190)) h = dp(190);
         return h;
     }
 
@@ -317,7 +319,9 @@ public class DaoOverlay extends Service {
             w = s; h = s;
         } else {
             h = petH();
-            w = h / 2;
+            // 2026-11-26 比例从 1:2 放宽到 1:0.56：骑上坐骑（尤其带鹿角的那两只）横向要地方，
+            // 原来的 1:2 一放大坐骑就被压窄，只能靠缩小坐骑来适应，越骑越小。
+            w = (int) (h * 0.62f);
         }
         lp.width = w;
         lp.height = h;
@@ -703,22 +707,30 @@ public class DaoOverlay extends Service {
     private boolean mountAuto = true;   // 自主：每次启动自己决定骑不骑；用户点一下就接管
     // v129 人物与坐骑匹配：每只坐骑单独给「高度占视窗的比例」和「脚踩到它多高」
     // 数值来自 tools\形象\坐骑配比_v129g.py 的实测与预览（_配比预览6.png）
-    private final float[] MOUNT_MHW = {0.32f, 0.52f, 0.34f, 0.50f, 0.46f};  // 坐骑高 / 视窗高（骑姿版）
-    private final float[] MOUNT_FR = {0.88f, 0.64f, 0.62f, 0.62f, 0.44f};   // 鞍面高度 / 坐骑高（从底算）
+    // 2026-11-26 用户：「坐骑要好看的、优质的，麋鹿 / 神话鹿 / 白龙马 / 独角兽之类」。
+    // 旧的祥云/木马/飞剑/小鹿/纸鹤整套换掉，祥云留作第五只。四只新坐骑是图像大模型直出的整张图，
+    // 已抠净白底、高 600，随 assets 打包；道具一换，下面两个比例表必须跟着换。
+    // MOUNT_K  = 坐骑总高 / 内框高（含鹿角、云气），按各自造型量出来的
+    // MOUNT_FR = 鞍面高度 / 坐骑总高（从底算），来源是 tools\mount_matte.py 出的 5% 标尺图逐张读的
+    private final float[] MOUNT_K  = {0.86f, 0.86f, 0.86f, 0.86f, 0.50f};
+    private final float[] MOUNT_FR = {0.51f, 0.63f, 0.59f, 0.49f, 0.44f};
+    // 画内安全边：窗口四周留的空白比例（左右 / 上 / 下）。留这圈的目的只有一个——
+    // 蹦跳、蹲下、骑坐骑时人物和坐骑不会顶到窗口边缘被裁。
+    private final float PAD_X = 0.05f, PAD_TOP = 0.10f, PAD_BOT = 0.05f;
     // v131 骑姿：臀部（坐骨线）落在鞍面；数值 = 坐骨线在骑姿图里占的高度比例（逐只量出来的）
     private final float[] RIDE_SEAT = {0.606f, 0.668f, 0.680f, 0.665f, 0.680f, 0.652f, 0.680f,
                                        0.579f, 0.600f, 0.667f, 0.680f, 0.608f, 0.597f, 0.680f};
-    private final float RIDE_H = 0.62f;   // 骑姿人物高 / 视窗高
+    private final float RIDE_H = 0.72f;   // 骑姿人物高 / 坐骑高（人骑上去身子比站着矮一截，这个比例对得上鞍面）
     private final String[] RIDE_FILES = {
             "ride_0.png", "ride_1.png", "ride_2.png", "ride_3.png", "ride_4.png", "ride_5.png", "ride_6.png",
             "ride_7.png", "ride_8.png", "ride_9.png", "ride_10.png", "ride_11.png", "ride_12.png", "ride_13.png"};
     private final float MOUNT_CS = 0.74f;                                   // 骑上时人物缩放，留出头顶空间
     private final String[] MOUNT_FILES = {
-            "mount_cloud.png",   // 1 祥云
-            "mount_horse.png",   // 2 小木马
-            "mount_sword.png",   // 3 飞剑
-            "mount_deer.png",    // 4 小鹿
-            "mount_crane.png"    // 5 纸鹤
+            "mount_milu.png",        // 1 神话麋鹿（金角、云蹄）
+            "mount_bailongma.png",   // 2 白龙马（龙角、鳞颈、淡青云蹄）
+            "mount_unicorn.png",     // 3 独角兽（螺旋虹角）
+            "mount_shenlu.png",      // 4 九色神鹿（琉璃角、飘带云气）
+            "mount_cloud.png"        // 5 祥云
     };
     private Bitmap[] mounts = new Bitmap[MOUNT_FILES.length];
     private Bitmap[] rides = new Bitmap[14];   // 14 张骑姿立绘，下标 = 形象序号
@@ -1012,22 +1024,30 @@ public class DaoOverlay extends Service {
             return (k >= 0 && k < rides.length) ? rides[k] : null;
         }
 
-        /** v131 骑姿绘制：坐骑按自己的高度比 → 鞍面定位 → 臀部（坐骨线）压上去 */
+        /** v131 骑姿绘制：坐骑按自己的高度比 → 鞍面定位 → 臀部（坐骨线）压上去
+         *  2026-11-26 换成神话坐骑：这里改成「以骑姿人物为基准」算坐骑高度——
+         *  坐骑总高 = 内框高 × MOUNT_K，人物高 = 坐骑高 × RIDE_H，鹿角再长也不会把人顶出内框。 */
         void drawRide(Canvas c, int w, int h, Bitmap rideImg, Bitmap mb) {
-            int mi = Math.max(0, Math.min(MOUNT_MHW.length - 1, mount - 1));
-            float mh = h * MOUNT_MHW[mi];
+            int mi = Math.max(0, Math.min(MOUNT_K.length - 1, mount - 1));
+            float mh = h * MOUNT_K[mi];
             float mw = mh * mb.getWidth() / Math.max(1, mb.getHeight());
-            if (mw > w * 0.98f) {
-                mw = w * 0.98f;
+            if (mw > w * 0.96f) {
+                mw = w * 0.96f;
                 mh = mw * mb.getHeight() / Math.max(1, mb.getWidth());
             }
+            // 万一坐骑比内框还高（极窄屏），按内框高度再收一档，宁可小一点也不裁角
+            if (mh > h * 0.92f) {
+                mh = h * 0.92f;
+                mw = mh * mb.getWidth() / Math.max(1, mb.getHeight());
+            }
+            float rh = mh * RIDE_H;          // 人物高跟着坐骑走，收窄屏时人兽同比缩小，不会人比马大
             double mt = (System.currentTimeMillis() % 600000L) / 1000.0;
             float mdx = 0f, mdy = 0f, mrot = 0f;
-            if (mi == 0) { mdx = (float) Math.sin(mt * 0.85) * 0.030f * w; mdy = (float) Math.sin(mt * 1.25) * 0.012f * h; }
-            else if (mi == 1) { mdy = (float) Math.sin(mt * 6.2) * 0.008f * h; mrot = (float) Math.sin(mt * 6.2) * 1.6f; }
-            else if (mi == 2) { mdy = (float) Math.sin(mt * 2.3) * 0.022f * h; mrot = (float) Math.sin(mt * 2.3) * 3.2f; }
-            else if (mi == 3) { mdy = (float) Math.sin(mt * 4.0) * 0.011f * h; mrot = (float) Math.sin(mt * 4.0) * 1.3f; }
-            else { mdy = (float) Math.sin(mt * 2.8) * 0.020f * h; }
+            // 坐骑各有各的动法：马小跑（落蹄沉一下 + 前后俯仰）、鹿轻颠（更慢更柔）、云飘
+            if (mi == 0) { mdy = (float) Math.sin(mt * 3.1) * 0.010f * h; mrot = (float) Math.sin(mt * 3.1) * 1.5f; }
+            else if (mi == 1 || mi == 2) { mdy = (float) Math.sin(mt * 3.4) * 0.009f * h; mrot = (float) Math.sin(mt * 3.4) * 1.4f; }
+            else if (mi == 3) { mdy = (float) Math.sin(mt * 2.4) * 0.008f * h; mrot = (float) Math.sin(mt * 2.4) * 1.1f; }
+            else { mdx = (float) Math.sin(mt * 0.85) * 0.030f * w; mdy = (float) Math.sin(mt * 1.25) * 0.012f * h; }
             long dn2 = System.currentTimeMillis();
             boolean dancing2 = dn2 < danceUntil;
             c.save();
@@ -1038,14 +1058,8 @@ public class DaoOverlay extends Service {
             Paint sp = new Paint(Paint.ANTI_ALIAS_FLAG);
             sp.setColor(0x22000000);
             c.drawOval(new RectF(w * 0.24f, h - h * 0.03f, w * 0.76f, h + h * 0.005f), sp);
-            c.save();
-            c.rotate(mrot, w * 0.5f + mdx, h - mh * MOUNT_FR[mi]);
-            RectF mr = new RectF(w * 0.5f + mdx - mw * 0.5f, h + mdy - mh, w * 0.5f + mdx + mw * 0.5f, h + mdy);
-            c.drawBitmap(mb, null, mr, p);
-            c.restore();
-
+            // 先算好鞍面和人头的位置，再统一画；余量不够就整组下压，绝不靠裁切将就
             float saddleY = h - mh * MOUNT_FR[mi];
-            float rh = h * RIDE_H;
             float rw = rh * rideImg.getWidth() / Math.max(1, rideImg.getHeight());
             if (rw > w * 0.92f) {
                 rw = w * 0.92f;
@@ -1054,6 +1068,15 @@ public class DaoOverlay extends Service {
             float si = Math.max(0, Math.min(RIDE_SEAT.length - 1, DaoOverlay.this.art));
             float sr = RIDE_SEAT[(int) si];
             float top = saddleY - rh * sr + mdy;
+            float shift = 0f;
+            if (top < 0f) shift = -top;                       // 头顶超了：整组往下压
+            c.save();
+            c.rotate(mrot, w * 0.5f + mdx, saddleY + shift);
+            RectF mr = new RectF(w * 0.5f + mdx - mw * 0.5f, h + mdy - mh + shift,
+                                 w * 0.5f + mdx + mw * 0.5f, h + mdy + shift);
+            c.drawBitmap(mb, null, mr, p);
+            c.restore();
+            top += shift;
             // 说话时上身轻轻点头，像在应声说话（骑乘图是整张立绘，做不了逐字口型，用这点动感代）
             if (System.currentTimeMillis() < talkUntil) top += (float) Math.sin(mt * 9.0) * 0.006f * h;
             RectF rr = new RectF(w * 0.5f + mdx - rw * 0.5f, top, w * 0.5f + mdx + rw * 0.5f, top + rh);
@@ -1075,8 +1098,23 @@ public class DaoOverlay extends Service {
         @Override
         protected void onDraw(Canvas c) {
             super.onDraw(c);
-            int w = getWidth(), h = getHeight();
-            if (vm == MODE_BALL) { drawBall(c, w, h); return; }
+            int W0 = getWidth(), H0 = getHeight();
+            if (vm == MODE_BALL) { drawBall(c, W0, H0); return; }
+            // 2026-11-26 用户：「形象动的过程中要保持完整性」。以前立绘是整窗铺满画的，
+            // 一蹦一跳、一骑上马，头顶/蹄子/鹿角就顶出窗口被裁掉。
+            // 现在窗口里再留一圈安全边，所有绘制都在内框里进行，动作再大也裁不到。
+            int ix = (int) (W0 * PAD_X);
+            int iy = (int) (H0 * PAD_TOP);
+            int w = W0 - ix * 2;
+            int h = H0 - iy - (int) (H0 * PAD_BOT);
+            if (w < 12 || h < 12) return;
+            c.save();
+            c.translate(ix, iy);
+            drawPet(c, w, h);
+            c.restore();
+        }
+
+        private void drawPet(Canvas c, int w, int h) {
 
             // v131 骑乘：这只形象有骑姿立绘，就直接画"跨坐"的样子，不再拿站姿缩放去凑
             Bitmap rb = rideFor(art);
@@ -1149,26 +1187,28 @@ public class DaoOverlay extends Service {
             Bitmap mb = (mount >= 1 && mount <= mounts.length ? mounts[mount - 1] : null);  // v131 修：原来下标越界，纸鹤永远画不出来
             float mdx = 0f, mdy = 0f;
             if (mb != null && !mb.isRecycled()) {
-                int mi = Math.max(1, Math.min(MOUNT_MHW.length, mount)) - 1;
-                float mh = h * MOUNT_MHW[mi];
+                int mi = Math.max(1, Math.min(MOUNT_K.length, mount)) - 1;
+                // 兜底分支（没有骑姿立绘时才走这里）：坐骑按「人物高 × MOUNT_K」算，
+                // 踩上去的抬升限制在内框高度的 35% 以内，不然人会直接被顶出画布
+                float mh = h * MOUNT_K[mi] * 0.80f;
                 float mw = mh * mb.getWidth() / Math.max(1, mb.getHeight());
                 if (mw > w * 0.98f) { mw = w * 0.98f; mh = mw * mb.getHeight() / Math.max(1, mb.getWidth()); }
-                // v132：坐骑也会动 —— 云飘、马跑、剑腾、鹿颠、鹤扇翅
+                if (mh > h * 0.80f) { mh = h * 0.80f; mw = mh * mb.getWidth() / Math.max(1, mb.getHeight()); }
+                // v132：坐骑也会动 —— 云飘、马跑、鹿颠
                 double mt = (System.currentTimeMillis() % 600000L) / 1000.0;
                 float mrot = 0f, msc = 1f;
-                if (mi == 0) { mdx = (float) Math.sin(mt * 0.85) * 0.030f * w; mdy = (float) Math.sin(mt * 1.25) * 0.012f * h; }
-                else if (mi == 1) { mdy = (float) Math.sin(mt * 6.2) * 0.008f * h; mrot = (float) Math.sin(mt * 6.2) * 1.6f; }
-                else if (mi == 2) { mdy = (float) Math.sin(mt * 2.3) * 0.022f * h; mrot = (float) Math.sin(mt * 2.3) * 3.2f; }
-                else if (mi == 3) { mdy = (float) Math.sin(mt * 4.0) * 0.011f * h; mrot = (float) Math.sin(mt * 4.0) * 1.3f; }
-                else { mdy = (float) Math.sin(mt * 2.8) * 0.020f * h; msc = 1f + 0.035f * (float) Math.sin(mt * 2.8); }
-                float bw2 = mw * msc, bh2 = mh * (2f - msc);   // 扇翅：横向张开、纵向略收
+                if (mi == 0) { mdy = (float) Math.sin(mt * 3.1) * 0.010f * h; mrot = (float) Math.sin(mt * 3.1) * 1.5f; }
+                else if (mi == 1 || mi == 2) { mdy = (float) Math.sin(mt * 3.4) * 0.009f * h; mrot = (float) Math.sin(mt * 3.4) * 1.4f; }
+                else if (mi == 3) { mdy = (float) Math.sin(mt * 2.4) * 0.008f * h; mrot = (float) Math.sin(mt * 2.4) * 1.1f; }
+                else { mdx = (float) Math.sin(mt * 0.85) * 0.030f * w; mdy = (float) Math.sin(mt * 1.25) * 0.012f * h; }
+                float bw2 = mw * msc, bh2 = mh * (2f - msc);
                 c.save();
                 c.rotate(mrot, w * 0.5f + mdx, h + bob - mh * MOUNT_FR[mi]);
                 RectF mr = new RectF(w * 0.5f + mdx - bw2 * 0.5f, h + bob + mdy - bh2,
                                      w * 0.5f + mdx + bw2 * 0.5f, h + bob + mdy);
                 c.drawBitmap(mb, null, mr, p);
                 c.restore();
-                rise = mh * MOUNT_FR[mi];   // 踩到它背上：祥云高、木马鞍、飞剑刃面、小鹿背、纸鹤脊
+                rise = Math.min(mh * MOUNT_FR[mi], h * 0.35f);
             }
             c.save();
             float ms = (mb != null && !mb.isRecycled()) ? MOUNT_CS : 1f;

@@ -88,6 +88,7 @@ public class DaoOverlay extends Service {
     private boolean screenOn = true;
 
     private long tick = 0;
+    private int beatN = 0;   // 2026-11-25 提帧：33ms 重绘计数，3 拍做一次 90ms 的逻辑
     private Runnable beat;
 
     private BroadcastReceiver screenRx;
@@ -407,10 +408,12 @@ public class DaoOverlay extends Service {
         if (beat != null) return;
         beat = new Runnable() {
             public void run() {
-                tick++;
                 try {
                     if (pv != null && added) pv.invalidate();
                 } catch (Exception e) { }
+                // 2026-11-25 提帧：画 30fps（33ms），逻辑还是 90ms 一次——直接把 tick 加快会把
+                // 走路速度、打招呼间隔全带快 3 倍，所以做成"多画、少算"
+                if (++beatN % 3 != 0) { ui.postDelayed(this, 33); return; }
                 // 每 10 拍（≈0.9 秒）查一次：本体在前台就藏，回桌面再出来
                 if (tick % 10 == 0) {
                     try {
@@ -433,7 +436,7 @@ public class DaoOverlay extends Service {
                     try { pv.idleWaveIfDue(); } catch (Exception e) { }
                     try { pv.idleActIfDue(); } catch (Exception e) { }
                 }
-                ui.postDelayed(this, 90);
+                ui.postDelayed(this, 33);
             }
         };
         ui.post(beat);
@@ -883,6 +886,12 @@ public class DaoOverlay extends Service {
             }
             // 2026-11-22：满身时 8 帧慢走（3 拍一帧 ≈2.8fps）。贴边时不再原地踏步——
             // 那种"人不动腿在动"最假，改成定格站姿，动的是窗口本身的探出/缩回。
+            // 2026-11-25 提帧：走路的帧号与相位都按真实时间算，绘制多密相位就切多细
+            double walkPos = 0;
+            if (walking) {
+                long tw = System.currentTimeMillis();
+                walkPos = (tw % 600000L) / 1000.0 * 5.5;   // 5.5 扑/秒，与原 180ms 一帧等价
+            }
             int fi;
             int bob;
             if (vm == MODE_PEEK) {
@@ -893,7 +902,7 @@ public class DaoOverlay extends Service {
                 if (walking) {
                     // 一拍 180ms → 5.5fps。原来 270ms 才换一帧（3.7fps），配 22dp/秒的步速，
                     // 腿看着像在原地小碎步，跟脚的位移对不上
-                    fi = fN > 0 ? (int) ((tick / 2) % fN) : 0;
+                    fi = fN > 0 ? (int) (walkPos % fN) : 0;
                     bob = (int) (Math.sin(tick / 4.0) * (h * 0.006f));
                 } else {
                     fi = 0;
@@ -960,7 +969,7 @@ public class DaoOverlay extends Service {
                 drawWarp(c, standArt, 0, bob - (int) hop + dyAct, w, (int) (h * squash) + bob,
                         tick / 30.0, 0f, false, false, waveAmp, nodAmp);
             } else if (frames != null && fi >= 0 && fi < frames.length) {
-                float ph = (float) ((fi / (float) Math.max(1, fN)) * Math.PI * 2.0);
+                float ph = (float) ((walkPos % fN) / Math.max(1, fN) * Math.PI * 2.0);   // 连续相位：换帧处正好归整
                 drawWarp(c, frames[fi], 0, bob, w, h + bob, tick / 30.0, ph, walking, false, waveAmp, nodAmp);
             } else {
                 c.drawBitmap(sheet, src, dst, p);

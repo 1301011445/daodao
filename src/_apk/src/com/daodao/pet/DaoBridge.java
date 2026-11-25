@@ -581,6 +581,11 @@ public class DaoBridge {
     }
 
     @JavascriptInterface
+    public void setMountAuto(boolean auto) {
+        try { DaoOverlay.setMountAuto(auto); } catch (Throwable e) { }
+    }
+
+    @JavascriptInterface
     public void setMount(int k) {
         try { DaoOverlay.setMount(k); } catch (Throwable e) { }
     }

@@ -1558,7 +1558,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '129';
+  var HTML_VER = '130';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -2316,6 +2316,7 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
   try { mountState = parseInt(localStorage.getItem('daoMount') || '0', 10) || 0; } catch (e) {}
   var btnMount = document.getElementById('btnMount');
   var MOUNT_NAMES = ['坐骑', '祥云', '木马', '飞剑', '小鹿', '纸鹤'];
+  var mountAuto = true;   // 由道自己决定骑不骑；长按按钮交回去
   function mountLabel() {
     try { var lb = btnMount.querySelector('.lb'); if (lb) lb.textContent = MOUNT_NAMES[mountState] || '坐骑'; } catch (e) {}
   }
@@ -2325,7 +2326,24 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
   if (btnMount) {
     mountLabel();
     mountApply();
+    // v130：长按 600ms = 把坐骑交回给道自己决定（它按概率自己挑或不骑）；点一下 = 我替你定
+    var mountHold = 0;
+    btnMount.addEventListener('touchstart', function () {
+      clearTimeout(mountHold);
+      mountHold = setTimeout(function () {
+        mountAuto = true;
+        try { localStorage.setItem('daoMountAuto', '1'); } catch (e) {}
+        if (window.DaoNative && DaoNative.setMountAuto) { try { DaoNative.setMountAuto(true); } catch (e) {} }
+        try { var lb = btnMount.querySelector('.lb'); if (lb) lb.textContent = '坐骑'; } catch (e) {}
+        try { if (navigator.vibrate) navigator.vibrate(30); } catch (e) {}
+        tip('坐骑交回给道自己决定：骑不骑、骑哪只它说了算');
+      }, 600);
+    }, { passive: true });
+    btnMount.addEventListener('touchend', function () { clearTimeout(mountHold); }, { passive: true });
+    btnMount.addEventListener('touchmove', function () { clearTimeout(mountHold); }, { passive: true });
     btnMount.addEventListener('click', function () {
+      clearTimeout(mountHold);
+      if (mountAuto) { mountAuto = false; try { localStorage.setItem('daoMountAuto', '0'); } catch (e) {} }
       mountState = (mountState + 1) % MOUNT_NAMES.length;
       try { localStorage.setItem('daoMount', String(mountState)); } catch (e) {}
       mountLabel();

@@ -137,7 +137,16 @@
       "apk": 17087029,
       "apk_link": "https://aka.doubaocdn.com/s/D1KIDyBZdU",
       "exe_link": "https://aka.doubaocdn.com/s/SQr5MkWbQb"
+    },
+    {
+      "ver": 130,
+      "date": "2026-11-25",
+      "title": "语音/对话/实时语音升级 + 坐骑自主",
+      "apk": 17087029,
+      "apk_link": "https://aka.doubaocdn.com/s/kCZwQFUyD4",
+      "exe": 13681664,
+      "exe_link": "https://aka.doubaocdn.com/s/RrFpjWijzq"
     }
   ],
-  "current": 129
+  "current": 130
 }

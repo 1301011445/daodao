@@ -3635,6 +3635,10 @@ public class DesktopPet : Form
         // 一、说话：最常用，放最上头
         ToolStripMenuItem gTalk = new ToolStripMenuItem("跟我说话");
         gTalk.DropDownItems.Add("语音对话：我说话，你回答", null, new EventHandler(MenuVoiceChat));
+        // v130：连着聊（多轮实时），回话由 voice.py 自己逐句合成
+        ToolStripMenuItem talkItem = new ToolStripMenuItem("连着聊几句：不用每次点");
+        talkItem.Click += new EventHandler(MenuTalkChat);
+        gTalk.DropDownItems.Add(talkItem);
         // 常驻听名字：喊一声「道」就应你，再接着听下一句
         ToolStripMenuItem wakeItem = new ToolStripMenuItem("喊我名字就醒（说「道」）");
         wakeItem.Checked = wakeOn;
@@ -4869,6 +4873,79 @@ public class DesktopPet : Form
         voiceChatThread.IsBackground = true;
         voiceChatThread.Start();
     }
+
+    // ===== v130 连着聊：多轮实时语音对话 =====
+    // 一轮接一轮「听 → 想」都在 voice.py 里跑，回话也由它逐句合成播出来（同一进程，不抢麦）；
+    // 窗口这边只把回话显示在气泡上，不再重复念一遍。
+    System.Threading.Thread talkThread;
+    Process talkProc;
+
+    void MenuTalkChat(object s, EventArgs e)
+    {
+        if (talkThread != null && talkThread.IsAlive)
+        {
+            Say("还在聊着，先让它收个尾。");
+            return;
+        }
+        if (!voiceOn) voiceOn = true;
+        Say("好，我听着。你说「别说了」我就停。");
+        talkThread = new System.Threading.Thread(delegate() { TalkLoop(); });
+        talkThread.IsBackground = true;
+        talkThread.Start();
+    }
+
+    void TalkLoop()
+    {
+        try
+        {
+            string py = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "voice.py");
+            if (!System.IO.File.Exists(py))
+            {
+                BeginInvoke(new MethodInvoker(delegate() { Say("语音模块没装上，等我更新一下自己。"); }));
+                return;
+            }
+            ProcessStartInfo pi = new ProcessStartInfo();
+            pi.FileName = PyExe();
+            pi.Arguments = "\"" + py + "\" talk";
+            pi.UseShellExecute = false;
+            pi.CreateNoWindow = true;
+            pi.RedirectStandardOutput = true;
+            pi.RedirectStandardError = true;
+            pi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+            pi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+            pi.WindowStyle = ProcessWindowStyle.Hidden;
+            Process p = Process.Start(pi);
+            talkProc = p;
+            string line;
+            while ((line = p.StandardOutput.ReadLine()) != null)
+            {
+                line = line.Trim();
+                if (line.Length == 0) continue;
+                string st = JsonStr(line, "state");
+                string rep = JsonStr(line, "reply");
+                int md = JsonInt(line, "mood");
+                if (st == "bye") break;
+                if (rep != null && rep.Length > 0)
+                {
+                    string rr = rep;
+                    int mm = md;
+                    BeginInvoke(new MethodInvoker(delegate()
+                    {
+                        bubble = rr;
+                        bubbleFrames = 60 + rr.Length * 3;
+                        if (bubbleFrames > 140) bubbleFrames = 140;
+                        if (mm > 0 && mm <= 8) { moodKind = mm; moodTicks = 70; }
+                        Invalidate();
+                    }));
+                }
+            }
+            try { p.StandardError.ReadToEnd(); } catch { }
+            try { p.WaitForExit(3000); } catch { }
+            talkProc = null;
+        }
+        catch { }
+    }
+
 
     // 问它 / 讲题 / 总结：同一套大脑，只是换种用法
     void MenuAskBrain(object s, EventArgs e)
@@ -10681,7 +10758,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 129;
+    public const int APP_VER = 130;
 
     public static void Start()
     {

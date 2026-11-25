@@ -602,6 +602,11 @@ public class DaoOverlay extends Service {
         if (sLive != null) sLive.setMountArt(k);
     }
 
+    /** v130 外部把坐骑交回给道自己决定（主界面长按「坐骑」按钮走这里）。 */
+    public static void setMountAuto(boolean auto) {
+        if (sLive != null) sLive.setMountAuto(auto);
+    }
+
     /** 外部（手机主界面「换动作」按钮）让桌面上的那只动一下。 */
     static boolean sendAction(int k) {
         PetView v = sLive;
@@ -622,6 +627,7 @@ public class DaoOverlay extends Service {
     private long walkOnAt = 0, walkOffAt = 0;   // 起步/停步时刻，用来算 300ms 过渡
     // 2026-11-25 坐骑：0 无坐骑 / 1 祥云 / 2 木马
     private int mount = 0;   // 0 无坐骑，1~N 对应 MOUNT_FILES 里的图
+    private boolean mountAuto = true;   // 自主：每次启动自己决定骑不骑；用户点一下就接管
     // v129 人物与坐骑匹配：每只坐骑单独给「高度占视窗的比例」和「脚踩到它多高」
     // 数值来自 tools\形象\坐骑配比_v129g.py 的实测与预览（_配比预览6.png）
     private final float[] MOUNT_MHW = {0.28f, 0.40f, 0.24f, 0.34f, 0.40f};  // 坐骑高 / 视窗高
@@ -717,7 +723,16 @@ public class DaoOverlay extends Service {
                 mounts[i] = loadOpt(MOUNT_FILES[i]);
                 if (mounts[i] != null && !mounts[i].isRecycled()) matteInPlace(mounts[i]);
             }
-            try { mount = getContext().getSharedPreferences("dao", 0).getInt("mount", 0); } catch (Throwable e) { mount = 0; }
+            try {
+                android.content.SharedPreferences spd = getContext().getSharedPreferences("dao", 0);
+                mountAuto = spd.getBoolean("mountAuto", true);
+                mount = spd.getInt("mount", 0);
+                if (mountAuto) {
+                    // 自主决定：六成概率骑一只，四成不骑（它自己也该有不骑的时候）
+                    mount = (Math.random() < 0.6)
+                            ? 1 + (int) (Math.random() * Math.max(1, mounts.length - 1)) : 0;
+                }
+            } catch (Throwable e) { mount = 0; mountAuto = true; }
             // 2026-11-22 夜：形象不再「一张图定住」，改成按骨骼权重做网格变形。
             // 先把八帧拆成独立位图，变形时直接取当前帧，省掉每帧 createBitmap。
             try {
@@ -1318,8 +1333,22 @@ public class DaoOverlay extends Service {
 
         /** 换坐骑：0 无 1 祥云 2 木马，记进 SharedPreferences，下次启动还在。 */
         void setMountArt(int k) {
+            mountAuto = false;   // 用户手动选了，就不再自作主张
             mount = Math.max(0, Math.min(mounts.length - 1, k));
+            try { getContext().getSharedPreferences("dao", 0).edit().putBoolean("mountAuto", false).apply(); } catch (Throwable e) { }
             try { getContext().getSharedPreferences("dao", 0).edit().putInt("mount", mount).apply(); } catch (Throwable e) { }
+            invalidate();
+        }
+
+        /** v130：把坐骑交回给道自己决定（长按按钮）；true 时立刻重新随机一次 */
+        void setMountAuto(boolean auto) {
+            mountAuto = auto;
+            try { getContext().getSharedPreferences("dao", 0).edit().putBoolean("mountAuto", auto).apply(); } catch (Throwable e) { }
+            if (auto) {
+                mount = (Math.random() < 0.6)
+                        ? 1 + (int) (Math.random() * Math.max(1, mounts.length - 1)) : 0;
+                try { getContext().getSharedPreferences("dao", 0).edit().putInt("mount", mount).apply(); } catch (Throwable e) { }
+            }
             invalidate();
         }
 

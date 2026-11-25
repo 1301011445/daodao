@@ -36,6 +36,8 @@ API = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 MODEL = "glm-4-flash"
 # 依次试，前一个 429/超时就退下一个：免费档优先，air 作保底
 MODEL_CHAIN = ("glm-4-flash", "glm-4.7-flash", "glm-4-air")
+# v130：说一半被喊停（用户开口 / 点了停）就立刻掐断，不再把整段念完
+_STOP = {"v": False}
 VOICE = "zh-CN-XiaoxiaoNeural"
 # 三声型（2026-11-24，与演唱同源）：少年声/自然声/低语声，按情绪号选
 SPEECH_MAP = {1: "zh-CN-YunxiaNeural", 2: "zh-CN-YunxiaNeural", 4: "zh-CN-YunxiaNeural",
@@ -156,22 +158,34 @@ def recognize(wav_path=WAV, fs=16000):
             pass
     return hear.recognize(wav_path)
 
-def _post(messages, temperature=0.7, max_tokens=160, timeout=30):
+def _post(messages, temperature=0.7, max_tokens=160, timeout=24, want_model=False):
+    """v130：MODEL_CHAIN 真用上了。以前 chain 写好了却没接进请求，
+    429 就直接整轮失败；现在按 flash → 4.7-flash → air 依次退，退一次等一会儿。"""
     import urllib.request
     key = open(KEY_FILE, "r", encoding="utf-8").read().strip()
-    body = {
-        "model": MODEL,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(API, data=data, method="POST")
-    req.add_header("Content-Type", "application/json")
-    req.add_header("Authorization", "Bearer " + key)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        obj = json.loads(resp.read().decode("utf-8"))
-    return obj["choices"][0]["message"]["content"].strip()
+    last = None
+    for i, model in enumerate(MODEL_CHAIN):
+        body = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        try:
+            req = urllib.request.Request(API, data=data, method="POST")
+            req.add_header("Content-Type", "application/json")
+            req.add_header("Authorization", "Bearer " + key)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                obj = json.loads(resp.read().decode("utf-8"))
+            txt = obj["choices"][0]["message"]["content"].strip()
+            if i: log("MODEL_FALLBACK -> %s" % model)
+            return (txt, model) if want_model else txt
+        except Exception as e:
+            last = e
+            log("MODEL_FAIL %s %r" % (model, e))
+            time.sleep(0.4 * (i + 1))
+    raise last if last else RuntimeError("no model")
 
 
 def build_messages(text):
@@ -188,17 +202,52 @@ def build_messages(text):
     return msgs
 
 
-def ask_glm(text, timeout=30, want_model=False):
-    txt, model = _post(build_messages(text), temperature=0.7, max_tokens=160, timeout=timeout)
+def ask_glm(text, timeout=24, want_model=False):
+    txt, model = _post(build_messages(text), temperature=0.7, max_tokens=160,
+                       timeout=timeout, want_model=True)
     return (txt, model) if want_model else txt
 
 
-def ask_plain(text, sys_prompt, temperature=0.5, max_tokens=400, timeout=30):
+def ask_plain(text, sys_prompt, temperature=0.5, max_tokens=400, timeout=26):
     txt, _model = _post([
         {"role": "system", "content": sys_prompt},
         {"role": "user", "content": text},
-    ], temperature=temperature, max_tokens=max_tokens, timeout=timeout)
+    ], temperature=temperature, max_tokens=max_tokens, timeout=timeout, want_model=True)
     return txt
+
+
+# ---------------- v130：不值当上网的问题，本地秒答 ----------------
+def instant_answer(text):
+    """时间/日期/星期/两位数算数这几类，答案本来就在本机，别排一趟网络（省 1~3 秒）。
+    返回 None 表示不是这类问题。"""
+    t = (text or "").strip()
+    if not t:
+        return None
+    now = time.localtime()
+    wk = "一二三四五六日"[now.tm_wday]
+    if re.search(r"(几点|什么时间|现在时间|几时)", t):
+        return "现在 %02d 点 %02d。" % (now.tm_hour, now.tm_min)
+    if re.search(r"(今天|今日).*(几号|日期|星期)|(星期几|礼拜几)", t):
+        return "今天是 %d 月 %d 号，星期%s。" % (now.tm_mon, now.tm_mday, wk)
+    low = t.replace("乘以", "*").replace("乘", "*").replace("除以", "/").replace("除", "/") \
+            .replace("加上", "+").replace("加", "+").replace("减去", "-").replace("减", "-")
+    m = re.search(r"(-?\d+(?:\.\d+)?)\s*([\+\-\*/×÷])\s*(-?\d+(?:\.\d+)?)", low)
+    if m and re.search(r"(等于|多少|算|是几)", t):
+        a, op, b = float(m.group(1)), m.group(2), float(m.group(3))
+        try:
+            if op in "+":
+                r = a + b
+            elif op in "-":
+                r = a - b
+            elif op in "*/×÷":
+                r = a * b if op in "*×" else (a / b if b else None)
+            else:
+                r = None
+        except Exception:
+            r = None
+        if r is not None:
+            return ("%g" % r) + "。"
+    return None
 
 
 def split_mood(raw):
@@ -268,21 +317,115 @@ def play_file(mp3path, fx=False):
         sd.play(np.clip(pcm, -1, 1), fs)
     sd.wait()
 
+def split_sentences(text, max_len=34):
+    """v130：整段合成得等全部念完才出声。现在按句切，第一句合成好就先响。
+    切分顺序：先按句末标点，长句再按逗号/顿号切，超长（>max_len）硬切，避免一句拖 10 秒。"""
+    t = re.sub(r"\s+", " ", (text or "").strip())
+    if not t:
+        return []
+    out, buf = [], ""
+    for ch in t:
+        buf += ch
+        if ch in "。！？!?；;\n":
+            out.append(buf.strip())
+            buf = ""
+    if buf.strip():
+        out.append(buf.strip())
+    final = []
+    for s in out:
+        if len(s) <= max_len:
+            final.append(s)
+            continue
+        tmp, b2 = [], ""
+        for ch in s:
+            b2 += ch
+            if ch in "，,、：:" and len(b2) >= 12:
+                tmp.append(b2.strip())
+                b2 = ""
+        if b2.strip():
+            tmp.append(b2.strip())
+        for s2 in tmp:
+            while len(s2) > max_len:
+                final.append(s2[:max_len])
+                s2 = s2[max_len:]
+            if s2:
+                final.append(s2)
+    return [x for x in final if x.strip()]
+
+
+def _play_interruptible(pcm, fs):
+    """放音时每 40ms 看一眼停止标记：说到一半被打断就立刻掐，不念完整段。"""
+    import numpy as np
+    import sounddevice as sd
+    if pcm is None or len(pcm) == 0:
+        return
+    if pcm.dtype != np.int16:
+        pcm = np.clip(pcm, -1, 1)
+    n = len(pcm)
+    dur = float(n) / max(1, fs)
+    sd.play(pcm, fs)
+    t0 = time.time()
+    while time.time() - t0 < dur + 0.06:
+        if _STOP["v"]:
+            try:
+                sd.stop()
+            except Exception:
+                pass
+            return
+        time.sleep(0.04)
+
+
 def speak(text, mood=0):
-    """在线合成，然后本地播放。失败就只写状态，不打断流程。"""
+    """v130：逐句合成 + 逐句播；句末按标点给停顿。失败只记日志，不打断流程。"""
     if not text:
         return
+    _STOP["v"] = False
     try:
         import edge_tts
-        import miniaudio
-        mp3 = os.path.join(BASE, "_say.mp3")
-        asyncio.run(edge_tts.Communicate(text, voice_for(mood)).save(mp3))
-        if not os.path.exists(mp3) or os.path.getsize(mp3) < 500:
-            log("TTS_EMPTY")
-            return
-        play_file(mp3, fx=True)
     except Exception as e:
         log("SPEAK_FAIL %r" % (e,))
+        return
+    parts = split_sentences(text)
+    if not parts:
+        return
+    t_start = time.time()
+    first_logged = False
+    paused = {"。": 0.20, "！": 0.22, "？": 0.22, "；": 0.18, "，": 0.10}
+    for i, s in enumerate(parts):
+        if _STOP["v"]:
+            break
+        if len(re.sub(r"[\s，。！？；]", "", s)) < 2:
+            continue
+        mp3 = os.path.join(BASE, "_say_%02d.mp3" % (i % 4))
+        try:
+            asyncio.run(edge_tts.Communicate(s, voice_for(mood)).save(mp3))
+            if not os.path.exists(mp3) or os.path.getsize(mp3) < 500:
+                log("TTS_EMPTY %s" % s[:12])
+                continue
+            import numpy as np
+            pcm = None
+            fs = 0
+            try:
+                import soundfile as sf
+                x, fs = sf.read(mp3, dtype="float32", always_2d=False)
+                pcm = x if x.ndim == 2 else x.reshape(-1, 1)
+            except Exception:
+                import miniaudio
+                dec = miniaudio.mp3_read_file_s16(mp3)
+                samples, nch, fs = (dec if isinstance(dec, tuple) else (dec.samples, dec.nchannels, dec.sample_rate))
+                raw = np.frombuffer(samples, dtype=np.int16) if isinstance(samples, (bytes, bytearray)) else np.asarray(samples, dtype=np.int16)
+                pcm = raw.reshape(-1, nch)
+            if pcm is not None and pcm.shape[1] == 1:
+                pcm = _soften((np.clip(pcm[:, 0], -1, 1) * 32767.0).astype(np.int16), fs).reshape(-1, 1)
+            if not first_logged:
+                log("TTS_FIRST_SENTENCE %.2fs" % (time.time() - t_start))
+                first_logged = True
+            _play_interruptible(pcm, fs)
+        except Exception as e:
+            log("SPEAK_FAIL %r" % (e,))
+        tail = s[-1:]
+        if i + 1 < len(parts) and not _STOP["v"]:
+            time.sleep(paused.get(tail, 0.14))
 
 
 # ---------------- 输出 ----------------
@@ -323,8 +466,15 @@ def do_chat():
         emit("empty", reply="我没听清，再说一遍？")
         return 0
 
-    # 3) 想（带上下文 + 情绪）
+    # 3) 想（带上下文 + 情绪）：本机能答的先答，答不了才上网
     write_state("thinking", heard=text, note="我想想")
+    fast = instant_answer(text)
+    if fast:
+        log("instant=" + fast)
+        remember(text, fast)
+        emit("done", heard=text, reply=fast, mood=0)
+        write_state("done", heard=text, reply=fast, mood=0)
+        return 0
     try:
         raw = ask_glm(text)
     except Exception as e:
@@ -369,6 +519,12 @@ def do_ask(args):
         emit("empty", reply="没给我话呀。")
         return 0
     write_state("thinking", heard=text, note="我想想")
+    fast = instant_answer(text)
+    if fast:
+        remember(text, fast)
+        emit("done", heard=text, reply=fast, mood=0)
+        write_state("done", heard=text, reply=fast, mood=0)
+        return 0
     try:
         raw = ask_glm(text)
     except Exception as e:
@@ -452,6 +608,82 @@ def do_wake():
             time.sleep(0.5)
 
 
+def do_talk(max_turns=8, quiet_stop=2):
+    """v130 实时语音对话：一轮接一轮地「听 → 想」，每轮打一行 JSON 给窗口。
+    · 窗口念回话期间这边不抢麦（窗口会发 p 暂停），念完发 r 继续
+    · 连续两轮没听清就自己收麦，不干耗着
+    · 任何一轮说中「停/别说了/歇会儿」就退出"""
+    empties = 0
+    for n in range(max_turns):
+        if _STOP["v"]:
+            break
+        write_state("listening", note="我在听")
+        try:
+            audio = record()
+        except Exception as e:
+            log("REC_FAIL %r" % (e,))
+            emit("error", reply="我的耳朵打不开，可能要看一下麦克风权限。")
+            return 1
+        try:
+            text = (recognize() or "").strip()
+        except Exception as e:
+            log("ASR_FAIL %r" % (e,))
+            text = ""
+        if not text:
+            empties += 1
+            emit("empty")
+            if empties >= quiet_stop:
+                break
+            continue
+        empties = 0
+        log("talk heard=" + text)
+        if re.search(r"(别说了|停一下|停停|歇会儿|不聊了)", text):
+            reply = "行，我先闭嘴。"
+            emit("done", heard=text, reply=reply, mood=0)
+            break
+        fast = instant_answer(text)
+        if fast:
+            remember(text, fast)
+            emit("done", heard=text, reply=fast, mood=0, turn=n + 1)
+            continue
+        try:
+            raw = ask_glm(text, timeout=22)
+        except Exception as e:
+            log("LLM_FAIL %r" % (e,))
+            emit("error", heard=text, reply="脑子这会儿没连上，等下再聊。")
+            break
+        mood, reply = split_mood(raw)
+        if not reply:
+            reply = "嗯，我在听。"
+        remember(text, reply)
+        emit("done", heard=text, reply=reply, mood=mood, turn=n + 1)
+        write_state("done", heard=text, reply=reply, mood=mood)
+    emit("bye")
+    return 0
+
+
+def selftest():
+    """不碰麦克风、不联网的自检：句子切分、情绪摘出、本地秒答、模型链顺序、记忆条数。"""
+    ok = True
+    parts = split_sentences("早上好呀。今天几号？我先算一下，12 乘 13 等于 156。")
+    print("S1 分句", parts, "PASS" if len(parts) == 3 else "FAIL")
+    ok = ok and len(parts) == 3
+    mood, body = split_mood("3\n今天有点累，不想动。")
+    print("S2 情绪", mood, body[:6], "PASS" if mood == 3 and body else "FAIL")
+    ok = ok and mood == 3
+    print("S3 时间秒答", instant_answer("现在几点"), "PASS" if instant_answer("现在几点") else "FAIL")
+    ok = ok and bool(instant_answer("现在几点"))
+    print("S4 算数秒答", instant_answer("12 乘 13 等于多少"), "PASS" if "156" in (instant_answer("12 乘 13 等于多少") or "") else "FAIL")
+    ok = ok and "156" in (instant_answer("12 乘 13 等于多少") or "")
+    print("S5 模型链", MODEL_CHAIN, "PASS" if MODEL_CHAIN == ("glm-4-flash", "glm-4.7-flash", "glm-4-air") else "FAIL")
+    ok = ok and MODEL_CHAIN[0] == "glm-4-flash"
+    m = load_mem()
+    print("S6 记忆条数", len(m.get("turns", [])), "PASS" if len(m.get("turns", [])) <= HISTORY_KEEP else "FAIL")
+    ok = ok and len(m.get("turns", [])) <= HISTORY_KEEP
+    print("SUMMARY", "PASS" if ok else "FAIL")
+    return 0 if ok else 1
+
+
 def do_probe():
     out = {}
     try:
@@ -497,6 +729,13 @@ def main():
             return do_listen()
         if cmd == "wake":
             return do_wake()
+        if cmd == "talk":
+            return do_talk()
+        if cmd == "selftest":
+            return selftest()
+        if cmd == "stop":
+            _STOP["v"] = True
+            return 0
         if cmd == "say":
             speak(" ".join(args) if args else "你好，我是道。")
             return 0

@@ -14,6 +14,18 @@ using System.Text.RegularExpressions;
 
 public class DesktopPet : Form
 {
+    // 2026-11-25：逐像素 alpha 总开关。关掉就退回老的洋红透明键（留着好排查）
+    bool alphaLayer = true;
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            CreateParams cp = base.CreateParams;
+            if (alphaLayer) cp.ExStyle |= 0x00080000;   // WS_EX_LAYERED
+            return cp;
+        }
+    }
     [DllImport("user32.dll")]
     static extern bool SetProcessDPIAware();
 
@@ -30,6 +42,31 @@ public class DesktopPet : Form
     [DllImport("user32.dll")]
     public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, int crKey, byte alpha, int flags);
     public const int LWA_COLORKEY = 0x1;
+
+    // 2026-11-25 逐像素 alpha：不再用洋红透明键（那会把软边混成粉毛、硬边又全是锯齿），
+    // 改成 UpdateLayeredWindow 直接上 32bpp 预乘 ARGB，边缘自带抗锯齿。
+    [StructLayout(LayoutKind.Sequential)]
+    public struct APoint { public int x, y; public APoint(int x, int y) { this.x = x; this.y = y; } }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ASize { public int cx, cy; public ASize(int cx, int cy) { this.cx = cx; this.cy = cy; } }
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct ABlend { public byte Op, Flags, ConstAlpha, AlphaFmt; }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst, ref APoint pptDst,
+        ref ASize psize, IntPtr hdcSrc, ref APoint pptSrc, int crKey, ref ABlend pblend, int dwFlags);
+    [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+    [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+    [DllImport("gdi32.dll")] public static extern IntPtr SelectObject(IntPtr hdc, IntPtr h);
+    [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr h);
+    [DllImport("gdi32.dll")] public static extern bool DeleteDC(IntPtr hdc);
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BIHdr { public int biSize, biWidth, biHeight; public short biPlanes, biBitCount; public int biCompression, biSizeImage, biXPels, biYPels, biClrUsed, biClrImportant; }
+    [DllImport("gdi32.dll", SetLastError = true)]
+    public static extern IntPtr CreateDIBSection(IntPtr hdc, ref BIHdr pbmi, int usage, out IntPtr bits, IntPtr hSection, int offset);
+    [DllImport("kernel32.dll", EntryPoint = "RtlMoveMemory")]
+    public static extern void CopyMemory(IntPtr dest, IntPtr src, IntPtr len);
     static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
     const uint SWP_NOMOVE = 0x0002;
     const uint SWP_NOSIZE = 0x0001;
@@ -2424,6 +2461,29 @@ public class DesktopPet : Form
     }
 
     // 2026-11-25：坐骑改成真贴图（骨架\mount.png 或 exe 目录 mount.png），没有就退回程序画的椭圆兽
+    // 2026-11-25：挥手改成整张真动作立绘（wave_<形象>.png），不再把身体切成 48 条横带硬推。
+    // 横带一推，肩线/裙摆就错位，用户看到的就是"身体扭曲"。
+    Dictionary<int, Bitmap> waveArtMap = null;
+    Bitmap WaveArt(int sp)
+    {
+        if (waveArtMap == null)
+        {
+            waveArtMap = new Dictionary<int, Bitmap>();
+            for (int i = 0; i < 14; i++)
+            {
+                try
+                {
+                    Stream st = ResStream("wave_" + i + ".png");
+                    if (st == null) continue;
+                    using (Stream s2 = st) { waveArtMap[i] = new Bitmap(s2); }
+                }
+                catch { }
+            }
+        }
+        Bitmap b;
+        return waveArtMap.TryGetValue(sp, out b) ? b : null;
+    }
+
     Bitmap mountArt = null;
     bool mountTried = false;
     Bitmap GetMountArt()
@@ -2761,8 +2821,8 @@ public class DesktopPet : Form
         ShowInTaskbar = false;
         TopMost = true;
         StartPosition = FormStartPosition.Manual;
-        BackColor = Color.FromArgb(255, 0, 255);
-        TransparencyKey = Color.FromArgb(255, 0, 255);
+        BackColor = Color.Black;
+        if (!alphaLayer) TransparencyKey = Color.FromArgb(255, 0, 255);
         Text = "DaoPetWindow";
         // 系统缩放补偿：DPI 不感知的进程里，窗口会被系统按缩放比压小，导致身体被裁掉。
         // 这里按系统缩放比例把窗口放大，绘图区 s 会自动跟随，物理尺寸仍是设计尺寸。
@@ -7109,7 +7169,8 @@ public class DesktopPet : Form
             {
                 bool sw = ShowWindow(this.Handle, SW_SHOWNOACTIVATE);
                 bool pw = SetWindowPos(this.Handle, HWND_TOPMOST, Location.X, Location.Y, 0, 0, SWP_NOSIZE);
-                bool la = SetLayeredWindowAttributes(this.Handle, ColorTranslator.ToWin32(TransparencyKey), 255, LWA_COLORKEY);
+                bool la = true;
+                if (!alphaLayer) la = SetLayeredWindowAttributes(this.Handle, ColorTranslator.ToWin32(TransparencyKey), 255, LWA_COLORKEY);
                 TopMost = true;
             }
             catch { }
@@ -7411,16 +7472,43 @@ public class DesktopPet : Form
         if (busy)
         {
             idlePaintSkip = 0;
-            Invalidate();
+            RequestPaint();
         }
         else if ((++idlePaintSkip % 3) == 0)
         {
-            Invalidate();
+            RequestPaint();
         }
+    }
+
+    bool alphaInit = false;
+
+    // 逐像素 alpha 模式下不能只靠 Invalidate：带 WS_EX_LAYERED 又没设过属性时，
+    // 系统根本不发出 WM_PAINT，窗口就是一片透明（我这次就被这个坑掉了一版）。
+    // 所以这里固定两步：① 先 SetLayeredWindowAttributes 把图层初始化出来；
+    // ② 每帧直接调 PaintAlphaLayer 自己上屏，不指望 WM_PAINT。
+    void RequestPaint()
+    {
+        if (alphaLayer)
+        {
+            try { PaintAlphaLayer(); }
+            catch (Exception exR)
+            {
+                if (alphaFailN < 6)
+                {
+                    alphaFailN++;
+                    try { System.IO.File.AppendAllText(@"F:/Daodao/alpha_ulw.log", "reqpaint ERR " + exR.GetType().Name + " " + exR.Message + "\r\n"); } catch { }
+                }
+            }
+            return;
+        }
+        Invalidate();
     }
 
     void ForceLayer()
     {
+        // 注意：这里绝对不能顺手调 SetLayeredWindowAttributes(LWA_ALPHA)。
+        // 一调，UpdateLayeredWindow 就永远返回 false(err=183 已存在)，窗口一片透明。
+        if (alphaLayer) return;
         try { SetLayeredWindowAttributes(this.Handle, ColorTranslator.ToWin32(TransparencyKey), 255, LWA_COLORKEY); } catch { }
     }
 
@@ -7462,12 +7550,84 @@ public class DesktopPet : Form
         base.WndProc(ref m);
     }
 
+    // 贴图是按显示尺寸预缩放好的 1:1 位图，落点必须落在整像素上：
+    // 一落到半像素，GDI+ 每帧重采样，整只就发糊、还带闪烁。取最近整像素，
+    // 比原来的 Floor 少一点系统性偏上。
+    float SnapX(float v) { return (float)Math.Round(v); }
+
+    Bitmap alphaBuf = null;
+    IntPtr alphaDib = IntPtr.Zero, alphaDibBits = IntPtr.Zero, alphaMemDc = IntPtr.Zero;
+    int alphaDibW = 0, alphaDibH = 0, alphaFailN = 0;
+
+    // 逐像素 alpha 上屏：画进 32bpp 预乘缓冲，倒进常驻 DIB 段，再整块交给 DWM。
+    // 这一路是"软边 + 抗锯齿"的唯一活路：洋红透明键会把半透明像素混成粉毛，
+    // 而 v143 为了压粉毛把 alpha 夹成 0/255，边缘就成了楼梯——两个毛病同一个根。
+    void PaintAlphaLayer()
+    {
+        int w = ClientSize.Width, h = ClientSize.Height;
+        if (w <= 0 || h <= 0) return;
+        if (alphaBuf == null || alphaBuf.Width != w || alphaBuf.Height != h)
+        {
+            if (alphaBuf != null) alphaBuf.Dispose();
+            alphaBuf = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+        }
+        Stopwatch paintSw = Stopwatch.StartNew();
+        using (Graphics g = Graphics.FromImage(alphaBuf))
+        {
+            g.Clear(Color.Transparent);
+            PaintAll(g, w, h);
+        }
+        paintSw.Stop();
+        DgPaint(paintSw.Elapsed.TotalMilliseconds);
+
+        IntPtr screenDc = GetDC(IntPtr.Zero);
+        try
+        {
+            // DIB 段按尺寸缓存：每帧新建会白白扔掉 GDI 句柄，帧率掉到 46
+            if (alphaMemDc == IntPtr.Zero) alphaMemDc = CreateCompatibleDC(screenDc);
+            if (alphaDib == IntPtr.Zero || alphaDibW != w || alphaDibH != h)
+            {
+                if (alphaDib != IntPtr.Zero) { DeleteObject(alphaDib); alphaDib = IntPtr.Zero; alphaDibBits = IntPtr.Zero; }
+                BIHdr bi = new BIHdr();
+                bi.biSize = 40; bi.biWidth = w; bi.biHeight = -h;
+                bi.biPlanes = 1; bi.biBitCount = 32; bi.biCompression = 0;
+                bi.biSizeImage = w * h * 4;
+                alphaDib = CreateDIBSection(alphaMemDc, ref bi, 0, out alphaDibBits, IntPtr.Zero, 0);
+                alphaDibW = w; alphaDibH = h;
+                if (alphaDib == IntPtr.Zero || alphaDibBits == IntPtr.Zero) return;
+            }
+            // 注意：GetHbitmap 出来的 DIB alpha 全是 0，上屏就整块透明（窗口像消失）。
+            System.Drawing.Imaging.BitmapData bd = alphaBuf.LockBits(new Rectangle(0, 0, w, h), System.Drawing.Imaging.ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
+            try { CopyMemory(alphaDibBits, bd.Scan0, (IntPtr)(w * h * 4)); }
+            finally { alphaBuf.UnlockBits(bd); }
+            IntPtr oldBmp = SelectObject(alphaMemDc, alphaDib);
+            try
+            {
+                APoint dst = new APoint(Location.X, Location.Y);
+                ASize sz = new ASize(w, h);
+                APoint src = new APoint(0, 0);
+                ABlend bf = new ABlend();
+                bf.Op = 0; bf.Flags = 0; bf.ConstAlpha = 255; bf.AlphaFmt = 1;
+                bool okU = UpdateLayeredWindow(Handle, screenDc, ref dst, ref sz, alphaMemDc, ref src, 0, ref bf, 2);
+                if (!okU && alphaFailN < 3)
+                {
+                    alphaFailN++;
+                    try { System.IO.File.AppendAllText(@"F:/Daodao/alpha_ulw.log", DateTime.Now.ToString("HH:mm:ss") + " FAIL err=" + Marshal.GetLastWin32Error() + " size=" + w + "x" + h + "\r\n"); } catch { }
+                }
+            }
+            finally { if (oldBmp != IntPtr.Zero) SelectObject(alphaMemDc, oldBmp); }
+        }
+        finally { ReleaseDC(IntPtr.Zero, screenDc); }
+    }
+
+    int onPaintN = 0;
     protected override void OnPaint(PaintEventArgs e)
     {
         Stopwatch dgSw = Stopwatch.StartNew();
         try
         {
-            PaintAll(e.Graphics, ClientSize.Width, ClientSize.Height);
+            if (alphaLayer) PaintAlphaLayer();
+            else PaintAll(e.Graphics, ClientSize.Width, ClientSize.Height);
         }
         catch (Exception ex)
         {
@@ -7526,7 +7686,7 @@ public class DesktopPet : Form
     public void PaintAll(Graphics g, int cw, int ch)
     {
         ForceLayer();
-        g.Clear(Color.FromArgb(255, 0, 255));
+        if (alphaLayer) g.Clear(Color.Transparent); else g.Clear(Color.FromArgb(255, 0, 255));
         // 2026-11-25：缩放比按客户区/设计尺寸算，正常窗口就是 1.0；
         // 只要不是整数倍，人物边缘会被重采样成半透明，落到洋红透明键上就是粉边。
         // 所以这里只在必须缩放时才允许采样，其余情况保持 1:1（见下面 HardenKey 兜底）。
@@ -7758,7 +7918,7 @@ public class DesktopPet : Form
             DrawScenery(g, cx, footY + bob, baseW, targetH, t, sceneIdx, 1f);
 
         GraphicsState st = g.Save();
-        g.TranslateTransform((float)Math.Floor(cx + swayX), (float)Math.Floor(footY + bob));
+        g.TranslateTransform(SnapX(cx + swayX), SnapX(footY + bob));
         g.SmoothingMode = SmoothingMode.None;
         g.InterpolationMode = InterpolationMode.NearestNeighbor;
         g.PixelOffsetMode = PixelOffsetMode.None;
@@ -7850,7 +8010,7 @@ public class DesktopPet : Form
         GraphicsState st = g.Save();
         // 平移必须落在整像素上：坐标带小数就会让贴图落在半像素上，
         // 四周漏出一圈窗口底色，看着就是粉紫描边
-        g.TranslateTransform((float)Math.Floor(cx), (float)Math.Floor(footY + bob));
+        g.TranslateTransform(SnapX(cx), SnapX(footY + bob));
         // 不再旋转、不再缩放：只要绕着任意角度采样，边缘就会混出半透明，
         // 透明键窗口立刻把它染成粉紫描边。纯平移 + 一像素对一像素最干净
         g.SmoothingMode = SmoothingMode.None;
@@ -7941,6 +8101,7 @@ public class DesktopPet : Form
     Bitmap Hard(Bitmap src)
     {
         if (src == null) return null;
+        if (alphaLayer) return src;   // 逐像素 alpha 保留软边，抗锯齿还回来
         Bitmap cached;
         if (hardCache.TryGetValue(src, out cached)) return cached;
         Bitmap dst = null;
@@ -8049,6 +8210,26 @@ public class DesktopPet : Form
     void DrawPicture(Graphics g, float cx, float cy, float breathe)
     {
         if (faceCount <= 0 || faces == null) return;
+        // 2026-11-25：挥手立刻换整张抬手立绘，整只只做 1:1 平移，不切条、不推肩线
+        if (waveTicks > 0 && walkTicks <= 0 && runTicks <= 0 && lieAmt < 0.02f && !sitting)
+        {
+            Bitmap wv = WaveArt(species);
+            if (wv != null)
+            {
+                float dh = faces[species % faceCount].Height;
+                float dw = dh * wv.Width / Math.Max(1f, wv.Height);
+                Bitmap wdisp = GetDisplay(wv, (int)Math.Round(dw), (int)Math.Round(dh));
+                float bobW = 1.2f * breathe;
+                GraphicsState stW = g.Save();
+                g.TranslateTransform(SnapX(cx), SnapX(cy + 68f + bobW));
+                g.SmoothingMode = SmoothingMode.None;
+                g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                g.PixelOffsetMode = PixelOffsetMode.None;
+                DrawBmpAlpha(g, wdisp, new Rectangle(-(int)(dw / 2f), -(int)dh, (int)dw, (int)dh), 1f);
+                g.Restore(stW);
+                return;
+            }
+        }
         // 这个形象已经有整套姿势图：直接换图，手脚是真的动，不是把身体切条推开
         if (poses != null && poses.Length >= 5 && species == poseOwner)
         {
@@ -10780,7 +10961,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 143;
+    public const int APP_VER = 144;
 
     public static void Start()
     {

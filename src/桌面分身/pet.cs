@@ -2484,6 +2484,32 @@ public class DesktopPet : Form
         return waveArtMap.TryGetValue(sp, out b) ? b : null;
     }
 
+    // 2026-11-26：桌面坐骑原来是把「站姿」立绘直接摞在马上面，人就悬空站在鞍上——
+    // 这就是"这不是骑马"的根因。现在改成用骑姿立绘（ride_<形象>.png）：腿是分开坐下的，
+    // 臀部按 RIDE_SEAT 的比例落在鞍面上，马身再盖住小腿。
+    Dictionary<int, Bitmap> rideArtMap = null;
+    static readonly float[] RIDE_SEAT = { 0.606f, 0.668f, 0.680f, 0.665f, 0.680f, 0.652f, 0.680f,
+                                          0.579f, 0.600f, 0.667f, 0.680f, 0.608f, 0.597f, 0.680f };
+    Bitmap RideArt(int sp)
+    {
+        if (rideArtMap == null)
+        {
+            rideArtMap = new Dictionary<int, Bitmap>();
+            for (int i = 0; i < 14; i++)
+            {
+                try
+                {
+                    Stream st = ResStream("ride_" + i + ".png");
+                    if (st == null) continue;
+                    using (Stream s2 = st) { rideArtMap[i] = new Bitmap(s2); }
+                }
+                catch { }
+            }
+        }
+        Bitmap b;
+        return rideArtMap.TryGetValue(sp, out b) ? b : null;
+    }
+
     Bitmap mountArt = null;
     bool mountTried = false;
     Bitmap GetMountArt()
@@ -8210,6 +8236,39 @@ public class DesktopPet : Form
     void DrawPicture(Graphics g, float cx, float cy, float breathe)
     {
         if (faceCount <= 0 || faces == null) return;
+        // 2026-11-26：骑坐骑时整只换骑姿立绘（腿分开坐、臀落鞍面），不再叠站姿站到马背上
+        if (actKind == 3 && actAmt > 0.25f && !sitting && lieAmt < 0.02f && walkTicks <= 0 && runTicks <= 0)
+        {
+            Bitmap rd = RideArt(species);
+            if (rd != null)
+            {
+                float tH = faces[species % faceCount].Height;
+                float mh2 = tH * 0.70f;
+                float mTop = 6f - mh2 * 0.62f;
+                float saddle = mTop + mh2 * 0.36f;              // 鞍面：马高的 36% 处（对应 MOUNT_FR 0.64）
+                float rh = tH * 0.62f;
+                float rw = rh * rd.Width / Math.Max(1f, rd.Height);
+                float seatR = RIDE_SEAT[(species >= 0 && species < 14) ? species : 0];
+                float rTop = saddle - rh * seatR;
+                float bobbing = (float)Math.Sin(t * 6.4f) * tH * 0.010f;
+                int dwR = Math.Max(8, (int)Math.Round(rw)), dhR = Math.Max(8, (int)Math.Round(rh));
+                Bitmap rdisp = GetDisplay(rd, dwR, dhR);
+                GraphicsState stR = g.Save();
+                g.TranslateTransform(SnapX(cx), SnapX(cy + 68f + bobbing));
+                g.SmoothingMode = SmoothingMode.None;
+                g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                g.PixelOffsetMode = PixelOffsetMode.None;
+                // 顺序很关键：马先画、人后画。反过来的话，马脖子和鬃毛会把人的胸口整个盖住，
+                // 看上去像半个人陷进马肚子里（第一版就是这个毛病）。
+                DrawActProps(g, faces[species % faceCount].Width, tH, true);
+                // 鞍心在贴图里比图中心偏左 0.048 图宽（实测），人也跟着往左坐到鞍上，
+                // 不然会坐在马脖子上、鞍空在后面
+                int rxR = (int)Math.Round(-rw / 2f - tH * 0.045f);
+                DrawBmpAlpha(g, rdisp, new Rectangle(rxR, (int)Math.Round(rTop), dwR, dhR), 1f);
+                g.Restore(stR);
+                return;
+            }
+        }
         // 2026-11-25：挥手立刻换整张抬手立绘，整只只做 1:1 平移，不切条、不推肩线
         if (waveTicks > 0 && walkTicks <= 0 && runTicks <= 0 && lieAmt < 0.02f && !sitting)
         {
@@ -10961,7 +11020,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 144;
+    public const int APP_VER = 145;
 
     public static void Start()
     {

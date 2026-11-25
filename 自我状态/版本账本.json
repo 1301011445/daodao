@@ -1,255 +1,277 @@
 {
- "真用": {
-  "电脑": {
-   "版本": 143,
-   "最后": "2026-11-25 21:21 换新 143 并在桌面运行"
+  "真用": {
+    "电脑": {
+      "版本": 145,
+      "最后": "2026-11-25 23:5x 换新 145 并在桌面运行"
+    },
+    "手机": {
+      "版本": 140,
+      "最后": "待装 1.43"
+    }
   },
-  "手机": {
-   "版本": 140,
-   "最后": "待装 1.43"
+  "已结算": {},
+  "检测": {
+    "时间": "2026-11-25 21:21",
+    "电脑": 145,
+    "apk": 145,
+    "页面": 145,
+    "线上": 145,
+    "手机": 140,
+    "手机上报时间": "140",
+    "一致": "电脑145 / 手机140（1.45 未装）",
+    "落后": 1
+  },
+  "历史": [
+    {
+      "版本": "0.109",
+      "时间": "2026-11-22 17:26",
+      "电脑": {
+        "字节": 9933824,
+        "sha256": "ac443bc9fc93ac59"
+      },
+      "手机": {
+        "字节": 8183886,
+        "sha256": "d57214c7961f9510",
+        "versionCode": 109
+      },
+      "线上": {
+        "清单页": "app_17hpue26uuw",
+        "落地页": "app_17jdxkgf27q",
+        "data_ver": 109,
+        "exe": "https://aka.doubaocdn.com/s/YYpBAUhywv",
+        "apk": "https://aka.doubaocdn.com/s/r0KMBnpwg9"
+      },
+      "说明": "修点歌卡死/无声：DaoBridge 异步播放 + 媒体音量通道；JS 接 __daoSong 回调"
+    },
+    {
+      "版本": "1.13",
+      "时间": "2026-11-23 10:36",
+      "电脑": {
+        "字节": 9945600,
+        "sha256": "a121eeb3fc8afc36"
+      },
+      "手机": {
+        "字节": 13054490,
+        "sha256": "28b51b737ae0fe2f",
+        "versionCode": 113
+      },
+      "线上": {
+        "清单页": "app_17hpue26uuw",
+        "落地页": "app_17jdxkgf27q",
+        "data_ver": 113,
+        "exe": "https://aka.doubaocdn.com/s/3GIepybKBq",
+        "apk": "https://aka.doubaocdn.com/s/RYWfDNRHzd"
+      },
+      "说明": "v113：陈述句句末 -2Hz 降调、走路停步惯性 0.10、掉帧不补帧（相位单次≤1.1格）、好奇(5)配开心脸"
+    },
+    {
+      "版本": "1.14",
+      "时间": "2026-11-23 13:59",
+      "电脑": {
+        "字节": 9949184,
+        "sha256": "624ee46d51caaa15"
+      },
+      "手机": {
+        "字节": 13054490,
+        "sha256": "e5212b6b1ef90258",
+        "versionCode": 114
+      },
+      "线上": {
+        "清单页": "app_17hpue26uuw",
+        "落地页": "app_17jdxkgf27q",
+        "data_ver": 114,
+        "exe": "https://aka.doubaocdn.com/s/iawt24zMmZ",
+        "apk": "https://aka.doubaocdn.com/s/OZIeZGhMsA"
+      },
+      "说明": "v114：修手机端浮窗画面扭曲——drawWarp 头部侧倾改按头宽(0.35w×0.45)计算并 ±0.05w 封顶；挥手位移按 0.022w / 0.030h 像素封顶（原 0.055w/0.075h 在 180px 高的小立绘下会把手臂抻长、手折到脸边）"
+    },
+    {
+      "版本": "1.15",
+      "时间": "2026-11-24 09:23",
+      "电脑": {
+        "字节": 9946112,
+        "sha256": "353a6b5cdb3ec49b"
+      },
+      "手机": {
+        "字节": 13054490,
+        "sha256": "e5212b6b1ef90258",
+        "versionCode": 114
+      },
+      "说明": "v115：第3类落地——pet.cs 余摆阻尼(0.86) + rigSum 归一化 3.76；三分钟档母带降到 LUFS -16.03 / TP -1.78"
+    },
+    {
+      "版本": "117",
+      "时间": "2026-11-25 08:12",
+      "内容": "桌面端走路摆动相位接帧号；推广配图去粉边；骨头参数外置 bones.json"
+    }
+  ],
+  "versions": [
+    {
+      "ver": 127,
+      "date": "2026-11-25",
+      "title": "多坐骑 5 只（含飞剑）",
+      "apk": 17087029,
+      "apk_link": "https://aka.doubaocdn.com/s/LuIdd5Ijkx",
+      "exe_link": "https://aka.doubaocdn.com/s/PelVm7oLLD",
+      "pages": [
+        "app_17hpue26uuw",
+        "app_17jdxkgf27q"
+      ]
+    },
+    {
+      "ver": 128,
+      "date": "2026-11-25",
+      "title": "点它别乱跑（走路=原地迈步）",
+      "apk": 17087029,
+      "apk_link": "https://aka.doubaocdn.com/s/ZWSGwOBg5X",
+      "exe_link": "https://aka.doubaocdn.com/s/RvIjGAfbfs"
+    },
+    {
+      "ver": 129,
+      "date": "2026-11-25",
+      "title": "人物配坐骑（按坐骑各自比例）",
+      "apk": 17087029,
+      "apk_link": "https://aka.doubaocdn.com/s/D1KIDyBZdU",
+      "exe_link": "https://aka.doubaocdn.com/s/SQr5MkWbQb"
+    },
+    {
+      "ver": 130,
+      "date": "2026-11-25",
+      "title": "语音/对话/实时语音升级 + 坐骑自主",
+      "apk": 17087029,
+      "apk_link": "https://aka.doubaocdn.com/s/kCZwQFUyD4",
+      "exe": 13681664,
+      "exe_link": "https://aka.doubaocdn.com/s/RrFpjWijzq"
+    },
+    {
+      "ver": 136,
+      "date": "2026-11-25",
+      "title": "形象补齐：走路不再乱走/滑步",
+      "apk": 29065505,
+      "apk_link": "https://aka.doubaocdn.com/s/DtYKgapMJM",
+      "exe": 13707776,
+      "exe_link": "https://aka.doubaocdn.com/s/Cnf1l8Ior4",
+      "pages": [
+        "app_17hpue26uuw",
+        "app_17jdxkgf27q"
+      ]
+    },
+    {
+      "ver": 137,
+      "date": "2026-11-26",
+      "title": "手机悬浮窗放大+形象坐骑同步+会走会飞+网页更新检查",
+      "apk": 29065505,
+      "apk_link": "https://aka.doubaocdn.com/s/vvpEr6hTIJ",
+      "exe": 13707776,
+      "exe_link": "https://aka.doubaocdn.com/s/WOTOC311ae",
+      "pages": [
+        "app_17hpue26uuw",
+        "app_17jdxkgf27q"
+      ]
+    },
+    {
+      "ver": 138,
+      "date": "2026-11-26",
+      "title": "悬浮窗与 App 形象真机对齐",
+      "apk": 29065505,
+      "apk_link": "https://aka.doubaocdn.com/s/QnewAqhfga",
+      "exe": 13707776,
+      "exe_link": "https://aka.doubaocdn.com/s/FE7Q2fZVoU",
+      "pages": [
+        "app_17hpue26uuw",
+        "app_17jdxkgf27q"
+      ]
+    },
+    {
+      "ver": 139,
+      "date": "2026-11-26",
+      "title": "八帧走路真迈步（6/7 号）",
+      "apk": 31246217,
+      "apk_link": "https://aka.doubaocdn.com/s/SNZC9azVZP",
+      "exe": 14440448,
+      "exe_link": "https://aka.doubaocdn.com/s/VD9RhyLfuC",
+      "pages": [
+        "app_17hpue26uuw",
+        "app_17jdxkgf27q"
+      ]
+    },
+    {
+      "版本": 140,
+      "exe": 14438912,
+      "apk": 31242121,
+      "exe链接": "https://aka.doubaocdn.com/s/vOZ4r4KyTr",
+      "apk链接": "https://aka.doubaocdn.com/s/qn2DBTSnP6",
+      "说明": "生活动作只留骑坐骑；电视/喝茶/跳舞/转身/飞/御剑/滑板/轮滑与客厅/花丛/云海/海边场景下线；贴边探头防抖",
+      "时间": "2026-11-25 20:50",
+      "exe_link": "https://aka.doubaocdn.com/s/vOZ4r4KyTr",
+      "apk_link": "https://aka.doubaocdn.com/s/qn2DBTSnP6"
+    },
+    {
+      "版本": 141,
+      "exe": "F:\\Daodao\\道.exe",
+      "apk": "F:\\Daodao\\道.apk",
+      "exe_link": "https://aka.doubaocdn.com/s/Fali2ly4Jv",
+      "apk_link": "https://aka.doubaocdn.com/s/426Klj5RoP",
+      "exe链接": "https://aka.doubaocdn.com/s/Fali2ly4Jv",
+      "apk链接": "https://aka.doubaocdn.com/s/426Klj5RoP",
+      "说明": "桌面端：坐骑改画在身前、按身高0.70定尺的真马；兜底椭圆小兽（像蜗牛）删除；清掉无人调用的御剑/跳舞绘制代码",
+      "时间": "2026-11-25 21:05"
+    },
+    {
+      "版本": 142,
+      "exe": "F:\\Daodao\\道.exe",
+      "apk": "F:\\Daodao\\道.apk",
+      "exe_link": "https://aka.doubaocdn.com/s/Y8dVlmWSQH",
+      "apk_link": "https://aka.doubaocdn.com/s/2Uq3YvtbdO",
+      "exe链接": "https://aka.doubaocdn.com/s/Y8dVlmWSQH",
+      "apk链接": "https://aka.doubaocdn.com/s/2Uq3YvtbdO",
+      "说明": "手机悬浮窗放大到 20% 屏高（球 56dp）；加表情系统（expr_<序号>_happy/sad/angry/sleep，22 点后困脸）；单击轮演招手/点头/小跳/蹲下并带表情",
+      "时间": "2026-11-25 21:12"
+    },
+    {
+      "版本": 143,
+      "exe": "F:\\Daodao\\道.exe",
+      "apk": "F:\\Daodao\\道.apk",
+      "exe_link": "https://aka.doubaocdn.com/s/meCX7PfmYT",
+      "apk_link": "https://aka.doubaocdn.com/s/xxKayGhFZ4",
+      "exe链接": "https://aka.doubaocdn.com/s/meCX7PfmYT",
+      "apk链接": "https://aka.doubaocdn.com/s/xxKayGhFZ4",
+      "说明": "桌面端：立绘统一硬边（alpha 夹 0/255 + 剔洋红残留）去掉粉毛；立绘先预缩到显示尺寸再 1:1 切片，切片不再重复采样；走路/小跑时不铺脚下景，避免景跟着窗口滑成贴片",
+      "时间": "2026-11-25 21:21"
+    },
+    {
+      "版本": 144,
+      "exe": 21585408,
+      "apk": 38585449,
+      "exe_link": "https://aka.doubaocdn.com/s/zOrhwIUbuK",
+      "apk_link": "https://aka.doubaocdn.com/s/H8ZktvVVCI",
+      "exe链接": "https://aka.doubaocdn.com/s/zOrhwIUbuK",
+      "apk链接": "https://aka.doubaocdn.com/s/H8ZktvVVCI",
+      "说明": "桌面改逐像素 alpha（软边/抗锯齿回来，无粉毛无锯齿）；挥手换整张抬手立绘，不再切 48 条横带硬推；DIB 段缓存 + 每帧直推上屏；落点取最近整像素",
+      "时间": "2026-11-25 21:55"
+    },
+    {
+      "版本": 145,
+      "exe": 26413568,
+      "apk": 38585449,
+      "exe_link": "https://aka.doubaocdn.com/s/MWp2UcMjtT",
+      "apk_link": "https://aka.doubaocdn.com/s/UrjlJ4Ke2T",
+      "exe链接": "https://aka.doubaocdn.com/s/MWp2UcMjtT",
+      "apk链接": "https://aka.doubaocdn.com/s/UrjlJ4Ke2T",
+      "说明": "桌面坐骑改真骑姿立绘 ride_0~13（腿分开坐、臀按 RIDE_SEAT 落鞍面、人左移 0.045 身高坐到鞍心、马在人后），exe 内嵌骑姿素材",
+      "时间": "2026-11-26 00:05"
+    }
+  ],
+  "current": 145,
+  "notes": {
+    "131": "骑姿上鞍：14 张跨坐立绘，臀落鞍位，修坐骑下标越界",
+    "132": "坐骑会动 + 说话口型 + 放歌跳舞（悬浮窗）",
+    "133": "大模型给动作标签（act/mount），窗口照做；带模型兜底挑选",
+    "134": "14 只挥手动作立绘入库；挥手改画真动作图",
+    "135": "hear.py VadGate 端点检测 + pet.cs 唤醒门自适应；判据 V5-1~V5-7 PASS",
+    "136": "修 dump 被单实例锁挡、走路 tripX 逐帧累加、速度超身材、步频拍脑袋、摆幅 4.5%→1.8%、朝向用错变量、巡走 3.2s→29s",
+    "137": "悬浮窗 15% 屏高、App 换形象同步到悬浮窗、走路 12.6dp/秒+腾空漂浮、桌面端修说话发抖；新增网页更新检查 W0~W5",
+    "138": "开机把当前形象推给手机悬浮窗（修 App 与悬浮窗不一致）；真机实测悬浮窗 180x360px、走动+漂浮可测",
+    "139": "6/7 号八帧走路换成真迈步（图像模型重画+切片对齐），A8 由 FAIL 转 PASS"
   }
- },
- "已结算": {},
- "检测": {
-  "时间": "2026-11-25 21:21",
-  "电脑": 143,
-  "apk": 143,
-  "页面": 143,
-  "线上": 143,
-  "手机": 140,
-  "手机上报时间": "140",
-  "一致": "电脑143 / 手机140（1.43 未装）",
-  "落后": 1
- },
- "历史": [
-  {
-   "版本": "0.109",
-   "时间": "2026-11-22 17:26",
-   "电脑": {
-    "字节": 9933824,
-    "sha256": "ac443bc9fc93ac59"
-   },
-   "手机": {
-    "字节": 8183886,
-    "sha256": "d57214c7961f9510",
-    "versionCode": 109
-   },
-   "线上": {
-    "清单页": "app_17hpue26uuw",
-    "落地页": "app_17jdxkgf27q",
-    "data_ver": 109,
-    "exe": "https://aka.doubaocdn.com/s/YYpBAUhywv",
-    "apk": "https://aka.doubaocdn.com/s/r0KMBnpwg9"
-   },
-   "说明": "修点歌卡死/无声：DaoBridge 异步播放 + 媒体音量通道；JS 接 __daoSong 回调"
-  },
-  {
-   "版本": "1.13",
-   "时间": "2026-11-23 10:36",
-   "电脑": {
-    "字节": 9945600,
-    "sha256": "a121eeb3fc8afc36"
-   },
-   "手机": {
-    "字节": 13054490,
-    "sha256": "28b51b737ae0fe2f",
-    "versionCode": 113
-   },
-   "线上": {
-    "清单页": "app_17hpue26uuw",
-    "落地页": "app_17jdxkgf27q",
-    "data_ver": 113,
-    "exe": "https://aka.doubaocdn.com/s/3GIepybKBq",
-    "apk": "https://aka.doubaocdn.com/s/RYWfDNRHzd"
-   },
-   "说明": "v113：陈述句句末 -2Hz 降调、走路停步惯性 0.10、掉帧不补帧（相位单次≤1.1格）、好奇(5)配开心脸"
-  },
-  {
-   "版本": "1.14",
-   "时间": "2026-11-23 13:59",
-   "电脑": {
-    "字节": 9949184,
-    "sha256": "624ee46d51caaa15"
-   },
-   "手机": {
-    "字节": 13054490,
-    "sha256": "e5212b6b1ef90258",
-    "versionCode": 114
-   },
-   "线上": {
-    "清单页": "app_17hpue26uuw",
-    "落地页": "app_17jdxkgf27q",
-    "data_ver": 114,
-    "exe": "https://aka.doubaocdn.com/s/iawt24zMmZ",
-    "apk": "https://aka.doubaocdn.com/s/OZIeZGhMsA"
-   },
-   "说明": "v114：修手机端浮窗画面扭曲——drawWarp 头部侧倾改按头宽(0.35w×0.45)计算并 ±0.05w 封顶；挥手位移按 0.022w / 0.030h 像素封顶（原 0.055w/0.075h 在 180px 高的小立绘下会把手臂抻长、手折到脸边）"
-  },
-  {
-   "版本": "1.15",
-   "时间": "2026-11-24 09:23",
-   "电脑": {
-    "字节": 9946112,
-    "sha256": "353a6b5cdb3ec49b"
-   },
-   "手机": {
-    "字节": 13054490,
-    "sha256": "e5212b6b1ef90258",
-    "versionCode": 114
-   },
-   "说明": "v115：第3类落地——pet.cs 余摆阻尼(0.86) + rigSum 归一化 3.76；三分钟档母带降到 LUFS -16.03 / TP -1.78"
-  },
-  {
-   "版本": "117",
-   "时间": "2026-11-25 08:12",
-   "内容": "桌面端走路摆动相位接帧号；推广配图去粉边；骨头参数外置 bones.json"
-  }
- ],
- "versions": [
-  {
-   "ver": 127,
-   "date": "2026-11-25",
-   "title": "多坐骑 5 只（含飞剑）",
-   "apk": 17087029,
-   "apk_link": "https://aka.doubaocdn.com/s/LuIdd5Ijkx",
-   "exe_link": "https://aka.doubaocdn.com/s/PelVm7oLLD",
-   "pages": [
-    "app_17hpue26uuw",
-    "app_17jdxkgf27q"
-   ]
-  },
-  {
-   "ver": 128,
-   "date": "2026-11-25",
-   "title": "点它别乱跑（走路=原地迈步）",
-   "apk": 17087029,
-   "apk_link": "https://aka.doubaocdn.com/s/ZWSGwOBg5X",
-   "exe_link": "https://aka.doubaocdn.com/s/RvIjGAfbfs"
-  },
-  {
-   "ver": 129,
-   "date": "2026-11-25",
-   "title": "人物配坐骑（按坐骑各自比例）",
-   "apk": 17087029,
-   "apk_link": "https://aka.doubaocdn.com/s/D1KIDyBZdU",
-   "exe_link": "https://aka.doubaocdn.com/s/SQr5MkWbQb"
-  },
-  {
-   "ver": 130,
-   "date": "2026-11-25",
-   "title": "语音/对话/实时语音升级 + 坐骑自主",
-   "apk": 17087029,
-   "apk_link": "https://aka.doubaocdn.com/s/kCZwQFUyD4",
-   "exe": 13681664,
-   "exe_link": "https://aka.doubaocdn.com/s/RrFpjWijzq"
-  },
-  {
-   "ver": 136,
-   "date": "2026-11-25",
-   "title": "形象补齐：走路不再乱走/滑步",
-   "apk": 29065505,
-   "apk_link": "https://aka.doubaocdn.com/s/DtYKgapMJM",
-   "exe": 13707776,
-   "exe_link": "https://aka.doubaocdn.com/s/Cnf1l8Ior4",
-   "pages": [
-    "app_17hpue26uuw",
-    "app_17jdxkgf27q"
-   ]
-  },
-  {
-   "ver": 137,
-   "date": "2026-11-26",
-   "title": "手机悬浮窗放大+形象坐骑同步+会走会飞+网页更新检查",
-   "apk": 29065505,
-   "apk_link": "https://aka.doubaocdn.com/s/vvpEr6hTIJ",
-   "exe": 13707776,
-   "exe_link": "https://aka.doubaocdn.com/s/WOTOC311ae",
-   "pages": [
-    "app_17hpue26uuw",
-    "app_17jdxkgf27q"
-   ]
-  },
-  {
-   "ver": 138,
-   "date": "2026-11-26",
-   "title": "悬浮窗与 App 形象真机对齐",
-   "apk": 29065505,
-   "apk_link": "https://aka.doubaocdn.com/s/QnewAqhfga",
-   "exe": 13707776,
-   "exe_link": "https://aka.doubaocdn.com/s/FE7Q2fZVoU",
-   "pages": [
-    "app_17hpue26uuw",
-    "app_17jdxkgf27q"
-   ]
-  },
-  {
-   "ver": 139,
-   "date": "2026-11-26",
-   "title": "八帧走路真迈步（6/7 号）",
-   "apk": 31246217,
-   "apk_link": "https://aka.doubaocdn.com/s/SNZC9azVZP",
-   "exe": 14440448,
-   "exe_link": "https://aka.doubaocdn.com/s/VD9RhyLfuC",
-   "pages": [
-    "app_17hpue26uuw",
-    "app_17jdxkgf27q"
-   ]
-  },
-  {
-   "版本": 140,
-   "exe": 14438912,
-   "apk": 31242121,
-   "exe链接": "https://aka.doubaocdn.com/s/vOZ4r4KyTr",
-   "apk链接": "https://aka.doubaocdn.com/s/qn2DBTSnP6",
-   "说明": "生活动作只留骑坐骑；电视/喝茶/跳舞/转身/飞/御剑/滑板/轮滑与客厅/花丛/云海/海边场景下线；贴边探头防抖",
-   "时间": "2026-11-25 20:50",
-   "exe_link": "https://aka.doubaocdn.com/s/vOZ4r4KyTr",
-   "apk_link": "https://aka.doubaocdn.com/s/qn2DBTSnP6"
-  },
-  {
-   "版本": 141,
-   "exe": "F:\\Daodao\\道.exe",
-   "apk": "F:\\Daodao\\道.apk",
-   "exe_link": "https://aka.doubaocdn.com/s/Fali2ly4Jv",
-   "apk_link": "https://aka.doubaocdn.com/s/426Klj5RoP",
-   "exe链接": "https://aka.doubaocdn.com/s/Fali2ly4Jv",
-   "apk链接": "https://aka.doubaocdn.com/s/426Klj5RoP",
-   "说明": "桌面端：坐骑改画在身前、按身高0.70定尺的真马；兜底椭圆小兽（像蜗牛）删除；清掉无人调用的御剑/跳舞绘制代码",
-   "时间": "2026-11-25 21:05"
-  },
-  {
-   "版本": 142,
-   "exe": "F:\\Daodao\\道.exe",
-   "apk": "F:\\Daodao\\道.apk",
-   "exe_link": "https://aka.doubaocdn.com/s/Y8dVlmWSQH",
-   "apk_link": "https://aka.doubaocdn.com/s/2Uq3YvtbdO",
-   "exe链接": "https://aka.doubaocdn.com/s/Y8dVlmWSQH",
-   "apk链接": "https://aka.doubaocdn.com/s/2Uq3YvtbdO",
-   "说明": "手机悬浮窗放大到 20% 屏高（球 56dp）；加表情系统（expr_<序号>_happy/sad/angry/sleep，22 点后困脸）；单击轮演招手/点头/小跳/蹲下并带表情",
-   "时间": "2026-11-25 21:12"
-  },
-  {
-   "版本": 143,
-   "exe": "F:\\Daodao\\道.exe",
-   "apk": "F:\\Daodao\\道.apk",
-   "exe_link": "https://aka.doubaocdn.com/s/meCX7PfmYT",
-   "apk_link": "https://aka.doubaocdn.com/s/xxKayGhFZ4",
-   "exe链接": "https://aka.doubaocdn.com/s/meCX7PfmYT",
-   "apk链接": "https://aka.doubaocdn.com/s/xxKayGhFZ4",
-   "说明": "桌面端：立绘统一硬边（alpha 夹 0/255 + 剔洋红残留）去掉粉毛；立绘先预缩到显示尺寸再 1:1 切片，切片不再重复采样；走路/小跑时不铺脚下景，避免景跟着窗口滑成贴片",
-   "时间": "2026-11-25 21:21"
-  }
- ],
- "current": 143,
- "notes": {
-  "131": "骑姿上鞍：14 张跨坐立绘，臀落鞍位，修坐骑下标越界",
-  "132": "坐骑会动 + 说话口型 + 放歌跳舞（悬浮窗）",
-  "133": "大模型给动作标签（act/mount），窗口照做；带模型兜底挑选",
-  "134": "14 只挥手动作立绘入库；挥手改画真动作图",
-  "135": "hear.py VadGate 端点检测 + pet.cs 唤醒门自适应；判据 V5-1~V5-7 PASS",
-  "136": "修 dump 被单实例锁挡、走路 tripX 逐帧累加、速度超身材、步频拍脑袋、摆幅 4.5%→1.8%、朝向用错变量、巡走 3.2s→29s",
-  "137": "悬浮窗 15% 屏高、App 换形象同步到悬浮窗、走路 12.6dp/秒+腾空漂浮、桌面端修说话发抖；新增网页更新检查 W0~W5",
-  "138": "开机把当前形象推给手机悬浮窗（修 App 与悬浮窗不一致）；真机实测悬浮窗 180x360px、走动+漂浮可测",
-  "139": "6/7 号八帧走路换成真迈步（图像模型重画+切片对齐），A8 由 FAIL 转 PASS"
- }
 }

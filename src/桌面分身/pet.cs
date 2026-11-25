@@ -2791,7 +2791,7 @@ public class DesktopPet : Form
             ApplyPose(pick);
             species = pick;
         }
-        sceneIdx = (int)(DateTime.Now.DayOfYear % 6);   // 开机就在今天那张景里
+        sceneIdx = (int)(DateTime.Now.DayOfYear % 2);   // 开机就在今天那张景里（只剩城市/乡野两张）
         dayStamp = DateTime.Today;
         // 同一天反复重启不再重做图标。以前每次启动都重写 ico 并 Save 一遍 lnk，
         // Explorer 的图标缓存被一次次击穿，桌面上就会出现那个两个方块叠着的默认占位图标。
@@ -7190,18 +7190,18 @@ public class DesktopPet : Form
         sleepy = false;   // v22 起不再犯困：睡觉的躺床画面整体撤掉
         if (lieHold > 0) lieHold--;
         if (actHold > 0) actHold--;
-        // 脚下的景：一天摸一张，同一天里不来回跳，跨天自己换
+        // 2026-11-25：景只剩城市(0)/乡野(1)两张（骑坐骑用乡野），海边/花丛/云海/客厅随动作一起删
         sceneTick++;
         if (sceneTick > 2200)
         {
             sceneTick = 0;
-            int want = (int)(DateTime.Now.DayOfYear % 6);
+            int want = (int)(DateTime.Now.DayOfYear % 2);
             if (sceneIdx != want) sceneIdx = want;
         }
-        // 闲着的时候偶尔自己跳个舞、沏杯茶、坐那儿看会儿电视，让它像个有生活的人
+        // 闲着的时候偶尔自己骑一段（其他生活场景都下线了，只剩这一个）
         if (actHold <= 0 && !lying && !sitting && !mouseDown && rnd.Next(1500) == 0)
         {
-            actKind = 4 + rnd.Next(3);
+            actKind = 3;
             actHold = 210 + rnd.Next(210);
         }
         // 没人理的时候也会自己开口。一直不吭声，就只剩一张会动的图
@@ -7275,7 +7275,7 @@ public class DesktopPet : Form
                 walkCounter++;
                 // 2026-11-25：原来计数器 200 跳（≈3.2 秒）就重新挑目标，等于每隔三秒就自己走掉一次。
                 // 点它、跟它说话，它抬手就走 —— 这就是「一碰就往远处跑」。现在改成 1800 跳（≈29 秒）。
-                if (walkCounter > 1800 || (actHold > 0 && ((actKind >= 1 && actKind <= 3) || actKind == 7 || actKind == 8)))
+                if (walkCounter > 1800 || (actHold > 0 && actKind == 3))
                 {
                     walkCounter = 0;
                     try

@@ -415,13 +415,13 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
   ];
 
   // 场景：手机上也铺整幅画，不再只是一块渐变底。图放在 assets 里，跟这个 html 同目录
-  var SCENE_FILES = ['scene_city_s.png', 'scene_field_s.png', 'scene_sea_s.png',
-                     'scene_flower_s.png', 'scene_xianxia_s.png', 'scene_home_s.png'];
-  // 一天一张景，跟电脑端同步
+  // 2026-11-25：景只留城市(0)与乡野(1)。海边/花丛/云海/客厅四条随动作下线，不再加载
+  var SCENE_FILES = ['scene_city_s.png', 'scene_field_s.png'];
+  // 一天一张景，跟电脑端同步：在剩下的两张里轮
   function todayScene() {
     var d = new Date();
     var doy = Math.floor((d - new Date(d.getFullYear(), 0, 0)) / 86400000);
-    return doy % 6;
+    return doy % 2;
   }
 
   // 八帧走路序列（image_edit 出图后按 8 等分切；只有少女这一形象有素材）
@@ -437,22 +437,16 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
     sim.src = n;
   });
 
-  // 动作：跟电脑端共用一套编号 1 飞 2 御剑 3 坐骑 4 跳舞 5 喝茶 6 电视 7 滑板 8 轮滑
+  // 动作：2026-11-25 起只留 3 坐骑（与电脑端同号）。飞/御剑/跳舞/喝茶/电视/滑板/轮滑已下线
   var actKind = 0, actAmt = 0;
-  var swayX = 0;   // 重心左右转移（走路交替落脚 / 跳舞重心摆动），不动画本身只加位移
+  var swayX = 0;   // 重心左右转移（走路交替落脚），不动画本身只加位移
   // 走动：人往前走，场景往后退，看着就像真的在场景里走了一大段
   var walkX = 0, camX = 0, walkDir = 1;
   function actOfMode(m) {
-    var map = { fly: 1, sword: 2, ride: 3, dance: 4, tea: 5, tv: 6, skate: 7, roller: 8 };
-    return map[m] || 0;
+    return m === 'ride' ? 3 : 0;
   }
   function sceneForAct(k) {
-    if (k === 1) return 2;                 // 飞 → 海边日落
-    if (k === 2) return 4;                 // 御剑 → 仙侠云海
     if (k === 3) return 1;                 // 骑坐骑 → 乡野稻田
-    if (k === 5) return 3;                 // 喝茶 → 花丛
-    if (k === 6) return 5;                 // 看电视 → 客厅
-    if (k === 7 || k === 8) return 0;      // 滑板、轮滑 → 城市夜景
     return -1;
   }
 
@@ -664,172 +658,23 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
         ctx.lineTo(bx0 + Math.sin(t * 1.7 + i) * 4, by0);
         ctx.stroke();
       }
-    } else if (sceneIdx === 2) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-      ctx.lineWidth = 1.6;
-      for (i = 0; i < 4; i++) {
-        y = 62 + i * 18;
-        x = Math.sin(t * 0.8 + i) * 12;
-        ctx.beginPath();
-        ctx.moveTo(-10 + x, y);
-        ctx.bezierCurveTo(60 + x, y - 5, 140 + x, y + 5, CW + 10 + x, y - 2);
-        ctx.stroke();
-      }
-    } else if (sceneIdx === 3) {
-      for (i = 0; i < 12; i++) {
-        x = (i * 47 + Math.sin(t * 0.7 + i) * 18) % CW;
-        y = (i * 53 + t * 34) % CH;
-        ctx.fillStyle = (i % 3 === 0) ? 'rgba(255,232,150,0.7)' : 'rgba(255,190,215,0.7)';
-        ctx.beginPath(); ctx.ellipse(x, y, 2.2, 1.4, t * 0.6 + i, 0, 6.284); ctx.fill();
-      }
-      // 两只蝴蝶在草上绕圈，翅膀一开一合
-      for (i = 0; i < 2; i++) {
-        var bph = t * 0.8 + i * 2.3;
-        var bxx = CW * 0.5 + Math.sin(bph * 1.15) * 62;
-        var byy = CH * 0.42 + i * 26 + Math.sin(bph * 1.9) * 14;
-        var flap = 2.0 + 2.2 * Math.abs(Math.sin(t * 9.4 + i * 1.5));
-        ctx.fillStyle = (i === 0) ? 'rgba(255,208,116,0.8)' : 'rgba(252,250,246,0.8)';
-        ctx.beginPath(); ctx.ellipse(bxx - flap * 0.5, byy, flap, 2.4, 0, 0, 6.284); ctx.fill();
-        ctx.beginPath(); ctx.ellipse(bxx + flap * 0.5, byy, flap, 2.4, 0, 0, 6.284); ctx.fill();
-        ctx.fillStyle = 'rgba(90,70,50,0.8)';
-        ctx.beginPath(); ctx.ellipse(bxx, byy, 1.1, 2.2, 0, 0, 6.284); ctx.fill();
-      }
-    } else if (sceneIdx === 4) {
-      ctx.fillStyle = 'rgba(255,255,255,0.16)';
-      for (i = 0; i < 2; i++) {
-        x = (t * 8 + i * 120) % (CW + 80) - 40;
-        ctx.beginPath(); ctx.ellipse(x, 46 + i * 16, 46, 13, 0, 0, 6.284); ctx.fill();
-      }
-      for (i = 0; i < 10; i++) {
-        x = (i * 31 + Math.sin(t * 0.8 + i) * 14) % CW;
-        y = (i * 41 + t * 26) % CH;
-        ctx.fillStyle = 'rgba(255,196,224,0.75)';
-        ctx.beginPath(); ctx.ellipse(x, y, 2, 1.2, i + t * 0.5, 0, 6.284); ctx.fill();
-      }
-    } else if (sceneIdx === 5) {
-      var br = 0.5 + 0.5 * Math.sin(t * 2.0);
-      ctx.fillStyle = 'rgba(255,214,140,' + (0.10 + 0.08 * br) + ')';
-      ctx.beginPath(); ctx.ellipse(38, 130, 34, 40, 0, 0, 6.284); ctx.fill();
-      // 客厅那台电视一直开着，屏幕上一道光在扫
-      var tvx = CW * 0.78, tvy = CH * 0.40, tvw = CW * 0.20, tvh = CH * 0.13;
-      ctx.fillStyle = 'rgba(126,186,255,' + (0.55 + 0.25 * br) + ')';
-      ctx.fillRect(tvx, tvy, tvw, tvh);
-      ctx.fillStyle = 'rgba(255,255,255,0.7)';
-      ctx.fillRect(tvx + 2, tvy + tvh * ((t * 0.9) % 1), tvw - 4, 1.6);
     }
+    // 2026-11-25：海边(2)/花丛(3)/云海(4)/客厅(5)四条景随对应动作下线，只留城市与乡野
   }
 
-  // 动作道具：front=false 画在身后（剑、坐骑），true 画在身前（杯子、板、音符）
+  // 动作道具：2026-11-25 起只留坐骑。飞/御剑/茶杯/电视/滑板/轮滑/跳舞的道具全部下线
   function drawActProps(front) {
-    if (actAmt < 0.03 || actKind <= 0) return;
-    var a = actAmt, i, x, y;
+    if (actAmt < 0.03 || actKind !== 3) return;
+    var a = actAmt;
     if (!front) {
-      if (actKind === 1) {
-        // 飞：披风先撤了 —— 画出来那块红布太假，等真做出像样的披风再穿上。
-        // 现在只给脚下一层被风托着的气流，人照样是离地飘着的
-        ctx.fillStyle = 'rgba(206,232,255,' + 0.26 * a + ')';
-        ctx.beginPath(); ctx.ellipse(0, 4, TARGET_H * 0.28, 4.0, 0, 0, 6.284); ctx.fill();
-        for (i = 0; i < 3; i++) {
-          ctx.strokeStyle = 'rgba(232,244,255,' + 0.22 * a + ')';
-          ctx.lineWidth = 1.1;
-          var wx0 = -TARGET_H * 0.22 + i * 9, wy0 = 2 + i * 2;
-          ctx.beginPath();
-          ctx.moveTo(wx0, wy0);
-          ctx.quadraticCurveTo(wx0 - 12, wy0 + 3 + Math.sin(t * 4 + i) * 1.2, wx0 - 26, wy0 + 5);
-          ctx.stroke();
-        }
-      } else if (actKind === 2) {
-        // 御剑：脚下一道长光
-        ctx.fillStyle = 'rgba(150,220,255,' + 0.7 * a + ')';
-        ctx.beginPath(); ctx.ellipse(0, 5, TARGET_H * 0.46, 5, 0, 0, 6.284); ctx.fill();
-        ctx.fillStyle = 'rgba(255,255,255,' + 0.55 * a + ')';
-        ctx.beginPath(); ctx.ellipse(0, 4, TARGET_H * 0.30, 2.2, 0, 0, 6.284); ctx.fill();
-        // v0.93：光下面补一把真的剑，人踩在剑身上，不再是"空踩一团光"
-        var swLen = TARGET_H * 0.46, swY = 9;
-        ctx.fillStyle = 'rgba(214,238,255,' + 0.95 * a + ')';
-        ctx.beginPath(); ctx.ellipse(0, swY, swLen, 3.4, -0.05, 0, 6.284); ctx.fill();
-        ctx.fillStyle = 'rgba(255,255,255,' + a + ')';
-        ctx.beginPath(); ctx.ellipse(0, swY - 0.6, swLen * 0.92, 1.4, -0.05, 0, 6.284); ctx.fill();
-        // 剑柄：左端一小段粗一点，带护手
-        ctx.fillStyle = 'rgba(120,96,72,' + 0.95 * a + ')';
-        ctx.beginPath(); ctx.ellipse(-swLen - 2, swY + 1.4, TARGET_H * 0.055, 3.0, -0.05, 0, 6.284); ctx.fill();
-        ctx.fillStyle = 'rgba(176,150,108,' + 0.9 * a + ')';
-        ctx.beginPath(); ctx.rect(-swLen - 6, swY - 5, 3.2, 10); ctx.fill();
-      } else if (actKind === 3) {
-        // 坐骑：一只侧身的小兽，一头一尾
-        ctx.fillStyle = 'rgba(122,96,70,' + 0.92 * a + ')';
-        ctx.beginPath(); ctx.ellipse(0, -8, TARGET_H * 0.48, TARGET_H * 0.16, 0, 0, 6.284); ctx.fill();
-        ctx.beginPath(); ctx.arc(-TARGET_H * 0.44, -TARGET_H * 0.22, TARGET_H * 0.10, 0, 6.284); ctx.fill();
-        ctx.fillStyle = 'rgba(92,72,54,' + 0.9 * a + ')';
-        ctx.beginPath(); ctx.moveTo(TARGET_H * 0.46, -TARGET_H * 0.14);
-        ctx.quadraticCurveTo(TARGET_H * 0.58, -TARGET_H * 0.24, TARGET_H * 0.52, -TARGET_H * 0.04);
-        ctx.fill();
-      }
-    } else {
-      if (actKind === 5) {
-        // 喝茶：右手边一杯热茶，杯口冒热气（v0.93：位置挪到手边，不再挂在腰侧）
-        x = TARGET_H * 0.155; y = -TARGET_H * 0.44;
-        ctx.fillStyle = 'rgba(250,250,248,' + a + ')';
-        ctx.beginPath(); ctx.rect(x - 7, y - 9, 14, 17); ctx.fill();
-        ctx.strokeStyle = 'rgba(205,200,192,' + a + ')'; ctx.lineWidth = 1.3;
-        ctx.beginPath(); ctx.rect(x - 7, y - 9, 14, 17); ctx.stroke();
-        ctx.fillStyle = 'rgba(116,70,42,' + a + ')';
-        ctx.beginPath(); ctx.ellipse(x, y - 8, 6, 1.8, 0, 0, 6.284); ctx.fill();
-        // v0.93：杯口往上飘两缕热气，一眼能看出是"热茶"而不是拿个白块
-        for (i = 0; i < 2; i++) {
-          ctx.strokeStyle = 'rgba(255,255,255,' + 0.30 * a + ')'; ctx.lineWidth = 1.1;
-          var st0 = x - 2 + i * 4, st1 = y - 10;
-          ctx.beginPath();
-          ctx.moveTo(st0, st1);
-          for (var seg = 1; seg <= 3; seg++) {
-            ctx.lineTo(st0 + Math.sin(t * 3 + i * 1.7 + seg) * 2.4, st1 - seg * 5 - ((t * 9) % 5));
-          }
-          ctx.stroke();
-        }
-      } else if (actKind === 6) {
-        // v0.93：看电视原来什么都没画（只有一个姿势），这里补一台亮着的小电视
-        var tvW = TARGET_H * 0.30, tvH = tvW * 0.72;
-        var tvX = TARGET_H * 0.34, tvY = -TARGET_H * 0.30;
-        ctx.fillStyle = 'rgba(38,40,50,' + 0.95 * a + ')';
-        ctx.beginPath(); ctx.rect(tvX - tvW / 2, tvY - tvH / 2, tvW, tvH); ctx.fill();
-        var flick = 0.52 + 0.14 * Math.sin(t * 9.3) + 0.06 * Math.sin(t * 21.7);
-        ctx.fillStyle = 'rgba(150,205,235,' + flick * a + ')';
-        ctx.beginPath(); ctx.rect(tvX - tvW / 2 + 3, tvY - tvH / 2 + 3, tvW - 6, tvH - 6); ctx.fill();
-        // 屏幕里一条扫过去的高光，像在放画面
-        var scanY = tvY - tvH / 2 + 4 + ((t * 26) % (tvH - 8));
-        ctx.fillStyle = 'rgba(255,255,255,' + 0.28 * a + ')';
-        ctx.beginPath(); ctx.rect(tvX - tvW / 2 + 3, scanY, tvW - 6, 2.2); ctx.fill();
-        // 底座
-        ctx.fillStyle = 'rgba(38,40,50,' + 0.9 * a + ')';
-        ctx.beginPath(); ctx.rect(tvX - 3, tvY + tvH / 2, 6, TARGET_H * 0.045); ctx.fill();
-        ctx.beginPath(); ctx.rect(tvX - 10, tvY + tvH / 2 + TARGET_H * 0.045, 20, 3); ctx.fill();
-      } else if (actKind === 7 || actKind === 8) {
-        // 滑板、轮滑：身后三道速度线 + 脚下一条板沿（v0.93）
-        // 教训：脚底正下方那一小条在画面里被压得几乎看不见，椭圆/圆角矩形都白画，改成往上让线露出来
-        var spW = 20 + 16 * Math.sin(t * 5.2);
-        for (i = 0; i < 3; i++) {
-          var spY = -TARGET_H * (0.055 + i * 0.045);
-          ctx.strokeStyle = 'rgba(214,232,255,' + (0.55 - i * 0.13) * a + ')';
-          ctx.lineWidth = 2.4 - i * 0.5;
-          ctx.beginPath();
-          ctx.moveTo(-TARGET_H * 0.18, spY);
-          ctx.lineTo(-TARGET_H * 0.18 - spW - i * 7, spY - 1.2);
-          ctx.stroke();
-        }
-        // 板沿：贴脚底一条，浅色描一道，够看出"脚踩在板上"
-        ctx.fillStyle = 'rgba(206,220,240,' + a + ')';
-        ctx.beginPath(); ctx.ellipse(0, -1, TARGET_H * 0.30, 3.2, -0.05, 0, 6.284); ctx.fill();
-        ctx.fillStyle = 'rgba(88,98,120,' + a + ')';
-        ctx.beginPath(); ctx.ellipse(0, -4.4, TARGET_H * 0.26, 1.4, -0.05, 0, 6.284); ctx.fill();
-      } else if (actKind === 4) {
-        // 跳舞：三个往上飘的音符
-        for (i = 0; i < 3; i++) {
-          ctx.fillStyle = 'rgba(255,225,140,' + 0.7 * a + ')';
-          x = Math.sin(t * 2 + i * 2) * 22;
-          y = -TARGET_H * 0.86 - (t * 26 + i * 24) % 60;
-          ctx.beginPath(); ctx.arc(x, y, 3, 0, 6.284); ctx.fill();
-        }
-      }
+      // 坐骑：一只侧身的小兽，一头一尾
+      ctx.fillStyle = 'rgba(122,96,70,' + 0.92 * a + ')';
+      ctx.beginPath(); ctx.ellipse(0, -8, TARGET_H * 0.48, TARGET_H * 0.16, 0, 0, 6.284); ctx.fill();
+      ctx.beginPath(); ctx.arc(-TARGET_H * 0.44, -TARGET_H * 0.22, TARGET_H * 0.10, 0, 6.284); ctx.fill();
+      ctx.fillStyle = 'rgba(92,72,54,' + 0.9 * a + ')';
+      ctx.beginPath(); ctx.moveTo(TARGET_H * 0.46, -TARGET_H * 0.14);
+      ctx.quadraticCurveTo(TARGET_H * 0.58, -TARGET_H * 0.24, TARGET_H * 0.52, -TARGET_H * 0.04);
+      ctx.fill();
     }
   }
 
@@ -939,40 +784,12 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
     var poseP = -1;
     var curPose = poseImgsBySp[species];
     if (curPose && curPose.length >= 5 && lieAmt < 0.40) {
+      // 2026-11-25：跳舞(3)/喝茶/看电视两套姿势随动作下线，只剩招手、走、站定
       if (waveLeft > 0) poseP = 1;
       else if (mode === 'walk' || mode === 'run') poseP = 2;
-      else if (actKind === 4) poseP = 3;
-      else if (actKind === 5) poseP = 0;   // v0.93：喝茶不要用举双手那个跳舞姿势，站定就对了，杯子画在手上
-      else if (actKind === 6) poseP = 4;
       else poseP = 0;
     }
-    // 御剑：剑客配了专属的踩剑姿势，整张换掉，剑就在图里
-    if (species === 8 && actKind === 2 && actAmt > 0.25 && swordIm8.complete && swordIm8.naturalWidth) {
-      var swW = TARGET_H * (swordIm8.naturalWidth / swordIm8.naturalHeight);
-      ctx.drawImage(SPR(swordIm8), -swW / 2, -TARGET_H, swW, TARGET_H);
-      ctx.restore();
-      return;
-    }
-    // 跳舞：剑客八帧那套手脚动作，来回摆着播（0→7→0），再叠整只的左右摇、落拍下沉。
-    // 以前跳舞靠切条把身体往外推，看着就是折叠，不像在跳舞
-    if (species === 8 && actKind === 4 && actAmt > 0.25 && walkImgs8.length >= 8) {
-      var d16 = Math.floor(t * (11 + 4 * actAmt)) % 16;
-      if (d16 < 0) d16 += 16;
-      var dIdx = d16 < 8 ? d16 : 15 - d16;
-      var dIm = walkImgs8[dIdx];
-      if (dIm.complete && dIm.naturalWidth) {
-        var dW = TARGET_H * (dIm.naturalWidth / dIm.naturalHeight);
-        var beat = t * 3.6;
-        // 2026-11-21 修：这里原来写的是 var swayX，var 会提升到整个 redraw() 作用域，
-        // 把外层那个 swayX 遮蔽成 undefined；除了剑客跳舞这一支，其它形象/动作走到
-        // translate(CX+dx+walkX+swayX,...) 时 x 变成 NaN，整幅人物就再也画不出来。
-        var dSway = 4 * actAmt * Math.sin(beat);
-        var swayY = -6 * actAmt * Math.abs(Math.sin(beat * 2));
-        ctx.drawImage(SPR(dIm), -dW / 2 + dSway, -TARGET_H + swayY, dW, TARGET_H);
-        ctx.restore();
-        return;
-      }
-    }
+    // 2026-11-25：御剑与跳舞两套专属整图随动作下线
     // 走路：剑客有八帧走路，按 11 帧/秒换，八帧一圈约 0.72 秒，跟电脑端同一个节奏
     if (species === 8 && (mode === 'walk' || mode === 'run') && walkImgs8.length >= 8) {
       var wIdx = Math.floor(t * 11) % 8;
@@ -1015,13 +832,12 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
     var imgScale = img.naturalHeight / TARGET_H;
     var amp = (mode === 'run') ? 2.2 : ((mode === 'walk') ? 1.1 : 0.9);
     var ph0 = t * ((mode === 'run') ? 11.0 : 7.2);
-    // 跳舞不再靠加大切条幅度（那就是折叠），只留一点摆动，动感交给整体位移
-    if (actKind === 4 && actAmt > 0.25 && species !== 8) { amp += 0.8 * actAmt; ph0 = t * 6.4; }
+    // 2026-11-25：跳舞下线，这里的加幅一并删掉
     var i, off, fy, yy, sh, syp, shp;
     for (i = 0; i < strips; i++) {
       fy = (i + 0.5) / strips;
     var off = amp * boneSway(fy, ph0);
-      if (waveLeft > 0 && fy < 0.68) off += 12 * (0.68 - fy) * Math.sin(t * 13);
+      if (waveLeft > 0 && fy < 0.68) off += 6 * (0.68 - fy) * Math.sin(t * 7);
       // 2026-11-17：上半身和发梢加一层"二次动作"——只让它随呼吸轻轻上抬，
       // 分段越靠上抬得越多，像头发和肩膀比腰慢半拍。位移压到 1px 以内，
       // 留出的重叠余量足够，不会在条带之间露缝。
@@ -1036,7 +852,7 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
 
     var fyp = FY[species] || 0.36, fwp = FW[species] || 0.55;
     var fOff = amp * boneSway(fyp, ph0);
-    if (waveLeft > 0 && fyp < 0.68) fOff += 12 * (0.68 - fyp) * Math.sin(t * 13);
+    if (waveLeft > 0 && fyp < 0.68) fOff += 6 * (0.68 - fyp) * Math.sin(t * 7);
     ctx.save();
     ctx.translate(fOff, 0);
     ctx.restore();
@@ -1157,7 +973,7 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
       if (Math.abs(animBob) < 0.02) animBob = 0;
     }
 
-    if (actKind === 4 && actAmt > 0.2) swayX = 5.2 * actAmt * Math.sin(t * 1.9);
+    // 2026-11-25：跳舞下线，它那条重心摆动一起删掉
 
     lieAmt = 0;   // v22：不再躺下睡觉，床和飘 Z 一起撤掉
 
@@ -1224,8 +1040,8 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
     if (actAmt > 0.12 && wantScene >= 0) sceneIdx = wantScene;
     else if (actKind === 0) sceneIdx = todayScene();
 
-    // 飞、御剑、骑坐骑这几个是离地的，得抬起来再轻轻飘
-    if (mode === 'fly' || mode === 'sword' || mode === 'ride') {
+    // 2026-11-25：只有骑坐骑是离地的，飞/御剑已下线
+    if (mode === 'ride') {
       // 跳舞/动作：随拍点往下沉一点，左右只留很小的重心移，别再整条带子甩
       var beatA = t * 3.6;
       var bB = Math.abs(Math.sin(beatA));
@@ -1262,14 +1078,8 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
       return rq < 0.6 ? 'idle' : (rq < 0.9 ? 'walk' : 'hop');
     }
     var r = Math.random();
-    // 带动作的先来：飞、御剑、骑坐骑、喝茶、看电视、滑板，各占一点
-    if (r < 0.07) return 'fly';
-    if (r < 0.13) return 'sword';
-    if (r < 0.19) return 'ride';
-    if (r < 0.25) return 'tea';
-    if (r < 0.31) return 'tv';
-    if (r < 0.37) return 'skate';
-    if (r < 0.42) return 'dance';
+    // 2026-11-25：只剩骑坐骑这一种动作，其余场景（飞/御剑/喝茶/电视/滑板/跳舞）已下线
+    if (r < 0.14) return 'ride';
     if (r < 0.58) return 'idle';
     if (r < 0.72) return 'walk';
     if (r < 0.82) return 'run';
@@ -1303,12 +1113,9 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
 
   // 「跟它说话」的点击行为在下面的语音块：轻点=语音对话
 
-  // 换个动作：挨个挑一个带场景的，切完立刻说一句它自己在干什么
-  var ACT_NAMES = ['fly', 'sword', 'ride', 'tea', 'tv', 'skate', 'dance'];
-  var ACT_WORDS = {
-    fly: '飞一段。', sword: '踩剑上，御风走。', ride: '上来，带你跑一程。',
-    tea: '喝口热的，慢慢来。', tv: '我坐会儿电视。', skate: '踩上板，溜一段。', dance: '给我来点节拍。'
-  };
+  // 换个动作：2026-11-25 只留「骑坐骑」。其他场景（飞、御剑、喝茶、看电视、滑板、跳舞）已下线
+  var ACT_NAMES = ['ride'];
+  var ACT_WORDS = { ride: '上来，带你跑一程。' };
   var actRot = 0;
   document.getElementById('btnAct').addEventListener('pointerdown', function () {
     // v0.92：从随机改成按顺序轮，点一次一定换一个，不会连着抽到同一个像没反应
@@ -2914,3 +2721,4 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
 
 </body>
 </html>
+

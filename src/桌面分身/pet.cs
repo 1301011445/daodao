@@ -311,6 +311,14 @@ public class DesktopPet : Form
     float moveSpeedPxPerSec = 0f;
     float walkPhase = 0f;     // 走路相位（0..8，一帧一格），自己累加，帧率变化也不会跳帧
     float walkLastT = -1f;
+    // ==== 惯性层（2026-11-25 第4类 Flutter 动画曲线与内插落地）====
+    // Flutter 的 SpringDescription(mass,stiffness,damping) 本质是一条阻尼弹簧：
+    // dv/dt = ω²(target−x) − 2ζωv。以前步频用的是指数逼近，只会"越来越慢地靠近"，
+    // 没有真正的速度残留，停步像被掐住。这里换成积分弹簧，ζ=0.85（欠阻尼但不抖）。
+    float walkFpsVel = 0f;      // 步频速度（帧/秒²），弹簧积分用
+    float swayAmpCur = 0.8f;    // 走路摆动幅值：原来跟 walking 布尔硬切，现在弹簧渐变
+    float swayAmpVel = 0f;
+    float ampLastT = -1f;
     // ==== 二次动作（第3类 Live2D 摆锤 / Spine PhysicsConstraint 的落地）====
     // 发梢、衣角这类挂件比主动骨晚半拍起、停步后还余摆两下再收。
     // 幅度按阻尼比衰减（对应 Cubism 摆锤的「收敛速度」、Spine 的 physicsRotationInheritanceFactor）。
@@ -7549,6 +7557,23 @@ public class DesktopPet : Form
     {
         return CubicEase(x, 0.23f, 1.0f, 0.32f, 1.0f);
     }
+    // 单自由度阻尼弹簧（对应 Flutter physics 包的 SpringSimulation）：
+    // ω = 2π/T（T 是自然周期），ζ=1 临界阻尼不超调；ζ<1 会过冲一点再回来。
+    // 用固定子步积分（h≤8ms），帧长抖动到 100ms 也不会炸。
+    static void SpringStep(ref float x, ref float v, float target, float dt, float omega, float zeta)
+    {
+        if (dt <= 0f) return;
+        if (dt > 0.1f) dt = 0.1f;
+        int n = (int)Math.Ceiling(dt / 0.008f);
+        if (n < 1) n = 1;
+        float h = dt / n;
+        for (int i = 0; i < n; i++)
+        {
+            float a = omega * omega * (target - x) - 2f * zeta * omega * v;
+            v += a * h;
+            x += v * h;
+        }
+    }
 
     void DrawWalkFrames(Graphics g, float cx, float cy, float breathe)
     {
@@ -7564,11 +7589,12 @@ public class DesktopPet : Form
         float dt = t - walkLastT;
         if (dt < 0f || dt > 0.2f) dt = 0.033f;
         walkLastT = t;
-        // 2026-11-23 走路：起步还是 0.18/33ms（迈出去那一下不能软），停步改成 0.10——
-        // 脚频往回收要慢，收尾才有惯性，不会一停就像被掐住
-        float kAcc = (targetFps > walkFpsCur) ? 0.18f : 0.10f;
-        float wA = 1f - (float)Math.Pow(1f - kAcc, dt / 0.033f);
-        walkFpsCur += (targetFps - walkFpsCur) * wA;
+        // 2026-11-25（第4类 Flutter 落地①）：步频改用阻尼弹簧，不再是指数逼近。
+        // ω=13.4 rad/s、ζ=0.85 → 4/(ζω)≈0.35s 收住当前目标；起步会略过冲 1~2%，
+        // 那一小下正好是"脚踩上去"的力量感；停步时速度残留自己衰减，不会一停就硬掐。
+        SpringStep(ref walkFpsCur, ref walkFpsVel, targetFps, dt, 13.4f, 0.85f);
+        if (walkFpsCur < 6f) { walkFpsCur = 6f; if (walkFpsVel < 0f) walkFpsVel = 0f; }
+        if (Math.Abs(walkFpsCur - targetFps) < 0.02f) { walkFpsCur = targetFps; walkFpsVel = 0f; }
         float fps = walkFpsCur;
         // 相位自己累加，不再用 t×fps：帧率一变，t×fps 会整段跳帧，脚就像被人拽了一下
         // 2026-11-23 帧调度（主攻第2类 Chromium/Skia 合成）：掉帧就丢帧不补帧——
@@ -8120,8 +8146,16 @@ public class DesktopPet : Form
         // 原来走路 amp=5.4 / 抬腿 7.5 / 手臂 7，整条横带一推就是 7~9px，
         // 手臂那条细带跟躯干错开之后会断开成独立色块（自检帧里量到 9~10px 的孤立岛），
         // 看着就是"肢体不协调"。现在上身只摆 3.6px、手臂 3.2、抬腿 3.2，先保证轮廓连续。
-        float amp = running ? 7.0f : (walking ? 4.6f : 0.8f);
-        if (actAmt > 0.02f && actKind == 4) amp += 1.8f * actAmt;   // 跳舞只留一点摆动，大幅切条就是折叠
+        float ampTarget = running ? 7.0f : (walking ? 4.6f : 0.8f);
+        if (actAmt > 0.02f && actKind == 4) ampTarget += 1.8f * actAmt;   // 跳舞只留一点摆动，大幅切条就是折叠
+        // 2026-11-25（第4类 Flutter 落地②）：摆动幅值原来跟 walking 布尔硬切，
+        // 脚一动身体立刻摆满、停下又立刻归零，像被"啪"一下打开。改成同一套阻尼弹簧
+        // （ω=16、ζ=0.8）：摆幅渐起、停步后 0.3s 自己收回，惯性是看得见的那一段。
+        float dAmp = (ampLastT < 0f) ? 1f / 60f : t - ampLastT;
+        if (dAmp < 0f || dAmp > 0.2f) dAmp = 1f / 60f;
+        ampLastT = t;
+        SpringStep(ref swayAmpCur, ref swayAmpVel, ampTarget, dAmp, 16f, 0.8f);
+        float amp = swayAmpCur;
         float ph = walkPhaseHint >= 0f ? walkPhaseHint : t * (running ? 12.0f : 8.4f);
         if (actAmt > 0.02f && actKind == 4) ph = t * 8.0f;           // 节拍降下来，切条推太快就成抽搐
         float legLift = running ? 7.0f : (walking ? 4.2f : 0f);
@@ -10647,7 +10681,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 116;
+    public const int APP_VER = 117;
 
     public static void Start()
     {

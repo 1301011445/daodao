@@ -630,8 +630,15 @@ public class DaoOverlay extends Service {
     private boolean mountAuto = true;   // 自主：每次启动自己决定骑不骑；用户点一下就接管
     // v129 人物与坐骑匹配：每只坐骑单独给「高度占视窗的比例」和「脚踩到它多高」
     // 数值来自 tools\形象\坐骑配比_v129g.py 的实测与预览（_配比预览6.png）
-    private final float[] MOUNT_MHW = {0.28f, 0.40f, 0.24f, 0.34f, 0.40f};  // 坐骑高 / 视窗高
-    private final float[] MOUNT_FR = {0.86f, 0.60f, 0.45f, 0.58f, 0.38f};   // 脚踩高度 / 坐骑高（从底算）
+    private final float[] MOUNT_MHW = {0.32f, 0.52f, 0.34f, 0.50f, 0.46f};  // 坐骑高 / 视窗高（骑姿版）
+    private final float[] MOUNT_FR = {0.88f, 0.64f, 0.62f, 0.62f, 0.44f};   // 鞍面高度 / 坐骑高（从底算）
+    // v131 骑姿：臀部（坐骨线）落在鞍面；数值 = 坐骨线在骑姿图里占的高度比例（逐只量出来的）
+    private final float[] RIDE_SEAT = {0.606f, 0.668f, 0.680f, 0.665f, 0.680f, 0.652f, 0.680f,
+                                       0.579f, 0.600f, 0.667f, 0.680f, 0.608f, 0.597f, 0.680f};
+    private final float RIDE_H = 0.62f;   // 骑姿人物高 / 视窗高
+    private final String[] RIDE_FILES = {
+            "ride_0.png", "ride_1.png", "ride_2.png", "ride_3.png", "ride_4.png", "ride_5.png", "ride_6.png",
+            "ride_7.png", "ride_8.png", "ride_9.png", "ride_10.png", "ride_11.png", "ride_12.png", "ride_13.png"};
     private final float MOUNT_CS = 0.74f;                                   // 骑上时人物缩放，留出头顶空间
     private final String[] MOUNT_FILES = {
             "mount_cloud.png",   // 1 祥云
@@ -641,6 +648,7 @@ public class DaoOverlay extends Service {
             "mount_crane.png"    // 5 纸鹤
     };
     private Bitmap[] mounts = new Bitmap[MOUNT_FILES.length];
+    private Bitmap[] rides = new Bitmap[14];   // 14 张骑姿立绘，下标 = 形象序号
         private long happyUntil = 0;
         // 2026-11-23：打招呼/被戳时抬手挥一挥（网格驱动，不是换图）。只对满身站姿生效，走路和贴边不抢戏。
         private long waveUntil = 0;
@@ -722,6 +730,12 @@ public class DaoOverlay extends Service {
             for (int i = 0; i < MOUNT_FILES.length; i++) {
                 mounts[i] = loadOpt(MOUNT_FILES[i]);
                 if (mounts[i] != null && !mounts[i].isRecycled()) matteInPlace(mounts[i]);
+            }
+            // v131：骑姿立绘（只有这三只形象有，别的仍用站姿）
+            rides = new Bitmap[RIDE_FILES.length];
+            for (int i = 0; i < RIDE_FILES.length; i++) {
+                rides[i] = loadOpt(RIDE_FILES[i]);
+                if (rides[i] != null && !rides[i].isRecycled()) matteInPlace(rides[i]);
             }
             try {
                 android.content.SharedPreferences spd = getContext().getSharedPreferences("dao", 0);
@@ -904,6 +918,39 @@ public class DaoOverlay extends Service {
          * 192×384 画布、底对齐、水平居中（跟八帧同比例），所以满身/贴边都能直接挂上去，
          * 走路用 drawWarp 的迈步变形代一下——腿不会真交替，但人确实在挪、下身会摆。
          */
+        Bitmap rideFor(int k) {
+            return (k >= 0 && k < rides.length) ? rides[k] : null;
+        }
+
+        /** v131 骑姿绘制：坐骑按自己的高度比 → 鞍面定位 → 臀部（坐骨线）压上去 */
+        void drawRide(Canvas c, int w, int h, Bitmap rideImg, Bitmap mb) {
+            int mi = Math.max(0, Math.min(MOUNT_MHW.length - 1, mount - 1));
+            float mh = h * MOUNT_MHW[mi];
+            float mw = mh * mb.getWidth() / Math.max(1, mb.getHeight());
+            if (mw > w * 0.98f) {
+                mw = w * 0.98f;
+                mh = mw * mb.getHeight() / Math.max(1, mb.getWidth());
+            }
+            Paint sp = new Paint(Paint.ANTI_ALIAS_FLAG);
+            sp.setColor(0x22000000);
+            c.drawOval(new RectF(w * 0.24f, h - h * 0.03f, w * 0.76f, h + h * 0.005f), sp);
+            RectF mr = new RectF(w * 0.5f - mw * 0.5f, h - mh, w * 0.5f + mw * 0.5f, h);
+            c.drawBitmap(mb, null, mr, p);
+
+            float saddleY = h - mh * MOUNT_FR[mi];
+            float rh = h * RIDE_H;
+            float rw = rh * rideImg.getWidth() / Math.max(1, rideImg.getHeight());
+            if (rw > w * 0.92f) {
+                rw = w * 0.92f;
+                rh = rw * rideImg.getHeight() / Math.max(1, rideImg.getWidth());
+            }
+            float si = Math.max(0, Math.min(RIDE_SEAT.length - 1, DaoOverlay.this.art));
+            float sr = RIDE_SEAT[(int) si];
+            float top = saddleY - rh * sr;
+            RectF rr = new RectF(w * 0.5f - rw * 0.5f, top, w * 0.5f + rw * 0.5f, top + rh);
+            c.drawBitmap(rideImg, null, rr, p);
+        }
+
         void setArt(int k) {
             art = k;
             reloadSheet();
@@ -920,6 +967,14 @@ public class DaoOverlay extends Service {
             super.onDraw(c);
             int w = getWidth(), h = getHeight();
             if (vm == MODE_BALL) { drawBall(c, w, h); return; }
+
+            // v131 骑乘：这只形象有骑姿立绘，就直接画"跨坐"的样子，不再拿站姿缩放去凑
+            Bitmap rb = rideFor(art);
+            if (mount > 0 && rb != null && !rb.isRecycled()
+                    && mounts[mount - 1] != null && !mounts[mount - 1].isRecycled()) {
+                drawRide(c, w, h, rb, mounts[mount - 1]);
+                return;
+            }
 
             if (sheet == null || sheet.isRecycled()) {
                 Paint q = new Paint();
@@ -972,7 +1027,7 @@ public class DaoOverlay extends Service {
             c.drawOval(new RectF(w * 0.24f, h + bob - h * 0.03f, w * 0.76f, h + bob + h * 0.005f), sh);
             // 2026-11-25 坐骑：先把它画在脚下，人物再叠上去（不镜像、不跟着蹲，坐骑是地面上的东西）
             float rise = 0f;
-            Bitmap mb = (mount > 0 && mount < mounts.length ? mounts[mount] : null);
+            Bitmap mb = (mount >= 1 && mount <= mounts.length ? mounts[mount - 1] : null);  // v131 修：原来下标越界，纸鹤永远画不出来
             if (mb != null && !mb.isRecycled()) {
                 int mi = Math.max(1, Math.min(MOUNT_MHW.length, mount)) - 1;
                 float mh = h * MOUNT_MHW[mi];

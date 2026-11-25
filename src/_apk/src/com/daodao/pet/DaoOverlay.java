@@ -612,7 +612,8 @@ public class DaoOverlay extends Service {
         private Bitmap peekArt;      // 贴边探头的半身姿态（assets/peek.png）
         private Bitmap standArt;     // 正面站姿（assets/stand_<序号>.png）：站着时面向你，不是侧脸
         private Bitmap[] frames;     // 八帧拆开存，供网格变形逐帧用
-        private float walkAmp = 1f;  // 迈步额外倍率（烘焙帧本身已有步幅，这里保持 1）
+        private float walkAmp = 1f;  // 行走幅度倍率：v125 起由起停过渡算出（0→1→0）
+    private long walkOnAt = 0, walkOffAt = 0;   // 起步/停步时刻，用来算 300ms 过渡
         private long happyUntil = 0;
         // 2026-11-23：打招呼/被戳时抬手挥一挥（网格驱动，不是换图）。只对满身站姿生效，走路和贴边不抢戏。
         private long waveUntil = 0;
@@ -886,12 +887,23 @@ public class DaoOverlay extends Service {
             }
             // 2026-11-22：满身时 8 帧慢走（3 拍一帧 ≈2.8fps）。贴边时不再原地踏步——
             // 那种"人不动腿在动"最假，改成定格站姿，动的是窗口本身的探出/缩回。
-            // 2026-11-25 提帧：走路的帧号与相位都按真实时间算，绘制多密相位就切多细
+            // 2026-11-25 提帧 + 起停过渡：相位按真实时间算；起步 400ms 渐入、停步 400ms 渐出，
+            // 停步时相位冻结在停步那一刻，最后一步原地收住，再切成站姿——原来是一停就直接定格
+            long nowD = System.currentTimeMillis();
+            if (walking) { if (walkOnAt == 0) walkOnAt = nowD; walkOffAt = 0; }
+            else if (walkOnAt != 0 && walkOffAt == 0) walkOffAt = nowD;
+            double rampT = walking ? (nowD - walkOnAt) / 400.0
+                                   : (walkOffAt == 0 ? 1.0 : 1.0 - (nowD - walkOffAt) / 400.0);
+            rampT = Math.max(0.0, Math.min(1.0, rampT));
+            float ramp = (float) (0.5 - 0.5 * Math.cos(rampT * Math.PI));   // 余弦缓动：起停都软
+            if (!walking && ramp <= 0.02f) { walkOnAt = 0; walkOffAt = 0; }
+            boolean walkDraw = walking || ramp > 0.02f;
             double walkPos = 0;
-            if (walking) {
-                long tw = System.currentTimeMillis();
-                walkPos = (tw % 600000L) / 1000.0 * 5.5;   // 5.5 扑/秒，与原 180ms 一帧等价
+            if (walkDraw) {
+                long tw = walking ? nowD : walkOffAt;    // 停步后冻结相位：腿收住不再往前迈
+                walkPos = (tw % 600000L) / 1000.0 * 5.5;  // 5.5 扑/秒，与原 180ms 一帧等价
             }
+            walkAmp = ramp;
             int fi;
             int bob;
             if (vm == MODE_PEEK) {
@@ -958,19 +970,19 @@ public class DaoOverlay extends Service {
                 c.scale(sx2, 1f);
                 c.translate(-w * 0.5f, 0);
             }
-            if (walking && walkDir < 0) { c.translate(w, 0); c.scale(-1f, 1f); }   // 向左走就把整帧镜像，别让它倒着迈步
+            if (walkDraw && walkDir < 0) { c.translate(w, 0); c.scale(-1f, 1f); }   // 向左走就把整帧镜像，别让它倒着迈步
             if (vm == MODE_PEEK && side == SIDE_RIGHT) { c.translate(w, 0); c.scale(-1f, 1f); }   // 在右边扒边，手要朝右
             if (vm == MODE_PEEK) { c.rotate((float) Math.sin(tick / 38.0) * 1.2f, w / 2f, h * 0.98f); }  // 探头时轻轻晃，不是一张死图
             c.translate(lean, 0);
             if (vm == MODE_PEEK && art == ART_WALK && peekArt != null && !peekArt.isRecycled()) {
                 drawWarp(c, peekArt, 0, bob, w, h + bob, tick / 30.0, 0f, false, true, waveAmp, 0f);   // 贴边：半身探头 + 慢晃 + 呼吸 + 左右看
-            } else if (vm != MODE_PEEK && !walking && standArt != null && !standArt.isRecycled()) {
+            } else if (vm != MODE_PEEK && !walkDraw && standArt != null && !standArt.isRecycled()) {
                 int dyAct = (int) (h * (1f - squash));
                 drawWarp(c, standArt, 0, bob - (int) hop + dyAct, w, (int) (h * squash) + bob,
                         tick / 30.0, 0f, false, false, waveAmp, nodAmp);
             } else if (frames != null && fi >= 0 && fi < frames.length) {
                 float ph = (float) ((walkPos % fN) / Math.max(1, fN) * Math.PI * 2.0);   // 连续相位：换帧处正好归整
-                drawWarp(c, frames[fi], 0, bob, w, h + bob, tick / 30.0, ph, walking, false, waveAmp, nodAmp);
+                drawWarp(c, frames[fi], 0, bob, w, h + bob, tick / 30.0, ph, walkDraw, false, waveAmp, nodAmp);
             } else {
                 c.drawBitmap(sheet, src, dst, p);
             }

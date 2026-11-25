@@ -69,6 +69,8 @@ public class DaoOverlay extends Service {
     // 悬浮窗也能换形象（2026-11-24 夜：以前只有 walk8.png 一套，桌面上永远是同一个少女）
     // 顺序跟 dao.html 的 _ks 完全一致，两端「第几个形象」说得上是同一个
     static final int[] ARTS = { 12, 13, 6, 7, 8, 11, 0, 1, 2, 3, 4, 5, 9, 10 };
+    // 2026-11-25：悬浮窗的四个小动作，主界面「换动作」也按这几个派
+    static final int ACT_WAVE = 0, ACT_NOD = 1, ACT_HOP = 2, ACT_SQUAT = 3;
     // 只有这个形象有真八帧走路素材，其它 13 个用立绘 + 网格变形代步
     static final int ART_WALK = 6;
 
@@ -429,6 +431,7 @@ public class DaoOverlay extends Service {
                 if (mode == MODE_FULL && added && lp != null && pv != null) {
                     try { walkDrift(); } catch (Exception e) { }
                     try { pv.idleWaveIfDue(); } catch (Exception e) { }
+                    try { pv.idleActIfDue(); } catch (Exception e) { }
                 }
                 ui.postDelayed(this, 90);
             }
@@ -589,6 +592,15 @@ public class DaoOverlay extends Service {
     }
 
     // ---------------- 画 ----------------
+    private static PetView sLive;   // 当前挂着的悬浮窗，供「换动作」这类外部调用
+    /** 外部（手机主界面「换动作」按钮）让桌面上的那只动一下。 */
+    static boolean sendAction(int k) {
+        PetView v = sLive;
+        if (v == null) return false;
+        v.playAction(k);
+        return true;
+    }
+
 
     private class PetView extends View {
         private Bitmap sheet;
@@ -604,6 +616,13 @@ public class DaoOverlay extends Service {
         private static final long WAVE_MS = 4200;
         private long nodUntil = 0;           // 应声点头 1.4 秒，只在开口那一下
         private long nextIdleWave = 0;       // 自己每隔 8~15 分钟抬手挥一次，白天才挥
+        // 2026-11-25：原来只会走路和挥手，戳它也没别的反应，所以看着「不会做动作」。
+        // 加四个网格动作（挥手 / 点头 / 小跳 / 蹲一下），自己按拍子演，也能被「换动作」叫起来。
+        private long hopUntil = 0;
+        private long squatUntil = 0;
+        private long nextActAt = 0;
+        private int lastAct = -1;
+
         private int fw = 192, fh = 384;
         private int fN = 8;
         private Paint p = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
@@ -617,6 +636,7 @@ public class DaoOverlay extends Service {
         PetView() {
             super(DaoOverlay.this);
             setLayerType(View.LAYER_TYPE_HARDWARE, null);
+            sLive = this;
             reloadSheet();
         }
 
@@ -650,7 +670,7 @@ public class DaoOverlay extends Service {
                 fw = sheet.getWidth() / fN;
                 if (fw <= 0) { fw = fh / 2; fN = 1; }
             }
-            if (sheet != null && !sheet.isRecycled()) keyWhite();
+            if (sheet != null && !sheet.isRecycled()) matteInPlace(sheet);
             try {
                 BitmapFactory.Options bo = new BitmapFactory.Options();
                 bo.inScaled = false;
@@ -662,9 +682,11 @@ public class DaoOverlay extends Service {
             ballSleep = loadOpt("ball_sleep.png");
             ballSur = loadOpt("ball_sur.png");
             peekArt = loadOpt("peek.png");
+            if (peekArt != null && !peekArt.isRecycled()) matteInPlace(peekArt);
             // 2026-11-25：原来站着时停在八帧的第 0 帧，那是个侧身迈步的姿势，看着像永远在走路。
             // 现在单独加载正面站姿，站着就面向你。
             standArt = loadOpt("stand_" + art + ".png");
+            if (standArt != null && !standArt.isRecycled()) matteInPlace(standArt);
             // 2026-11-22 夜：形象不再「一张图定住」，改成按骨骼权重做网格变形。
             // 先把八帧拆成独立位图，变形时直接取当前帧，省掉每帧 createBitmap。
             try {
@@ -709,6 +731,7 @@ public class DaoOverlay extends Service {
                     if (y > 0) tail = pushIfWhite(px, seen, q, tail, x, idx - w);
                     if (y < h - 1) tail = pushIfWhite(px, seen, q, tail, x, idx + w);
                 }
+                deFringe(px, w, h, seen);      // 紧贴人物的那圈白混色，不清掉就是白边
                 sheet.setPixels(px, 0, w, 0, 0, w, h);
             } catch (Exception e) { }
         }
@@ -719,6 +742,85 @@ public class DaoOverlay extends Service {
             seen[idx] = true;
             q[tail] = idx;
             return tail + 1;
+        }
+
+        /** 白底素材统一处理：泛洪清底 + 边缘去白。
+         *  立绘/站姿/探头这几张都不是透明底，边缘那圈是「白+人物色」的混色，
+         *  只把纯白挖掉，剩下的混色圈挂在深色桌面上就是一道白边。 */
+        void matteInPlace(Bitmap b) {
+            try {
+                int w = b.getWidth(), h = b.getHeight();
+                int[] px = new int[w * h];
+                b.getPixels(px, 0, w, 0, 0, w, h);
+                boolean[] bg = new boolean[w * h];
+                int[] q = new int[w * h];
+                int head = 0, tail = 0;
+                for (int x = 0; x < w; x++) {
+                    tail = pushIfWhite(px, bg, q, tail, x, x);
+                    tail = pushIfWhite(px, bg, q, tail, x, (h - 1) * w + x);
+                }
+                for (int y = 0; y < h; y++) {
+                    tail = pushIfWhite(px, bg, q, tail, y, y * w);
+                    tail = pushIfWhite(px, bg, q, tail, y, y * w + w - 1);
+                }
+                while (head < tail) {
+                    int idx = q[head++];
+                    px[idx] = 0;
+                    int x = idx % w, y = idx / w;
+                    if (x > 0) tail = pushIfWhite(px, bg, q, tail, x - 1, idx - 1);
+                    if (x < w - 1) tail = pushIfWhite(px, bg, q, tail, x + 1, idx + 1);
+                    if (y > 0) tail = pushIfWhite(px, bg, q, tail, x, idx - w);
+                    if (y < h - 1) tail = pushIfWhite(px, bg, q, tail, x, idx + w);
+                }
+                deFringe(px, w, h, bg);
+                // 素材自带的「半透明近白」混色：这类像素四边 alpha 早就是 0，
+                // 泛洪从第一步就够不着，所以只挖纯白是清不掉白边的。按亮度定遮罩。
+                for (int i = 0; i < px.length; i++) {
+                    int c = px[i];
+                    int a = c >>> 24;
+                    if (a <= 6 || a >= 250) continue;
+                    int r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, bl = c & 0xFF;
+                    int lum = Math.min(r, Math.min(g, bl));
+                    if (lum < 215) continue;                       // 只打近白，浅色衣服不动
+                    float k = (255 - lum) / 40f;
+                    if (k > 1f) k = 1f;
+                    px[i] = ((int) (a * k) << 24) | (c & 0x00FFFFFF);
+                }
+                b.setPixels(px, 0, w, 0, 0, w, h);
+            } catch (Exception e) { }
+        }
+
+        /** 沿已清掉的底色向内走两圈：这几圈像素是背景白和人物色的混色，
+         *  按白度估半透明 alpha，再按 alpha 把混进去的白扣掉，边上就干净了。 */
+        void deFringe(int[] px, int w, int h, boolean[] bg) {
+            for (int pass = 0; pass < 2; pass++) {
+                int[] cp = px.clone();
+                for (int y = 0; y < h; y++) {
+                    for (int x = 0; x < w; x++) {
+                        int idx = y * w + x;
+                        if (bg[idx]) continue;
+                        boolean nb = (x > 0 && bg[idx - 1]) || (x < w - 1 && bg[idx + 1])
+                                || (y > 0 && bg[idx - w]) || (y < h - 1 && bg[idx + w]);
+                        if (!nb) continue;
+                        int c = cp[idx];
+                        int a = c >>> 24;
+                        if (a < 40) continue;
+                        int r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, bl = c & 0xFF;
+                        int lum = Math.min(r, Math.min(g, bl));
+                        int mx = Math.max(r, Math.max(g, bl));
+                        if (mx - lum > 28 || lum < 140) continue;      // 只处理接近白的混色
+                        float s = (255 - lum) / 78f;
+                        if (s > 1f) s = 1f;
+                        if (s < 0.04f) s = 0.04f;
+                        float inv = s < 0.10f ? 0.10f : s;
+                        int rr = (int) Math.max(0, Math.min(255, (r - 255f * (1f - s)) / inv));
+                        int gg = (int) Math.max(0, Math.min(255, (g - 255f * (1f - s)) / inv));
+                        int bb = (int) Math.max(0, Math.min(255, (bl - 255f * (1f - s)) / inv));
+                        px[idx] = ((int) (a * s) << 24) | (rr << 16) | (gg << 8) | bb;
+                        bg[idx] = true;                              // 已处理 → 往外再扩一圈
+                    }
+                }
+            }
         }
 
         boolean nearWhite(int c) {
@@ -819,6 +921,16 @@ public class DaoOverlay extends Service {
                 float prog2 = 1f - (nodUntil - nowMs) / 1400f;
                 nodAmp = waveEnv(prog2);
             }
+            // 小跳 / 蹲一下：整只抬起来或压下去，脚底始终贴着原来的地平线
+            float hop = 0f, squash = 1f;
+            if (nowMs < hopUntil) {
+                float pr = 1f - (hopUntil - nowMs) / 900f;
+                hop = (float) Math.sin(pr * Math.PI) * h * 0.085f;
+            }
+            if (nowMs < squatUntil) {
+                float pr = 1f - (squatUntil - nowMs) / 1600f;
+                squash = 1f - 0.085f * (float) Math.sin(pr * Math.PI);
+            }
             if (walking && walkDir < 0) { c.translate(w, 0); c.scale(-1f, 1f); }   // 向左走就把整帧镜像，别让它倒着迈步
             if (vm == MODE_PEEK && side == SIDE_RIGHT) { c.translate(w, 0); c.scale(-1f, 1f); }   // 在右边扒边，手要朝右
             if (vm == MODE_PEEK) { c.rotate((float) Math.sin(tick / 38.0) * 1.2f, w / 2f, h * 0.98f); }  // 探头时轻轻晃，不是一张死图
@@ -826,7 +938,9 @@ public class DaoOverlay extends Service {
             if (vm == MODE_PEEK && art == ART_WALK && peekArt != null && !peekArt.isRecycled()) {
                 drawWarp(c, peekArt, 0, bob, w, h + bob, tick / 30.0, 0f, false, true, waveAmp, 0f);   // 贴边：半身探头 + 慢晃 + 呼吸 + 左右看
             } else if (vm != MODE_PEEK && !walking && standArt != null && !standArt.isRecycled()) {
-                drawWarp(c, standArt, 0, bob, w, h + bob, tick / 30.0, 0f, false, false, waveAmp, nodAmp);
+                int dyAct = (int) (h * (1f - squash));
+                drawWarp(c, standArt, 0, bob - (int) hop + dyAct, w, (int) (h * squash) + bob,
+                        tick / 30.0, 0f, false, false, waveAmp, nodAmp);
             } else if (frames != null && fi >= 0 && fi < frames.length) {
                 float ph = (float) ((fi / (float) Math.max(1, fN)) * Math.PI * 2.0);
                 drawWarp(c, frames[fi], 0, bob, w, h + bob, tick / 30.0, ph, walking, false, waveAmp, nodAmp);
@@ -1086,6 +1200,32 @@ public class DaoOverlay extends Service {
             if (hh < 8 || hh > 21) return;
             waveUntil = now + WAVE_MS;
             postInvalidate();
+        }
+
+        /** 演一个动作。0 挥手 1 点头 2 小跳 3 蹲一下；外面（手机「换动作」）也走这里。 */
+        void playAction(int k) {
+            long now = System.currentTimeMillis();
+            lastAct = k;
+            if (k == ACT_WAVE) waveUntil = now + WAVE_MS;
+            else if (k == ACT_NOD) nodUntil = now + 1400;
+            else if (k == ACT_HOP) hopUntil = now + 900;
+            else if (k == ACT_SQUAT) squatUntil = now + 1600;
+            postInvalidate();
+        }
+
+        /** 站着待着的时候，每隔十几二十秒自己演一个动作，别一直像个静物。 */
+        void idleActIfDue() {
+            long now = System.currentTimeMillis();
+            if (walking) { nextActAt = now + 8000; return; }
+            if (nextActAt == 0) { nextActAt = now + 7000; return; }
+            if (now < nextActAt) return;
+            nextActAt = now + (long) ((13 + Math.random() * 13) * 1000);
+            int hh = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+            if (vm != MODE_FULL) return;
+            if (hh < 7 || hh > 22) return;
+            int k = (int) (Math.random() * 4);
+            if (k == lastAct) k = (k + 1) % 4;      // 别连着演同一个
+            playAction(k);
         }
 
         // 打招呼：戳它一定应一声；平时二十来分钟自己冒一句（只白天，晚上别吵）

@@ -1307,6 +1307,7 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
     mode = m; modeLeft = 5 + Math.random() * 4;
     actKind = actOfMode(m); actAmt = 1;
     sceneIdx = sceneForAct(actKind);
+    try { if (window.DaoNative && DaoNative.petAct) DaoNative.petAct(m); } catch (e) {}
     say(ACT_WORDS[m]);
   });
 

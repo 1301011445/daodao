@@ -65,3 +65,24 @@ d.text((80, base_y + 118), "一轮 8 帧 = 2π，腿落地那帧摆动正在极�
 p = os.path.join(D, "2026-11-25-img2-walk.png")
 im.save(p)
 print(p, im.size, os.path.getsize(p) // 1024, "KB")
+
+# ---- 3. 多视图
+im, d = canvas("同一只形象 · 多向站姿", "生成模型补出左45 / 正 / 右45，厚度和侧身终于有了")
+src = Image.open(r"F:\Daodao\形象\_gen_3views_v2.png").convert("RGBA")
+sh = 880
+sw2 = int(src.size[0] * sh / src.size[1])
+sw2 = min(sw2, 1020)
+src = src.resize((sw2, int(sh * sw2 / int(src.size[0] * sh / src.size[1]))), Image.LANCZOS)
+im.paste(src, ((W - sw2) // 2, 300), src)
+d.text((62, 1240), "多视图已生成；程序里的朝向切换还没接上，下一步做", font=f_s, fill=(160, 185, 218))
+im.save(os.path.join(D, "2026-11-25-img3-views.png"))
+
+# ---- 4. 手机界面
+im, d = canvas("手机端主界面 · 五个按钮都在", "缩放比从 0.94× 提到 1.72×，头顶留白从上到下砍掉一半")
+ui = Image.open(r"F:\Daodao\形象\_ui412d.png").convert("RGB")
+uh = 1080
+uw = int(ui.size[0] * uh / ui.size[1])
+ui = ui.resize((uw, uh), Image.LANCZOS)
+im.paste(ui, ((W - uw) // 2, 300))
+im.save(os.path.join(D, "2026-11-25-img4-ui.png"))
+print("imgs 3/4 rebuilt")

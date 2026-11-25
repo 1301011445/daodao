@@ -567,6 +567,19 @@ public class DaoBridge {
     }
 
     /** 预热：页面刚起来就把到智谱的 TLS 连接握好，等下识别/对话少一次握手（约 150~300ms） */
+    /** 2026-11-25：手机主界面「换动作」也去指挥桌面那只，不然点了只有页面里的人换姿势，浮窗纹丝不动。 */
+    @JavascriptInterface
+    public void petAct(final String name) {
+        int k = DaoOverlay.ACT_WAVE;
+        if ("fly".equals(name)) k = DaoOverlay.ACT_HOP;
+        else if ("ride".equals(name)) k = DaoOverlay.ACT_SQUAT;
+        else if ("tea".equals(name)) k = DaoOverlay.ACT_NOD;
+        else if ("tv".equals(name)) k = DaoOverlay.ACT_SQUAT;
+        else if ("skate".equals(name)) k = DaoOverlay.ACT_HOP;
+        else if ("dance".equals(name)) k = DaoOverlay.ACT_WAVE;
+        try { DaoOverlay.sendAction(k); } catch (Throwable e) { }
+    }
+
     @JavascriptInterface
     public void warmUp() {
         new Thread(new Runnable() { public void run() {

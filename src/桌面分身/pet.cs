@@ -2417,6 +2417,29 @@ public class DesktopPet : Form
         return sb.ToString();
     }
 
+    // 2026-11-25：坐骑改成真贴图（骨架\mount.png 或 exe 目录 mount.png），没有就退回程序画的椭圆兽
+    Bitmap mountArt = null;
+    bool mountTried = false;
+    Bitmap GetMountArt()
+    {
+        if (mountTried) return mountArt;
+        mountTried = true;
+        try
+        {
+            Stream ms = ResStream("mount.png");
+            if (ms != null) { using (Stream m2 = ms) { mountArt = new Bitmap(m2); } }
+            else
+            {
+                string mp1 = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "骨架\\mount.png");
+                string mp2 = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "mount.png");
+                if (File.Exists(mp1)) mountArt = new Bitmap(mp1);
+                else if (File.Exists(mp2)) mountArt = new Bitmap(mp2);
+            }
+        }
+        catch { mountArt = null; }
+        return mountArt;
+    }
+
     // ================= 曲库与播放（谱子在 _bundle\\music，说明见 F:\\Daodao\\音乐创作与推广制度.md）=================
     // 静态上下文里拿不到实例方法 AppDir()，这里自己算 exe 目录（和 JoyPath 同一套写法）
     static string MusicExeDir()
@@ -9454,7 +9477,34 @@ public class DesktopPet : Form
             }
             else if (actKind == 3)
             {
-                // 骑坐骑：身下一匹矮脚小兽，四条腿交替倒腾，尾巴左右甩
+                Bitmap mt = GetMountArt();
+                if (mt != null)
+                {
+                    // 真贴图：脚底贴地，body 轻颠（每步一下），riding 时人踩在鞍上
+                    float mh = targetH * 0.34f;
+                    float mw = mh * mt.Width / (float)mt.Height;
+                    float bob2 = (float)Math.Sin(t * 6.4f) * targetH * 0.012f;
+                    float lx2 = -mw * 0.5f + (float)Math.Sin(t * 3.1f) * targetH * 0.006f;
+                    // 先离屏缩好再整块贴：直接 DrawImage 缩放在有些合成模式下会被当成空图
+                    int daw = Math.Max(8, (int)mw), dah = Math.Max(8, (int)mh);
+                    Bitmap mtS = new Bitmap(daw, dah, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                    using (Graphics gs = Graphics.FromImage(mtS))
+                    {
+                        gs.Clear(Color.Transparent);
+                        gs.CompositingMode = CompositingMode.SourceOver;
+                        gs.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        gs.DrawImage(mt, 0, 0, daw, dah);
+                    }
+                    g.CompositingMode = CompositingMode.SourceOver;
+                    g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                    g.PixelOffsetMode = PixelOffsetMode.Half;
+                    g.DrawImageUnscaled(mtS, (int)Math.Round(lx2), (int)Math.Round(8f + slide - mh + bob2));
+                    g.PixelOffsetMode = PixelOffsetMode.None;
+                    mtS.Dispose();
+                }
+                else
+                {
+                // 兜底：身下一匹矮脚小兽，四条腿交替倒腾，尾巴左右甩
                 // 骑坐骑：身子只比人略宽一点，太宽就成了个大坐垫把人裹住
                 // 人物横向被压窄过，坐骑按反比放宽，视觉上才比人宽出一圈
                 float my = 10f + slide;
@@ -9507,6 +9557,7 @@ public class DesktopPet : Form
                 {
                     g.FillEllipse(ear, mw * 0.30f, my - mh * 1.42f, mw * 0.09f, mh * 0.20f);
                     g.FillEllipse(ear, mw * 0.44f, my - mh * 1.44f, mw * 0.09f, mh * 0.20f);
+                }
                 }
             }
             else if (actKind == 7)
@@ -10379,6 +10430,25 @@ public class DesktopPet : Form
         p.actKind = 0;
         p.actAmt = 0f;
         p.actHold = 0;
+
+        // 坐骑贴图自检：把载入的那张存出来，确认读到的不是空图
+        try
+        {
+            Bitmap mtx = p.GetMountArt();
+            if (mtx != null) mtx.Save(Path.Combine(dir, "_mount_loaded.png"), System.Drawing.Imaging.ImageFormat.Png);
+        }
+        catch { }
+
+        // 骑坐骑（2026-11-25 换成真贴图后）：抓三帧看颠动与鞍位
+        p.actHold = 999;
+        p.actKind = 3;
+        p.actAmt = 1.0f;
+        for (int ri = 0; ri < 3; ri++)
+        {
+            p.t = 1.2f + ri * 0.35f;
+            DumpOne(p, Path.Combine(dir, "selfcheck_ride_" + ri + ".png"));
+        }
+        p.actKind = 0; p.actAmt = 0f; p.actHold = 0;
 
         // 转身：五段各截一张，看侧身/背面视角是不是真的换了图，而不是压窄的正面
         p.species = 1;          // 白兔少女（叠了侧身/背面视角的那个）

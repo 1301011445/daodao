@@ -999,9 +999,20 @@ public class DaoOverlay extends Service {
                             dy -= 0.010f * h * hand * (1f - nx / 0.26f);
                         }
                     }
-                    if (walk && ny > 0.55f) {                                       // 走路：下半身前后摆，脚下跟着起伏
-                        dx += 0.010f * w * walkAmp * step * (ny - 0.55f) / 0.45f;
-                        dy += -Math.abs(step) * 0.010f * walkAmp * h * ny * ny;
+                    if (walk && ny > 0.55f && ny <= 0.72f) {                        // 骨盆段：整块轻摆（不超过腰）
+                        dx += 0.010f * w * walkAmp * step * (ny - 0.55f) / 0.17f;
+                        dy += -Math.abs(step) * 0.006f * walkAmp * h * ny * ny;
+                    }
+                    if (walk && ny > 0.72f) {
+                        // 2026-11-25 骨链第 1 步：膝以下按左右腿分开、反相迈步。
+                        // 之前整条下半身共用一个 step，两只脚永远同起同落，看着像整块人左右挪。
+                        // sideW 在中线平滑过渡（不是硬切 0.5），中线位移趋 0，裙摆不会被撕开；
+                        // 抬脚只抬"往前迈的那条腿"（Math.max(0, leg)），所以左右脚是轮流落地。
+                        float sideW = Math.max(-1f, Math.min(1f, (nx - 0.5f) / 0.22f));
+                        float legStep = step * sideW;
+                        float legK = (ny - 0.72f) / 0.28f;
+                        dx += 0.006f * w * walkAmp * legStep * legK;
+                        dy += -Math.max(0f, legStep) * 0.010f * h * walkAmp * legK;
                     }
                     if (wave > 0.01f) {
                         // 挥手：只抬画面右侧那条手臂。肩在 0.12~0.30 高度，前臂按 9.5 弧度/秒来回摆，

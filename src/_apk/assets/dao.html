@@ -36,6 +36,14 @@
     pointer-events: none; box-shadow: 0 8px 28px rgba(0,0,0,.4);
   }
   #bubble.show { opacity: 1; transform: translate(-50%, 0); }
+  /* 打字对话框：轻点「跟它说话」弹出；长按仍是录音发送 */
+  #sayBar { position: fixed; left: 10px; right: 10px; bottom: 88px; display: none; align-items: center; gap: 8px; z-index: 40; }
+  #sayBar.show { display: flex; }
+  #sayTxt { flex: 1; height: 46px; border-radius: 23px; border: 1px solid rgba(255,255,255,.35);
+            background: rgba(18,22,34,.94); color: #fff; font-size: 16px; padding: 0 16px; outline: none;
+            -webkit-user-select: text; user-select: text; }
+  #saySend { height: 46px; padding: 0 20px; border-radius: 23px; border: 0; background: #5b6cff; color: #fff; font-size: 16px; font-weight: 600; }
+
   /* 底部不再是一排遥控器：上排四个圆钮像"随手的小动作"，
      下排一整条"跟它说话"像凑近了跟人说，拇指也更好按 */
   #bar {
@@ -257,6 +265,7 @@
       <button id="btnNote"><span class="lb">记事本</span></button>
       <button id="btnDesk"><span class="lb">上桌面</span></button>
     </div>
+    <div id="sayBar"><input id="sayTxt" type="text" placeholder="想跟它说什么…" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="saySend">发送</button></div>
     <button id="btnTalk">跟它说话</button>
   </div>
 </div>
@@ -567,7 +576,7 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
     dpr = Math.min(window.devicePixelRatio || 1, (Math.min(window.innerWidth, window.innerHeight) < 700 ? 1.25 : 1.5));
     var sw = document.getElementById('stage').clientWidth;
     var sh = document.getElementById('stage').clientHeight;
-    scale = Math.min((sw * 1.72) / CW, (sh * 1.04) / CH);   // 2026-11-25 立绘再放大：原来人只占屏幕三分之一，上面空一大片
+    scale = Math.min((sw * 1.45) / CW, (sh * 0.88) / CH);   // 2026-11-25 按要求缩小：原来放到 1.04 屏高，人顶到边、底部按钮被挤
     var cssW = CW * scale, cssH = CH * scale;
     cv.style.width = cssW + 'px';
     cv.style.height = cssH + 'px';
@@ -1548,7 +1557,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '121';
+  var HTML_VER = '122';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -2266,7 +2275,7 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     try { talkBtn.textContent = '跟它说话'; } catch (e) {}
     if (cancel) { abortListen(); tip('松开了，这句不算'); return; }
     if (listening) stopListen();
-    if (held < 350) tip('按太短了（' + (held / 1000).toFixed(1) + ' 秒），按住说满半秒再松手');
+    if (held < 350) { openSay(); }   // 轻点=打字，长按才是说话
     else tip('这一句 ' + (held / 1000).toFixed(1) + ' 秒，发出去了');
   }
   talkBtn.addEventListener('pointerdown', function (e) { startHold(e); });
@@ -2278,6 +2287,28 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     if (e && e.target === talkBtn) return;    // 按钮自己的 up 处理过了
     endHold(false);
   });
+
+  // 2026-11-25 补回打字对话框：轻点=打字，长按=说话
+  var sayBar = document.getElementById('sayBar');
+  var sayTxt = document.getElementById('sayTxt');
+  function openSay() {
+    if (!sayBar) return;
+    sayBar.classList.add('show');
+    setTimeout(function () { try { sayTxt.focus(); } catch (e) {} }, 80);
+  }
+  function closeSay() { try { sayBar.classList.remove('show'); sayTxt.blur(); } catch (e) {} }
+  function sendSay() {
+    var q = (sayTxt && sayTxt.value || '').trim();
+    if (!q) { closeSay(); return; }
+    sayTxt.value = '';
+    closeSay();
+    tip('你说：' + q);
+    chatAsk(q);
+  }
+  if (sayBar) {
+    try { document.getElementById('saySend').addEventListener('click', function (e) { e.preventDefault(); sendSay(); }); } catch (e) {}
+    try { sayTxt.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); sendSay(); } }); } catch (e) {}
+  }
 
   // ---------- 对话 ----------
   function chatAsk(q) {

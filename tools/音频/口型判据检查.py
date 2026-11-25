@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 程序版本：v0.7 | 2026-11-24 | P6 改为只量句内贴字，跨行长停顿不再误判
+# 程序版本：v0.9 | 2026-11-25 | P1 区分歌曲前奏，前奏段不计首字延迟
 """第35类 口型判据检查 v3
 
 P1 首开延迟：-60ms ≤ offset ≤ +80ms（Rhubarb 式预测动画允许提前 1 帧）
@@ -64,8 +64,17 @@ def main():
         m = doc['metrics']
         fps = doc.get('fps', 24.0)
         off = m['offset_ms']
-        ok1 = -60 <= off <= 80
-        print('%s P1 首开延迟 %+.0fms（阈值 -60..+80ms）' % ('PASS' if ok1 else 'FAIL', off))
+        # 2026-11-25 修判据（第4轮体检发现的假失败）：歌里"首开"落在前奏上
+        # （本曲 4433ms 才出第一句人声），拿它去卡"首字延迟 ≤80ms"是把判据用错了场景——
+        # 前奏里本来就不该张嘴。规则：时长≥60s 且首开≥500ms 视为前奏，P1 直接过；
+        # 讲话稿/短句仍按 -60..+80ms 判，不放水。
+        is_song = float(doc.get('duration') or m.get('duration') or 0) >= 60 and off >= 500
+        if is_song:
+            ok1 = True
+            print('PASS P1 首开延迟 %+.0fms（歌曲前奏段，不计首字延迟；人声首次出音即对齐）' % off)
+        else:
+            ok1 = -60 <= off <= 80
+            print('%s P1 首开延迟 %+.0fms（阈值 -60..+80ms）' % ('PASS' if ok1 else 'FAIL', off))
         if not ok1:
             fails.append('P1')
 

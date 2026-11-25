@@ -7323,7 +7323,10 @@ public class DesktopPet : Form
                 {
                     int dist = (int)Math.Sqrt(dxw * dxw + dyw * dyw);
                     bool farAway = dist > 240;
-                    int spd = farAway ? 7 : 3;
+                    // 2026-11-25：速度按身材定。原来近走 3px/跳（16ms一跳 ≈187px/s），
+                    // 145px 高的小人每秒能跑过 1.3 个自己，脚还没抬就到地方了 —— 看着就是脚底打滑、不是走路。
+                    // 现在近走 1px/跳（≈62px/s≈0.43 身高/秒），远走 2px/跳，和八帧步频对得上。
+                    int spd = farAway ? 2 : 1;
                     int sypMax = farAway ? 4 : 2;
                     // 飞、御剑、骑坐骑都是"赶路"，比走路快，而且是真的一段一段挪过去
                     if (actHold > 0)
@@ -7339,7 +7342,7 @@ public class DesktopPet : Form
                     Location = new Point(curX + sxp, curY + syp);
                     walkTicks = 40;
                     // 30 跳/秒：这一跳挪了 sxp 像素 → 每秒挪 |sxp|×30 像素
-                    moveSpeedPxPerSec = Math.Abs(sxp) * 30f;
+                    moveSpeedPxPerSec = Math.Abs(sxp) / Math.Max(dt, 0.001f);   // 2026-11-25：用真实帧间隔，不再假设 30 跳/秒
                     runTicks = farAway ? 46 : 0;
                     walkDirX = Math.Sign(dxw);
                     // 走着走着忽然蹦一下，像动画片里那样（飞在天上就别蹦了）
@@ -7576,10 +7579,11 @@ public class DesktopPet : Form
             float sp = t * (runTicks > 0 ? 12.0f : 8.4f);
             cx += (runTicks > 0 ? 9.0f : 6.5f) * (float)Math.Sin(sp);
             cy -= (runTicks > 0 ? 5.0f : 3.5f) * (float)Math.Abs(Math.Sin(sp * 2.0));
-            // 在场景里真挪位置：跑得快、走得慢，顶到画面边上就掉头
-            tripX += tripDir * (runTicks > 0 ? 6.0f : 3.2f);
-            if (tripX > 104f) { tripX = 104f; tripDir = -1; }
-            if (tripX < -104f) { tripX = -104f; tripDir = 1; }
+            // 2026-11-25（形象补齐·走掉问题）：这里原来每画一帧就 tripX += 3.2。
+            // 绘制次数一变（点一下、冒个气泡、窗口重绘）它就往前蹭一步，于是「点它就自己走掉」；
+            // 帧率高的屏幕走得更快，还会自己顶到画边掉头。真位移只由 tick() 改窗口 Location 负责，
+            // 这里只保留重心左右摆 + 上下颠，不再叠位移。
+            if (tripX != 0f) { tripX *= 0.85f; if (Math.Abs(tripX) < 0.5f) tripX = 0f; }
         }
         else if (lying || lieAmt > 0.05f)
         {
@@ -8169,7 +8173,8 @@ public class DesktopPet : Form
                       && !sitting && lieAmt < 0.25f;
         // 看电视也要朝屏幕那边转：屏幕摆在右手边，人就压窄一点、头朝右偏，别对着观众演
         bool watching = (actAmt > 0.25f && actKind == 6) && !sitting && lieAmt < 0.25f;
-        float sideDir = (runTicks > 0 || walkTicks > 0) ? (float)tripDir : (walkDirX >= 0 ? 1f : -1f);
+        // 2026-11-25：朝向一律跟真实前进方向走（tripDir 已不再翻面，用它会出现「往右走却脸朝左」）
+        float sideDir = (walkDirX >= 0 ? 1f : -1f);
         if (watching) sideDir = 1f;
         if (travel || watching) sx *= 0.78f;
 
@@ -10721,9 +10726,12 @@ public class DesktopPet : Form
             // 闪退第一嫌疑人：点了两次图标，两个道叠在一个位置上互相挤。
             // 已经有一个在跑就安静退出，不再开第二个
             bool isFirst = true;
+            // 2026-11-25：--dump / --dumpexpr 是自检出图模式，不能受单实例锁影响。
+            // 以前道在桌面上跑着时开 --dump，进程拿到 isFirst=false 就静默退出，一张图都不出（A9 评审一直没图可看）。
+            bool cliDump = args.Length > 0 && (args[0] == "--dump" || args[0] == "--dumpexpr");
             try { singleLock = new System.Threading.Mutex(true, "DaoPetSingleInstance", out isFirst); }
             catch { isFirst = true; }
-            if (!isFirst) return;
+            if (!isFirst && !cliDump) return;
             // 启动即后台预热常用短句，开口不用等联网合成
             try { PrewarmTts(); } catch { }
 
@@ -10806,7 +10814,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 135;
+    public const int APP_VER = 136;
 
     public static void Start()
     {

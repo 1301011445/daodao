@@ -1987,6 +1987,8 @@ public class DesktopPet : Form
             // 2026-11-25：生活动作只留「骑坐骑」。飞、御剑、跳舞、转身、喝茶、看电视、
             // 滑板、轮滑全部下线（用户决定：坐骑系统已经够用，其他场景删掉）。
             else if (cmd == "ride") { me.lieHold = 0; me.actKind = 3; me.actHold = 460; say = "骑上它，慢慢走。"; }
+            // 自检口：马上蹦一下，用来验证"跳跃会不会把头顶裁掉"
+            else if (cmd == "hop") { me.hopPend = 34; me.hopWait = 260; say = "蹦一个。"; }
             // 说话类的：背诗、唱歌交给菜单里那套，走 Invoke
             else if (cmd == "poem") { me.BeginInvoke(new MethodInvoker(delegate() { me.MenuPoem(null, null); })); }
             else if (cmd == "english") { me.BeginInvoke(new MethodInvoker(delegate() { me.MenuEnglish(null, null); })); }
@@ -2508,6 +2510,32 @@ public class DesktopPet : Form
         }
         Bitmap b;
         return rideArtMap.TryGetValue(sp, out b) ? b : null;
+    }
+
+    // 2026-11-26（大模型重做骑姿）：上面那种「人一张图 + 马一张图叠起来」的做法，
+    // 无论怎么对鞍位，都躲不开两个硬伤——① 人的近侧腿该盖在马身前面、却只能整张画在马后；
+    // ② 人马比例是人手调的，不是真比例。所以改成让图像大模型直接出「人骑在马上」的整张合成图
+    // （ridef_<形象>.png，白底已抠净），一匹马一个人一次画对，遮挡关系与比例都由模型保证。
+    Dictionary<int, Bitmap> rideFusedMap = null;
+    int rideDbgN = 0;
+    Bitmap RideFuseArt(int sp)
+    {
+        if (rideFusedMap == null)
+        {
+            rideFusedMap = new Dictionary<int, Bitmap>();
+            for (int i = 0; i < 14; i++)
+            {
+                try
+                {
+                    Stream st = ResStream("ridef_" + i + ".png");
+                    if (st == null) continue;
+                    using (Stream s2 = st) { rideFusedMap[i] = new Bitmap(s2); }
+                }
+                catch { }
+            }
+        }
+        Bitmap b;
+        return rideFusedMap.TryGetValue(sp, out b) ? b : null;
     }
 
     Bitmap mountArt = null;
@@ -8236,9 +8264,34 @@ public class DesktopPet : Form
     void DrawPicture(Graphics g, float cx, float cy, float breathe)
     {
         if (faceCount <= 0 || faces == null) return;
-        // 2026-11-26：骑坐骑时整只换骑姿立绘（腿分开坐、臀落鞍面），不再叠站姿站到马背上
-        if (actKind == 3 && actAmt > 0.25f && !sitting && lieAmt < 0.02f && walkTicks <= 0 && runTicks <= 0)
+        // 2026-11-26：骑坐骑时整只换骑姿立绘（腿分开坐、臀落鞍面），不再叠站姿站到马背上。
+        // 注意不能加 walkTicks<=0 的限制：骑坐骑的时候本来就在走路（tick 里每跳都会置 walkTicks=40），
+        // 加上这个条件就永远进不来，只能退回"站姿立绘压扁 + 马叠在下面"的老路子。
+        if (actKind == 3 && actAmt > 0.25f && !sitting && lieAmt < 0.02f)
         {
+            // 优先走大模型出的整张骑乘合成图：人马一体、遮挡与比例天生正确
+            Bitmap rf = RideFuseArt(species);
+            if (rf != null)
+            {
+                float tHf = faces[species % faceCount].Height;
+                float fh = tHf * 0.98f;
+                float fw = fh * rf.Width / Math.Max(1f, rf.Height);
+                // 骑坐骑时它其实一直在往前挪（walkTicks 反复置 40），这里用走路的相位给个蹄子落地的颠，
+                // 幅度按身高比例收，别像整只在跳
+                float stepPh = walkTicks > 0 ? t * 8.4f : t * 6.4f;
+                float bobF = (float)Math.Abs(Math.Sin(stepPh)) * tHf * 0.008f
+                           - (float)Math.Sin(t * 6.4f) * tHf * 0.004f;
+                int dwF = Math.Max(8, (int)Math.Round(fw)), dhF = Math.Max(8, (int)Math.Round(fh));
+                GraphicsState stF = g.Save();
+                // 蹄子落在脚下这条线上：底边对齐 y=0，和站姿立绘同一个落地基准
+                g.TranslateTransform(SnapX(cx), SnapX(cy + 66f - bobF));
+                g.SmoothingMode = SmoothingMode.None;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.DrawImage(rf, new Rectangle(-(int)(fw / 2f), -(int)fh, dwF, dhF));
+                g.Restore(stF);
+                return;
+            }
             Bitmap rd = RideArt(species);
             if (rd != null)
             {
@@ -11020,7 +11073,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 145;
+    public const int APP_VER = 146;
 
     public static void Start()
     {
@@ -11302,6 +11355,7 @@ static class SyncServer
                     else if (path.Contains("p=fly")) { DesktopPet.PoseCmd("fly"); SendText(ns, "FLY"); }
                     else if (path.Contains("p=sword")) { DesktopPet.PoseCmd("sword"); SendText(ns, "SWORD"); }
                     else if (path.Contains("p=ride")) { DesktopPet.PoseCmd("ride"); SendText(ns, "RIDE"); }
+                    else if (path.Contains("p=hop")) { DesktopPet.PoseCmd("hop"); SendText(ns, "HOP"); }
                     else if (path.Contains("p=dance")) { DesktopPet.PoseCmd("dance"); SendText(ns, "DANCE"); }
                     else if (path.Contains("p=tea")) { DesktopPet.PoseCmd("tea"); SendText(ns, "TEA"); }
                     else if (path.Contains("p=tv")) { DesktopPet.PoseCmd("tv"); SendText(ns, "TV"); }

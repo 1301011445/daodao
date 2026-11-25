@@ -919,17 +919,35 @@ public class DaoOverlay extends Service {
             float nodAmp = 0f;
             if (vm == MODE_FULL && nowMs < nodUntil) {
                 float prog2 = 1f - (nodUntil - nowMs) / 1400f;
-                nodAmp = waveEnv(prog2);
+                // 真点头是两下：包络里套 2 个周期的余弦，0→1→0→1→0，峰在 1/4、3/4 处
+                nodAmp = waveEnv(prog2) * (0.5f - 0.5f * (float) Math.cos(prog2 * Math.PI * 4f));
             }
             // 小跳 / 蹲一下：整只抬起来或压下去，脚底始终贴着原来的地平线
             float hop = 0f, squash = 1f;
             if (nowMs < hopUntil) {
                 float pr = 1f - (hopUntil - nowMs) / 900f;
-                hop = (float) Math.sin(pr * Math.PI) * h * 0.085f;
+                float px = Math.max(0f, Math.min(1f, pr));
+                // 抛物线：0→0.35 迅速离地（起跳加速度大），0.35→0.70 落回（重力加速），
+                // 比原来对称 sin 更像真跳——原来上下一样慢，看着像被人提着放下去
+                if (px < 0.70f) {
+                    float u = (px - 0.35f) / 0.35f;
+                    hop = h * 0.085f * Math.max(0f, 1f - u * u);
+                }
+                // 落地那 0.3 秒压一下，给"落地有重量"的反馈
+                if (px > 0.66f) {
+                    float q = (px - 0.66f) / 0.34f;
+                    squash = Math.min(squash, 1f - 0.05f * (float) Math.sin(q * Math.PI));
+                }
             }
             if (nowMs < squatUntil) {
                 float pr = 1f - (squatUntil - nowMs) / 1600f;
                 squash = 1f - 0.085f * (float) Math.sin(pr * Math.PI);
+            }
+            if (squash < 1f) {   // 蹲：压扁的同时横向放宽，体积守恒 → 看着是屈膝，不是整体缩小
+                float sx2 = 1f / squash;   // 严格体积守恒：宽 = 1/高
+                c.translate(w * 0.5f, 0);
+                c.scale(sx2, 1f);
+                c.translate(-w * 0.5f, 0);
             }
             if (walking && walkDir < 0) { c.translate(w, 0); c.scale(-1f, 1f); }   // 向左走就把整帧镜像，别让它倒着迈步
             if (vm == MODE_PEEK && side == SIDE_RIGHT) { c.translate(w, 0); c.scale(-1f, 1f); }   // 在右边扒边，手要朝右

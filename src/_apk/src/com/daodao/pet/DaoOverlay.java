@@ -489,7 +489,8 @@ public class DaoOverlay extends Service {
     }
 
     private void peekDrift() {
-        if (System.currentTimeMillis() - touchAt < 2500) return;   // 手刚碰过就别抢
+        // v129：手碰过 20 秒内不探头（原来 2.5 秒，戳完一会儿又从边上缩回去，看着像自己溜走）
+        if (System.currentTimeMillis() - touchAt < 20000) return;
         if (peekT0 == 0) peekT0 = System.currentTimeMillis();
         long cyc = 13000L;
         long p = (System.currentTimeMillis() - peekT0) % cyc;
@@ -621,6 +622,11 @@ public class DaoOverlay extends Service {
     private long walkOnAt = 0, walkOffAt = 0;   // 起步/停步时刻，用来算 300ms 过渡
     // 2026-11-25 坐骑：0 无坐骑 / 1 祥云 / 2 木马
     private int mount = 0;   // 0 无坐骑，1~N 对应 MOUNT_FILES 里的图
+    // v129 人物与坐骑匹配：每只坐骑单独给「高度占视窗的比例」和「脚踩到它多高」
+    // 数值来自 tools\形象\坐骑配比_v129g.py 的实测与预览（_配比预览6.png）
+    private final float[] MOUNT_MHW = {0.28f, 0.40f, 0.24f, 0.34f, 0.40f};  // 坐骑高 / 视窗高
+    private final float[] MOUNT_FR = {0.86f, 0.60f, 0.45f, 0.58f, 0.38f};   // 脚踩高度 / 坐骑高（从底算）
+    private final float MOUNT_CS = 0.74f;                                   // 骑上时人物缩放，留出头顶空间
     private final String[] MOUNT_FILES = {
             "mount_cloud.png",   // 1 祥云
             "mount_horse.png",   // 2 小木马
@@ -953,14 +959,22 @@ public class DaoOverlay extends Service {
             float rise = 0f;
             Bitmap mb = (mount > 0 && mount < mounts.length ? mounts[mount] : null);
             if (mb != null && !mb.isRecycled()) {
-                float mw = w * 0.98f;
-                float mh = mw * mb.getHeight() / Math.max(1, mb.getWidth());
+                int mi = Math.max(1, Math.min(MOUNT_MHW.length, mount)) - 1;
+                float mh = h * MOUNT_MHW[mi];
+                float mw = mh * mb.getWidth() / Math.max(1, mb.getHeight());
+                if (mw > w * 0.98f) { mw = w * 0.98f; mh = mw * mb.getHeight() / Math.max(1, mb.getWidth()); }
                 RectF mr = new RectF(w * 0.5f - mw * 0.5f, h + bob - mh, w * 0.5f + mw * 0.5f, h + bob);
                 c.drawBitmap(mb, null, mr, p);
-                rise = mh * 0.52f;   // 抬到鞍位：脚踩在坐骑背上，不是整个人沉进云里
+                rise = mh * MOUNT_FR[mi];   // 踩到它背上：祥云高、木马鞍、飞剑刃面、小鹿背、纸鹤脊
             }
             c.save();
-            if (rise > 0f) c.translate(0, -rise);
+            float ms = (mb != null && !mb.isRecycled()) ? MOUNT_CS : 1f;
+            if (ms < 1f) {
+                // 以底边中点为锚点缩小：脚的位置不动，头自动让出空间（原来头会被抬出画布）
+                c.translate(w * 0.5f * (1f - ms), h * (1f - ms));
+                c.scale(ms, ms);
+            }
+            if (rise > 0f) c.translate(0, -rise / ms);
             // 挥手只给满身站姿：走路时腿在动、贴边时手搭在框上，这两种都不该再挥手
             float waveAmp = 0f;
             long nowMs = System.currentTimeMillis();

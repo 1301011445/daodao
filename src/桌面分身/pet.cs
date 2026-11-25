@@ -237,6 +237,8 @@ public class DesktopPet : Form
     int peekSide = 2;             // 1 贴左边 2 贴右边
     bool autoPeek = true;         // 你在别的窗口干活时，它自己贴边
     bool autoPeekActive = false;
+    // 2026-11-26：探头防抖用的时间戳（探头/缩回要先稳定一小会儿才动，见 tick 里的 PEEK 段）
+    int peekStableTick = 0;
     System.Windows.Forms.Timer modeWatch;
     System.Windows.Forms.Timer slideTimer;
     int slideTargetX = int.MinValue;
@@ -300,6 +302,9 @@ public class DesktopPet : Form
 
     int walkTicks = 0;
     int walkTargetX = -999999;
+    // 2026-11-26：位置抖动排查开关（环境变量 DAO_POSLOG=1 时每跳记一行坐标与状态）
+    bool posLogOn = Environment.GetEnvironmentVariable("DAO_POSLOG") == "1";
+    string posLogFile = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath) ?? ".", "_poslog.txt");
     int walkTargetY = -999999;
     int hopPend = 0;
     int hopWait = 260;
@@ -338,7 +343,7 @@ public class DesktopPet : Form
     bool lying = false;       // 真躺下睡：整只侧倒，头上飘 Z
     float lieAmt = 0f;        // 0 站着 1 躺着，用来平滑过渡
     int lieHold = 0;          // 手动"睡一觉"还剩多少帧
-    // 额外生活动作：1 飞 2 御剑 3 骑坐骑 4 跳舞 5 喝茶 6 看电视
+    // 生活动作：2026-11-25 起只保留 3 骑坐骑（其余飞/御剑/跳舞/喝茶/看电视/滑板/轮滑已下线）
     int actKind = 0;
     int actHold = 0;          // 还保持多少帧
     float actAmt = 0f;        // 0..1 平滑进出，道具跟着淡入淡出，不会突然冒出来
@@ -1942,16 +1947,9 @@ public class DesktopPet : Form
             else if (cmd == "cry") { me.cryHold = 700; me.moodKind = 3; me.moodTicks = 120; say = "嗯……我也有心里不好受的时候。"; }
             else if (cmd == "walk") { me.BeginInvoke(new MethodInvoker(delegate() { me.MenuWalkDemo(null, null); })); }
             else if (cmd == "wake") { me.lieHold = 0; me.cryHold = 0; me.idleTicks = 0; me.lying = false; me.actHold = 0; me.actKind = 0; say = "我起来了。"; }
-            // 新生活动作：飞、御剑、骑、跳舞、喝茶、看电视
-            else if (cmd == "fly") { me.lieHold = 0; me.actKind = 1; me.actHold = 460; say = "我飞过去。"; }
-            else if (cmd == "sword") { me.lieHold = 0; me.actKind = 2; me.actHold = 460; say = "踏剑而行，走。"; }
+            // 2026-11-25：生活动作只留「骑坐骑」。飞、御剑、跳舞、转身、喝茶、看电视、
+            // 滑板、轮滑全部下线（用户决定：坐骑系统已经够用，其他场景删掉）。
             else if (cmd == "ride") { me.lieHold = 0; me.actKind = 3; me.actHold = 460; say = "骑上它，慢慢走。"; }
-            else if (cmd == "dance") { me.lieHold = 0; me.actKind = 4; me.actHold = 380; say = "跳一段，你听听节拍。"; }
-        else if (cmd == "turn") { me.lieHold = 0; me.actKind = 9; me.actHold = 400; say = "转个身给你看。"; }
-            else if (cmd == "tea") { me.lieHold = 0; me.actKind = 5; me.actHold = 420; say = "来杯咖啡，握手里慢慢喝。"; }
-            else if (cmd == "tv") { me.lieHold = 0; me.actKind = 6; me.actHold = 560; say = "看会儿电视，别嫌吵。"; }
-            else if (cmd == "skate") { me.lieHold = 0; me.actKind = 7; me.actHold = 460; say = "踩上滑板，溜一段。"; }
-            else if (cmd == "roller") { me.lieHold = 0; me.actKind = 8; me.actHold = 460; say = "穿上轮滑，走。"; }
             // 说话类的：背诗、唱歌交给菜单里那套，走 Invoke
             else if (cmd == "poem") { me.BeginInvoke(new MethodInvoker(delegate() { me.MenuPoem(null, null); })); }
             else if (cmd == "english") { me.BeginInvoke(new MethodInvoker(delegate() { me.MenuEnglish(null, null); })); }
@@ -3400,6 +3398,7 @@ public class DesktopPet : Form
         if (m < 0 || m > 3) m = 0;
         if (petMode == 0 && m != 0) fullLoc = Location;   // 记住满身时站在哪儿，回来还原
         petMode = m;
+        peekStableTick = Environment.TickCount + 300;   // 换模式后先稳一下再判探头
         SetModeWindow();
         SaveModeSettings();
         RefreshModeChecks();
@@ -3697,15 +3696,10 @@ public class DesktopPet : Form
         gLook.DropDownItems.Add(dayMenu);
         gLook.DropDownItems.Add("走两步给你看", null, new EventHandler(MenuWalkDemo));
         gLook.DropDownItems.Add("哭一个", null, new EventHandler(MenuCry));
-        // 新学的几手：飞、御剑、骑坐骑、跳舞、喝茶、看电视
-        gLook.DropDownItems.Add(new ToolStripSeparator());
-        gLook.DropDownItems.Add("飞一趟", null, new EventHandler(MenuActFly));
-        gLook.DropDownItems.Add("御剑飞行", null, new EventHandler(MenuActSword));
+        // 2026-11-25：只留坐骑，飞/御剑/跳舞/转身/喝咖啡/看电视/滑板/轮滑已下线
         gLook.DropDownItems.Add("骑坐骑出去", null, new EventHandler(MenuActRide));
-        gLook.DropDownItems.Add("跳个舞", null, new EventHandler(MenuActDance));
-        gLook.DropDownItems.Add("转个身", null, new EventHandler(MenuActTurn));
-        gLook.DropDownItems.Add("喝杯咖啡", null, new EventHandler(MenuActTea));
-        gLook.DropDownItems.Add("看会儿电视", null, new EventHandler(MenuActTv));
+        // 2026-11-25：飞/御剑/跳舞/转身/喝咖啡/看电视这些生活场景都下线了，只留坐骑
+        gLook.DropDownItems.Add(new ToolStripSeparator());
         ToolStripMenuItem chatItem = new ToolStripMenuItem("闲聊（手动开）");
         chatItem.Checked = chatMode;
         chatItem.Click += new EventHandler(MenuToggleChat);
@@ -4091,13 +4085,8 @@ public class DesktopPet : Form
         if (act == null) return;
         string a = act.Trim().ToLower();
         int kind = 0;
-        if (a == "dance") kind = 4;
-        else if (a == "ride") kind = 3;
-        else if (a == "fly") kind = 1;
-        else if (a == "sword") kind = 2;
-        else if (a == "tea") kind = 5;
-        else if (a == "tv") kind = 6;
-        else if (a == "turn") kind = 9;
+        // 2026-11-25：只认 ride，其余动作已下线（模型还会说 dance/fly，就当没听见）
+        if (a == "ride") kind = 3;
         if (kind > 0)
         {
             actKind = kind;
@@ -4112,30 +4101,19 @@ public class DesktopPet : Form
         }
     }
 
-    // 六个生活动作的菜单入口，都走同一个口子：定动作类型 + 给个持续时间
+    // 生活动作只剩一个：骑坐骑出去
     void StartAct(int kind)
     {
+        if (kind != 3) return;                    // 2026-11-25：其他动作已下线，进来的直接忽略
         if (lying) { lieHold = 0; lying = false; }
         actKind = kind;
-        actHold = kind >= 4 ? 400 : 470;
+        actHold = 470;
         // 要赶路的先把目的地清掉，让行走逻辑马上重新挑一个
-        if (kind >= 1 && kind <= 3) walkTargetX = -999999;
-        if (kind == 1) Say("我飞过去。");
-        else if (kind == 2) Say("踏剑而行，走。");
-        else if (kind == 3) Say("骑上它，慢慢走。");
-        else if (kind == 4) Say("跳一段，你听听节拍。");
-        else if (kind == 5) Say("来杯咖啡，握手里慢慢喝。");
-        else if (kind == 6) Say("看会儿电视，别嫌吵。");
-        else if (kind == 9) { actHold = 400; Say("转个身给你看。"); }
+        walkTargetX = -999999;
+        Say("骑上它，慢慢走。");
     }
 
-    void MenuActFly(object s, EventArgs e) { StartAct(1); }
-    void MenuActSword(object s, EventArgs e) { StartAct(2); }
     void MenuActRide(object s, EventArgs e) { StartAct(3); }
-    void MenuActDance(object s, EventArgs e) { StartAct(4); }
-    void MenuActTurn(object s, EventArgs e) { StartAct(9); }
-    void MenuActTea(object s, EventArgs e) { StartAct(5); }
-    void MenuActTv(object s, EventArgs e) { StartAct(6); }
 
     void MenuSwapVoice(object s, EventArgs e)
     {
@@ -7273,8 +7251,24 @@ public class DesktopPet : Form
             thinkWait = 480 + rnd.Next(900);
             thinkTicks = 46;
         }
+        // 2026-11-26 探头防抖（Q-166）：原来是 OnMouseEnter 滑出来、OnMouseLeave 滑回去，
+        // 可窗口一滑到光标底下，系统立刻又发一次 Leave，于是"出来→回去→出来"520ms 一个来回，
+        // 用户看到的就是"鼠标一放上去整只乱颤"。现在不看进出事件，直接看光标是不是真落在
+        // 窗口矩形里，并且要连续稳定一段时间才动一次，滑行中也一律不重新判定。
+        if (petMode == 1 && !mouseDown && slideTargetX == int.MinValue)
+        {
+            bool inside = Bounds.Contains(Cursor.Position);
+            int wantX = inside ? PeekOutX() : PeekRestX();
+            int need = inside ? 200 : 450;          // 出来快一点（要响应鼠标），缩回去慢一点（防抖）
+            if (Location.X == wantX) peekStableTick = Environment.TickCount;
+            else if (Environment.TickCount - peekStableTick >= need)
+            {
+                SlideTo(wantX);
+                peekStableTick = Environment.TickCount + 700;   // 滑行 520ms 内不再判一次
+            }
+        }
         // 自主行走：先挑个目标，再一步一步挪过去（坐着歇着的时候不走）
-        if (!mouseDown && !sitting)
+        if (!mouseDown && !sitting && petMode == 0)
         {
             if (walkTargetX == -999999)
             {
@@ -7333,15 +7327,8 @@ public class DesktopPet : Form
                     // 现在近走 1px/跳（≈62px/s≈0.43 身高/秒），远走 2px/跳，和八帧步频对得上。
                     int spd = farAway ? 2 : 1;
                     int sypMax = farAway ? 4 : 2;
-                    // 飞、御剑、骑坐骑都是"赶路"，比走路快，而且是真的一段一段挪过去
-                    if (actHold > 0)
-                    {
-                        if (actKind == 1) { spd = farAway ? 13 : 6; sypMax = farAway ? 9 : 5; }
-                        else if (actKind == 2) { spd = farAway ? 15 : 7; sypMax = farAway ? 10 : 5; }
-                        else if (actKind == 3) { spd = farAway ? 9 : 4; sypMax = farAway ? 6 : 3; }
-                        else if (actKind == 7) { spd = farAway ? 12 : 6; sypMax = farAway ? 7 : 4; }
-                        else if (actKind == 8) { spd = farAway ? 14 : 7; sypMax = farAway ? 8 : 4; }
-                    }
+                    // 2026-11-25：只认骑坐骑(3)；飞/御剑/滑板/轮滑等速度分支随动作删了
+                    if (actHold > 0 && actKind == 3) { spd = farAway ? 9 : 4; sypMax = farAway ? 6 : 3; }
                     int sxp = Math.Sign(dxw) * Math.Min(spd, Math.Abs(dxw));
                     int syp = Math.Sign(dyw) * Math.Min(sypMax, Math.Abs(dyw));
                     Location = new Point(curX + sxp, curY + syp);
@@ -7403,6 +7390,21 @@ public class DesktopPet : Form
         // 在这台 i7-5500U 上白烧 6.6% 单核（实测 10 秒 0.66 秒 CPU）。
         // 现在按"有没有东西在动"分档：走动/说话/气泡/挥手/眨眼/动作/情绪在演 → 满帧；
         // 纯站着 → 每 3 跳才画一次（约 10fps），画面看不出差别，CPU 直接降到三分之一。
+        // 2026-11-26 位置抖动排查：DAO_POSLOG=1 时把每一跳的位置与关键状态写盘
+        if (posLogOn)
+        {
+            try
+            {
+                File.AppendAllText(posLogFile, string.Concat(
+                    Environment.TickCount, "\t", Location.X, "\t", Location.Y,
+                    "\tmode=", petMode, "\twave=", waveTicks, "\ttgt=", walkTargetX,
+                    "\tmdown=", mouseDown ? 1 : 0, "\tspk=", speaking ? 1 : 0,
+                    "\tbub=", bubbleFrames, "\tact=", actKind, "/", actHold,
+                    "\tslide=", slideTargetX, "\tpeek=", autoPeekActive ? 1 : 0, "\n"),
+                    Encoding.UTF8);
+            }
+            catch { }
+        }
         bool busy = mouseDown || walkTargetX != -999999 || bubbleFrames > 0 || waveTicks > 0
                     || speaking || blinkFrames > 0 || actHold > 0 || moodTicks > 0
                     || runTicks > 0 || walkTicks > 0 || thinkTicks > 0 || edgeStay > 0;
@@ -7561,7 +7563,8 @@ public class DesktopPet : Form
         float breathe = BrValue() * breatheAmp;
         float dy = 8.5f * (float)Math.Sin(t * (1.12f + 0.05f * (float)Math.Sin(t * 0.07f))) * (0.9f + 0.1f * breatheAmp);
         float dxs = 2.4f * (float)Math.Sin(t * 0.53);
-        if (speaking) dy += 2.4f * (float)Math.Sin(t * (2.0f * (float)Math.PI / (nodBeatMs / 1000.0f)));
+        // 招手那一下头已经自己点了（切条里 fy<0.24 的 7Hz 正弦），说话点头先让开，别两套节奏一起上下拽
+        if (speaking && waveTicks <= 0) dy += 2.4f * (float)Math.Sin(t * (2.0f * (float)Math.PI / (nodBeatMs / 1000.0f)));
         // 2026-11-26：说话点头时再叠心情浮动，两层正弦打架，整只像在发抖（老投诉）。说话时只留点头。
         if (moodTicks > 0 && !speaking) { dy -= 1.0f * (float)Math.Sin(t * 5.2f); }
         // 躺下：慢慢倒过去，不是一下子翻
@@ -7826,10 +7829,10 @@ public class DesktopPet : Form
     void DrawPosePicture(Graphics g, float cx, float cy, float breathe)
     {
         int want = 0;
-        if (sitting || (actAmt > 0.25f && actKind == 6)) want = 4;                 // 坐下看电视
+        // 2026-11-25：看电视(4)、跳舞(3) 两套姿势已下线，只剩坐、招手、迈步、骑坐骑
+        if (sitting) want = 4;
         else if (waveTicks > 0) want = 1;                                         // 举手招呼
         else if (runTicks > 0 || walkTicks > 0) want = 2;                         // 迈步走
-        else if (actAmt > 0.25f && actKind == 4) want = 3;                        // 跳舞欢呼
         else if (actAmt > 0.25f && actKind == 3) want = 2;
         if (want >= poses.Length) want = 0;
         if (want != poseIdx)
@@ -7846,7 +7849,7 @@ public class DesktopPet : Form
         if (posePrev >= poses.Length) posePrev = 0;
 
         bool walking = walkTicks > 0 || runTicks > 0;
-        bool travel = walking || (actAmt > 0.25f && (actKind == 1 || actKind == 2 || actKind == 3));
+        bool travel = walking || (actAmt > 0.25f && actKind == 3);
         // 贴图必须一像素对一像素：一旦缩放采样，边缘就会混出半透明，
         // 透明键窗口把它染成一圈粉紫描边。呼吸和迈步改用上下位移来表现
         float sy = 1f;
@@ -7880,12 +7883,7 @@ public class DesktopPet : Form
             if (fi < 0) fi += 8;
             pb = walkFrames[fi];
         }
-        // 御剑：这个形象配了专属的踩剑姿势，就整张换掉——
-        // 不再是正面站姿压窄配一把画出来的剑，人是真踩在剑上、身体前倾
-        if (actAmt > 0.25f && actKind == 2 && swordFly != null)
-        {
-            pb = swordFly;
-        }
+        // 2026-11-25：御剑的专属踩剑姿势随御剑一起删了
         // 图已经是显示尺寸（152 高），照着它本来的大小贴
         float targetH = pb.Height;
         float baseW = pb.Width;
@@ -7893,12 +7891,8 @@ public class DesktopPet : Form
         int scIdx = sceneIdx;
         if (actAmt > 0.25f)
         {
-            if (actKind == 2) scIdx = 5;
-            else if (actKind == 1) scIdx = 2;
-            else if (actKind == 3) scIdx = 1;
-            else if (actKind == 4 || actKind == 5) scIdx = 3;
-            else if (actKind == 6) scIdx = 4;
-            else if (actKind == 7 || actKind == 8) scIdx = 0;
+            // 2026-11-25：只剩骑坐骑，其余动作的景随动作一起删
+            if (actKind == 3) scIdx = 1;
         }
         DrawScenery(g, cx, footY + bob, baseW, targetH, t, scIdx, 1f);
 
@@ -8021,24 +8015,7 @@ public class DesktopPet : Form
             DrawPosePicture(g, cx, cy, breathe);
             return;
         }
-        // 御剑：这个形象没有整套姿势图，但专门配了一张踩剑姿势，就直接按那张画。
-        // 不这样的话，8 号这类只有一张立绘的形象御剑时还是正面站着
-        if (actAmt > 0.25f && actKind == 2 && swordFlyMap != null
-            && swordFlyMap.ContainsKey(species))
-        {
-            DrawSwordPose(g, cx, cy, breathe);
-            return;
-        }
-        // 配了八帧走路、但没有整套姿势图的形象：走起来直接换成那八帧真动作。
-        // 以前这条被"必须有整套姿势图"挡住了，八帧图编进程序却一次没用上，
-        // 走起来只是把一张立绘当纸片推着走，手脚看着当然是僵的
-        // 跳舞：配了八帧的形象直接播那套手脚动作，配上整只的左右摆和上下弹。
-        // 原来的跳舞是把身体切条往外推，看着就是"折叠"，完全不像跳舞
-        if (actAmt > 0.25f && actKind == 4 && walkFrames != null && walkFrames.Length >= 8)
-        {
-            DrawDanceFrames(g, cx, cy, breathe);
-            return;
-        }
+        // 2026-11-25：御剑(2)与跳舞(4)下线，对应的整图切换/八帧跳舞分支一起删了
         if ((walkTicks > 0 || runTicks > 0) && walkFrames != null && walkFrames.Length >= 8)
         {
             DrawWalkFrames(g, cx, cy, breathe);
@@ -8047,23 +8024,7 @@ public class DesktopPet : Form
         Bitmap bmp = faces[species % faceCount];
         if (bmp == null) return;
 
-        // 2026-11-25：转身。前 → 侧 → 背 → 侧 → 前，5 段各 0.32 秒。
-        // 这套角度是图像模型渲出来的真视角，不是把正面压窄，所以背对时后脑、耳朵背面、裙摆都是对的
-        bool useTurn = false;
-        if (actAmt > 0.25f && actKind == 9 && faceFileIdx != null && species >= 0 && species < faceFileIdx.Length)
-        {
-            int fid = faceFileIdx[species];
-            if (sideFaces.ContainsKey(fid) && backFaces.ContainsKey(fid))
-            {
-                float p9 = 1f - actHold / 400f;
-                if (p9 < 0f) p9 = 0f; else if (p9 > 1f) p9 = 1f;
-                int ph9 = (int)(p9 * 5f);
-                if (ph9 > 4) ph9 = 4;
-                if (ph9 == 2) bmp = backFaces[fid];
-                else if (ph9 == 1 || ph9 == 3) bmp = sideFaces[fid];
-                useTurn = true;
-            }
-        }
+        // 2026-11-25：转身(9)下线，侧脸/背脸换图那段删了
 
         // 有真表情图就整张换：小脸上叠画的腮红、泪珠、怒气符在桌面尺寸下必然糊
         int exprKind = 0;   // 0 平常 1 开心 2 生气 3 难过 4 睡着
@@ -8084,7 +8045,7 @@ public class DesktopPet : Form
             else if (moodKind == 6) exprKind = 0;
         }
         bool useExpr = false;
-        if (!useTurn && UseExprArt && exprKind > 0 && exprMap != null && exprMap.ContainsKey(species))
+        if (UseExprArt && exprKind > 0 && exprMap != null && exprMap.ContainsKey(species))
         {
             Bitmap[] exs = exprMap[species];
             int exi = -1;
@@ -8136,13 +8097,6 @@ public class DesktopPet : Form
             sy *= 0.90f;
             bob += 3.0f;
         }
-        // 看电视：往地上坐一点，身子朝电视那边歪，才像真在看
-        if (actAmt > 0.25f && actKind == 6 && lieAmt < 0.5f)
-        {
-            sy *= 0.78f;
-            sx *= 1.06f;
-            bob += 10.0f;
-        }
         // 骑坐骑：侧着骑才看得出是"骑马"，所以横向压窄成人+兽的侧影，整只往上抬一截
         if (actAmt > 0.25f && actKind == 3 && lieAmt < 0.5f)
         {
@@ -8174,22 +8128,21 @@ public class DesktopPet : Form
             sx = 1f - 0.045f * p;
             bob = -Math.Abs(p) * 8.0f;
         }
-        if (speaking)
+        if (speaking && !waving)
         {
+            // 2026-11-26：招手时这层整只缩放先让开，不然"挥手摆动 + 说话呼吸 + 点头"三层叠着就是颤
             float p2 = (float)Math.Sin(t * 9.5);
             sx *= 1f + 0.026f * p2;
             sy *= 1f - 0.018f * p2;
         }
         // 赶路的时候侧过身去：横向压窄就显出侧面了，再按前进方向翻个面，身板跟着前倾。
         // 一直是正面直直地挪，看着像在原地踏步，不像在赶路
-        bool travel = (running || walking || (actAmt > 0.25f && ((actKind >= 1 && actKind <= 3) || actKind == 7 || actKind == 8)))
+        bool travel = (running || walking || (actAmt > 0.25f && actKind == 3))
                       && !sitting && lieAmt < 0.25f;
-        // 看电视也要朝屏幕那边转：屏幕摆在右手边，人就压窄一点、头朝右偏，别对着观众演
-        bool watching = (actAmt > 0.25f && actKind == 6) && !sitting && lieAmt < 0.25f;
+        // 2026-11-25：看电视那一套（朝屏幕侧身）随电视一起删了
         // 2026-11-25：朝向一律跟真实前进方向走（tripDir 已不再翻面，用它会出现「往右走却脸朝左」）
         float sideDir = (walkDirX >= 0 ? 1f : -1f);
-        if (watching) sideDir = 1f;
-        if (travel || watching) sx *= 0.78f;
+        if (travel) sx *= 0.78f;
 
         // 人物在窗口里的块头：152 显得人小、脸上细节糊成一片，162 还是偏小——
         // 画布高 205、脚底压在 cy+68=195，162 只占到 43..195，上下都空着一截。
@@ -8214,11 +8167,9 @@ public class DesktopPet : Form
             if (hp > 0.20f && hp < 0.85f) hopLegTuck = -4f;                  // 空中腿收起来
         }
 
-        // 披风飞和御剑是腾空的，脚离地，还得轻轻上下飘
+        // 2026-11-25：披风飞/御剑也下线了，只剩坐骑需要离地
         float airY = 0f;
-        if (actAmt > 0.02f && (actKind == 1 || actKind == 2))
-            airY = -22f * actAmt - 4f * actAmt * (float)Math.Sin(t * 1.7);
-        else if (actAmt > 0.02f && actKind == 3)
+        if (actAmt > 0.02f && actKind == 3)
         {
             // 骑着走：略微离地，坐骑就在身下；颠一颠像蹄子落地
             airY = -14f * actAmt - 3f * actAmt * Math.Abs((float)Math.Sin(t * 5.2f));
@@ -8231,38 +8182,24 @@ public class DesktopPet : Form
         // 走动时不硬塞城市：就在今天这张景里走，稻田里能看见风吹稻浪
         if (actAmt > 0.25f)
         {
-            // 飞行和御剑本身就是在赶路，走路的那一条会把城市盖上来，所以这两条得放在后头
-            if (actKind == 2) scIdx = 5;                      // 御剑：仙侠云海
-            else if (actKind == 1) scIdx = 2;                 // 披风飞：海边日落
-            else if (actKind == 3) scIdx = 1;                 // 骑坐骑：乡野田间
-            else if (actKind == 4 || actKind == 5) scIdx = 3; // 跳舞、喝茶：花丛
-            else if (actKind == 6) scIdx = 4;                 // 看电视：屋里，台灯加窗
-            else if (actKind == 7 || actKind == 8) scIdx = 0; // 滑板、轮滑：城市街头的地砖
+            // 2026-11-25：只剩骑坐骑一种动作，场景只跟它对；其余动作的景（云海/日落/花丛/客厅/街头）随动作一起删了
+            if (actKind == 3) scIdx = 1;                 // 骑坐骑：乡野田间
         }
         DrawScenery(g, cx, footY + hopY + bob + airY, baseW, targetH, t, scIdx, 1f);
 
         GraphicsState st = g.Save();
-        // 跳舞的整只位移：左右摇 + 落拍下沉，这是"人在动"，不是把身体切条推开
-        float danceX = 0f, danceY = 0f, danceRot = 0f;
-        if (actAmt > 0.25f && actKind == 4)
-        {
-            float beat = t * 3.6f;
-            danceX = 8f * actAmt * (float)Math.Sin(beat);
-            danceY = -5f * actAmt * (float)Math.Abs((float)Math.Sin(beat * 2f));
-            danceRot = 4.0f * actAmt * (float)Math.Sin(beat);
-        }
-        g.TranslateTransform(cx + danceX, footY + hopY + bob + airY + danceY);
+        // 2026-11-25：跳舞下线，整只位移/摇摆这一段一起删了，只剩坐骑与日常的平移
+        g.TranslateTransform(cx, footY + hopY + bob + airY);
         // 2026-11-25：透明键窗口只要发生任何非整数采样，边缘就会被洋红键色染成粉边。
         // 所以站着/走路/招手这些常态一律不旋转不缩放，只做整像素平移；呼吸改成 1px 上下弹。
         // 只有躺、赶路、看电视、跳舞这几个本来就要侧身/压扁的状态才允许采样，
         // 那时轮廓边缘有点混色，比动作完全不动要划算。
-        bool leanMode = travel || watching || lieAmt > 0.02f || (actAmt > 0.25f && actKind == 4);
+        bool leanMode = travel || lieAmt > 0.02f;
         if (leanMode)
         {
-            g.RotateTransform(tiltNow + danceRot + (travel ? sideDir * 4.5f : 0f)
-                + (watching ? 18f * sideDir : 0f)
+            g.RotateTransform(tiltNow + (travel ? sideDir * 4.5f : 0f)
                 + ((actAmt > 0.25f && actKind == 3) ? sideDir * 6f : 0f));
-            g.ScaleTransform((travel || watching) ? sx * sideDir : sx, sy);
+            g.ScaleTransform(travel ? sx * sideDir : sx, sy);
         }
         else
         {
@@ -8290,7 +8227,6 @@ public class DesktopPet : Form
         // 手臂那条细带跟躯干错开之后会断开成独立色块（自检帧里量到 9~10px 的孤立岛），
         // 看着就是"肢体不协调"。现在上身只摆 3.6px、手臂 3.2、抬腿 3.2，先保证轮廓连续。
         float ampTarget = running ? 7.0f : (walking ? 4.6f : 0.8f);
-        if (actAmt > 0.02f && actKind == 4) ampTarget += 1.8f * actAmt;   // 跳舞只留一点摆动，大幅切条就是折叠
         // 2026-11-25（第4类 Flutter 落地②）：摆动幅值原来跟 walking 布尔硬切，
         // 脚一动身体立刻摆满、停下又立刻归零，像被"啪"一下打开。改成同一套阻尼弹簧
         // （ω=16、ζ=0.8）：摆幅渐起、停步后 0.3s 自己收回，惯性是看得见的那一段。
@@ -8300,15 +8236,13 @@ public class DesktopPet : Form
         SpringStep(ref swayAmpCur, ref swayAmpVel, ampTarget, dAmp, 16f, 0.8f);
         float amp = swayAmpCur;
         float ph = walkPhaseHint >= 0f ? walkPhaseHint : t * (running ? 12.0f : 8.4f);
-        if (actAmt > 0.02f && actKind == 4) ph = t * 8.0f;           // 节拍降下来，切条推太快就成抽搐
         float legLift = running ? 7.0f : (walking ? 4.2f : 0f);
-        bool stepping = (running || walking || (actAmt > 0.3f && actKind == 4)) && hopPend <= 0;
-        // 手臂的张合幅度：走路跑跳最大，站着也有一点，御剑和骑坐骑手要扶着就不摆
+        bool stepping = (running || walking) && hopPend <= 0;
+        // 手臂的张合幅度：走路跑跳最大，站着也有一点，骑坐骑手要扶着就不摆
         float armAmp = 0f;
-        bool handsBusy = (actAmt > 0.25f && (actKind == 2 || actKind == 3 || actKind == 5 || actKind == 7 || actKind == 8));
+        bool handsBusy = (actAmt > 0.25f && actKind == 3);
         if (!handsBusy) armAmp = running ? 5.0f : (walking ? 3.8f : 1.8f);
         if (waving) armAmp = 8.0f;
-        if (actAmt > 0.25f && actKind == 4) armAmp = 4.0f;
         // 走路时手臂必须和腿同频反相（左腿抬起时右手往前），不同频整只就像牌子在晃
         float armPh = running ? (ph + (float)Math.PI)
             : (waving ? t * 9.0f : (stepping ? ph + (float)Math.PI : t * 3.2f));
@@ -8411,7 +8345,10 @@ public class DesktopPet : Form
         float fyp = (fidx >= 0 && fidx < faceAtY.Length) ? faceAtY[fidx] : 0.36f;
         float fwp = (fidx >= 0 && fidx < faceAtW.Length) ? faceAtW[fidx] : 0.55f;
         float fOff = amp * BoneSway(fyp, ph);
-        if (waving && fyp < 0.68f) fOff += 12.0f * (0.68f - fyp) * (float)Math.Sin(t * 13.0);
+        // 2026-11-26：招手时脸原来按 13Hz/12px 单独摆，头和躯干按 7Hz/6px 摆，
+        // 两层不同频不同幅，脸在脑袋里来回滑，用户看到的就是"整只在乱颤"。
+        // 现在脸与同高度的切条同频同相，只多 1px 跟随差，不再自己抖。
+        if (waving && fyp < 0.68f) fOff += 7.0f * (0.68f - fyp) * (float)Math.Sin(t * 7.0f);
         float faceX0 = -baseW / 2f + fxp * baseW + fOff;
         float faceY0 = -targetH + fyp * targetH;
         // 身前的物件：茶杯、电视机、跳舞的音符，画在身体上、脸下面
@@ -9362,6 +9299,9 @@ public class DesktopPet : Form
     {
         float a = actAmt;
         if (a < 0.02f || actKind <= 0) return;
+        // 2026-11-25：道具只服务坐骑。披风飞、御剑、跳舞、茶杯、电视、滑板、轮滑的绘制
+        // 全部下线，这里直接挡住，免得哪天有人把 actKind 又设成别的值、那些旧道具又冒出来。
+        if (actKind != 3) return;
         float half = baseW / 2f;
         // 道具尺度按身高算，不按图的宽度算：恐龙、剑客这类竖长条形象身体只有几十像素宽，
         // 按宽度算披风就细成一根带子，电视也小得看不见
@@ -10414,13 +10354,13 @@ public class DesktopPet : Form
     protected override void OnMouseEnter(EventArgs e)
     {
         base.OnMouseEnter(e);
-        if (petMode == 1) SlideTo(PeekOutX());     // 探头：鼠标过来就整个出来
+        // 2026-11-26：探头不再在这里直接滑（会和 MouseLeave 打架），交给 tick 里的防抖判定
     }
 
     protected override void OnMouseLeave(EventArgs e)
     {
         base.OnMouseLeave(e);
-        if (petMode == 1 && !mouseDown) SlideTo(PeekRestX());   // 走开又缩回去
+        // 同上：探头/缩回统一由 tick 按光标位置判定
     }
 
     protected override void OnDoubleClick(EventArgs e)
@@ -10741,7 +10681,7 @@ public class DesktopPet : Form
             bool isFirst = true;
             // 2026-11-25：--dump / --dumpexpr 是自检出图模式，不能受单实例锁影响。
             // 以前道在桌面上跑着时开 --dump，进程拿到 isFirst=false 就静默退出，一张图都不出（A9 评审一直没图可看）。
-            bool cliDump = args.Length > 0 && (args[0] == "--dump" || args[0] == "--dumpexpr");
+            bool cliDump = args.Length > 0 && (args[0] == "--dump" || args[0] == "--dumpexpr" || args[0] == "--shakecheck");
             try { singleLock = new System.Threading.Mutex(true, "DaoPetSingleInstance", out isFirst); }
             catch { isFirst = true; }
             if (!isFirst && !cliDump) return;
@@ -10764,6 +10704,28 @@ public class DesktopPet : Form
                 return;
             }
             // 表情图专项自检：把 8 号的四种表情各出一张，顺带把加载状态写出来
+            // 点击抖动专项自检：模拟"点了一下"（挥手 + 开口），按 60fps 连续出 24 帧
+            if (args.Length > 0 && args[0] == "--shakecheck")
+            {
+                string sd = Path.GetDirectoryName(Application.ExecutablePath);
+                DesktopPet qs = new DesktopPet();
+                qs.species = 8;
+                qs.waveTicks = 46;
+                qs.speaking = true;
+                for (int si = 0; si < 24; si++)
+                {
+                    qs.t = 3.0f + si / 60.0f;
+                    DumpOne(qs, Path.Combine(sd, "_shake_f" + si.ToString("00") + ".png"));
+                }
+                qs.speaking = false;
+                qs.waveTicks = 0;
+                for (int si = 0; si < 24; si++)
+                {
+                    qs.t = 3.0f + si / 60.0f;
+                    DumpOne(qs, Path.Combine(sd, "_idle_f" + si.ToString("00") + ".png"));
+                }
+                return;
+            }
             if (args.Length > 0 && args[0] == "--dumpexpr")
             {
                 string dd = Path.GetDirectoryName(Application.ExecutablePath);

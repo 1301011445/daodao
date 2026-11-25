@@ -454,6 +454,7 @@ public class DaoOverlay extends Service {
     private long peekT0 = 0;
     private int peekLastX = Integer.MIN_VALUE;
     private long touchAt = 0;
+    private long lastTapAt = 0;   // v128 双击判定：500ms 内第二下才算双击
 
     // 自己会走：站着待一会儿，然后沿着当前高度走 2~4 秒，走到边就掉头
     private boolean walking = false;
@@ -463,29 +464,28 @@ public class DaoOverlay extends Service {
 
     private void walkDrift() {
         long now = System.currentTimeMillis();
-        if (now - touchAt < 2000) { walking = false; if (pv != null) pv.walking = false; return; }
-        int w = lp.width;
+        // v128：原来只挡 2 秒，戳完一放手两三秒内又自己开走，走出屏幕；改成 8 秒
+        if (now - touchAt < 8000) {
+            if (walking) { walking = false; if (pv != null) pv.walking = false; }
+            walkNextAt = now + 6000;
+            return;
+        }
         if (!walking) {
             if (walkNextAt == 0) walkNextAt = now + 3000 + (long) (Math.random() * 4000);
             if (now < walkNextAt) return;
             walking = true;
-            walkDir = Math.random() < 0.5 ? -1 : 1;
-            // 2026-11-24 夜：原来一次只走 2~3.8 秒、一拍挪 0.75dp，一趟在 1080 宽的屏上
-            // 只动 20~30dp，肉眼几乎看不出在走。改成走 3~5.2 秒、一拍 2dp（≈22dp/秒）。
+            walkDir = Math.random() < 0.5 ? -1 : 1;   // 只决定朝左还是朝右迈，不再挪窗口
             walkUntilAt = now + 3000 + (long) (Math.random() * 2200);
             if (pv != null) pv.walking = true;
         }
-        int step = Math.max(2, dp(2.0f));
-        lp.x += walkDir * step;
-        if (lp.x <= dp(2)) { lp.x = dp(2); walkDir = 1; }
-        if (lp.x >= sw - w - dp(2)) { lp.x = sw - w - dp(2); walkDir = -1; }
+        // 2026-11-25 用户：走路不是移动。以前这里把整个悬浮窗按 2dp/拍往横里推
+        // （≈22dp/秒，走 3~5 秒就是横穿小半屏），看着就是"点它一下它就跑掉了"。
+        // 现在窗口原地不动，只播迈步动画（walk8 帧 + 骨盆与分腿位移），人站在原地迈腿。
         if (now > walkUntilAt) {
             walking = false;
-            // 停 3.5~7 秒再来一趟（原来 6~14 秒，等太久看着像不会动）
             walkNextAt = now + 3500 + (long) (Math.random() * 3500);
             if (pv != null) pv.walking = false;
         }
-        try { wm.updateViewLayout(pv, lp); } catch (Exception e) { }
     }
 
     private void peekDrift() {
@@ -1186,22 +1186,37 @@ public class DaoOverlay extends Service {
                     t0 = System.currentTimeMillis();
                     touchAt = t0;
                     moved = false;
+                    // v128：手一碰就先站住，别让人边点边走
+                    walking = false;
+                    if (pv != null) pv.walking = false;
                     return true;
                 case MotionEvent.ACTION_MOVE: {
                     float dx = e.getRawX() - dRx, dy = e.getRawY() - dRy;
-                    if (!moved && (Math.abs(dx) > dp(6) || Math.abs(dy) > dp(6))) moved = true;
+                    // v128：阈值 6dp → 16dp。手指按在桌面上天然会抖 2~8dp，
+                    // 原来那点抖动就被当成拖动，窗口跟着手指乱窜。
+                    if (!moved && (Math.abs(dx) > dp(16) || Math.abs(dy) > dp(16))) moved = true;
                     if (moved) dragTo(wx0 + (int) dx, wy0 + (int) dy);
                     touchAt = System.currentTimeMillis();
                     return true;
                 }
                 case MotionEvent.ACTION_UP: {
                     long dt = System.currentTimeMillis() - t0;
-                    if (!moved && dt < 400) {
-                        onTap();
-                    } else if (!moved) {
-                        cycleArt();          // 长按不动 = 换形象（跟通知里那颗按钮同一个口子）
-                    } else {
+                    long now = System.currentTimeMillis();
+                    touchAt = now;
+                    if (moved) {                // 真拖动：只落位，不演动作
+                        lastTapAt = 0;
                         onDrop();
+                    } else if (dt < 400) {      // 轻点
+                        if (lastTapAt != 0 && now - lastTapAt < 500) {
+                            lastTapAt = 0;
+                            openApp();          // 双击：打开 App
+                        } else {
+                            lastTapAt = now;
+                            onTap();            // 单击：站定应一声
+                        }
+                    } else {                    // 长按：也只应一声，换形象另走通知按钮
+                        lastTapAt = 0;
+                        onTap();
                     }
                     return true;
                 }
@@ -1248,13 +1263,16 @@ public class DaoOverlay extends Service {
         }
 
         private void onTap() {
+            // v128：单击只做「站定 + 应一声」，不再一戳就把 App 弹出来（那样看着像人凭空没了）。
+            // 要开 App 改成双击。
+            long now = System.currentTimeMillis();
+            touchAt = now;
+            walking = false;
+            if (pv != null) pv.walking = false;
             if (vm == MODE_BALL || vm == MODE_PEEK) {
-                // 跟电脑端一个规矩：戳一下就站直，不再满屏贴边；顺手打个招呼
                 setModeInternal(MODE_FULL);
-                greet(true);
-            } else {
-                openApp();
             }
+            greet(true);
         }
 
         // 2026-11-23 学来的：对称的 sin(πp) 起落一样慢，看起来机械。真实动作是

@@ -255,7 +255,7 @@
       <button id="ovSide">换一边</button>
       <button id="ovOff">从桌面拿下来</button>
     </div>
-    <div id="ovFt">第一次用要在系统里放行「显示在其他应用上层」。<button id="ovPerm">去开权限</button></div>
+    <div id="ovFt">满身站着时约 15% 屏高（v137 放大过，能看清眉眼）。骑云/鹤/剑会上下飘着飞。第一次用要在系统里放行「显示在其他应用上层」。<button id="ovPerm">去开权限</button></div>
   </div>
   <div id="bar">
     <div class="minis">
@@ -1328,6 +1328,8 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
     species = _ks[(_ci + 1 + Math.floor(Math.random() * (_ks.length - 1))) % _ks.length];
     mood = 1; moodLeft = 2.0;
     dx = 0;
+    // 2026-11-26 用户：App 里选的形象，手机桌面上的悬浮窗要跟着换，不能各显示各的
+    try { if (window.DaoNative && DaoNative.setArt) DaoNative.setArt(species); } catch (err) {}
     // 换完报个名，不然你不知道换成了谁
     try { say('换了个模样：' + (WHO[species] || '它自己') + '。'); } catch (err) {}
   });
@@ -1558,7 +1560,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '136';
+  var HTML_VER = '137';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;

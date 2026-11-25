@@ -83,6 +83,11 @@ public class DaoOverlay extends Service {
     private int mode = MODE_PEEK;
     private int side = SIDE_RIGHT;
     private int art = ART_WALK;        // 当前桌面形象（face 文件序号），默认还是那个有八帧素材的少女
+    // 2026-11-26：App 里点「换形象」也要让桌面上这只立刻跟着换
+    private static DaoOverlay sSvc;
+    // 2026-11-26 悬浮窗会走会飞：攒不够 1dp 的位移，别因为取整原地抖
+    private float driftAccX = 0f;
+    private float flyBaseY = Float.NaN;
     private int sw = 0, sh = 0;
     private boolean added = false;
     private boolean screenOn = true;
@@ -176,6 +181,7 @@ public class DaoOverlay extends Service {
         mode = sp.getInt("mode", MODE_PEEK);
         side = sp.getInt("side", SIDE_RIGHT);
         art = sp.getInt("art", ART_WALK);
+        sSvc = this;
         measure();
 
         screenRx = new BroadcastReceiver() {
@@ -250,6 +256,7 @@ public class DaoOverlay extends Service {
         removeView();                      // 只拆窗口，不再发通知（服务都要没了，别再留一条挂着）
         try { if (screenRx != null) unregisterReceiver(screenRx); } catch (Exception e) { }
         try { sp.edit().putBoolean("on", false).apply(); } catch (Exception e) { }
+        if (sSvc == this) sSvc = null;
         super.onDestroy();
     }
 
@@ -276,10 +283,12 @@ public class DaoOverlay extends Service {
     /** 满身/贴边共用的立绘尺寸：高约屏幕 7.5%（上一版 16% 还是太大，挡图标）
      *  1080×2400 / density 2.75 实测：180px 高、90px 宽，跟桌面图标差不多大 */
     private int petH() {
-        int h = (int) (sh * 0.075f);
-        int cap = dp(66);
+        // 2026-11-26 用户：悬浮窗太小、看不出模样。7.5% 屏高 / 66dp 顶 → 15% / 150dp 顶，下限 52dp → 100dp。
+        // 1080×2400 上约 360px 高、180px 宽，胳膊腿和脸都能看清；再大会挡图标。
+        int h = (int) (sh * 0.15f);
+        int cap = dp(150);
         if (h > cap) h = cap;
-        if (h < dp(52)) h = dp(52);
+        if (h < dp(100)) h = dp(100);
         return h;
     }
 
@@ -478,14 +487,46 @@ public class DaoOverlay extends Service {
             walkUntilAt = now + 3000 + (long) (Math.random() * 2200);
             if (pv != null) pv.walking = true;
         }
-        // 2026-11-25 用户：走路不是移动。以前这里把整个悬浮窗按 2dp/拍往横里推
-        // （≈22dp/秒，走 3~5 秒就是横穿小半屏），看着就是"点它一下它就跑掉了"。
-        // 现在窗口原地不动，只播迈步动画（walk8 帧 + 骨盆与分腿位移），人站在原地迈腿。
+        // 2026-11-26 用户：又要会走、会飞，但不能像以前那样一碰就跑。
+        // 规则：每拍最多 0.42dp（≈12.6dp/秒），一次走 3~5 秒也就 40~60dp；
+        // 骑云/鹤/剑的三只算腾空，另叠一层 ±9dp 的上下飘，看着是在飞。
+        if (!isAirMount()) flyBaseY = Float.NaN;
+        int w = lp.width, h = lp.height;
+        if (isAirMount()) {
+            if (Float.isNaN(flyBaseY)) flyBaseY = lp.y;
+            int bobY = (int) (Math.sin(now / 620.0) * dp(9));
+            int ny = (int) flyBaseY + bobY;
+            if (ny < dp(4)) ny = dp(4);
+            if (ny > sh - h - dp(4)) ny = sh - h - dp(4);
+            if (ny != lp.y) {
+                lp.y = ny;
+                try { wm.updateViewLayout(pv, lp); } catch (Throwable e) { }
+            }
+        }
+        driftAccX += 0.42f * walkDir;
+        if (Math.abs(driftAccX) >= 1f) {
+            int d = (int) driftAccX;
+            driftAccX -= d;
+            int nx = lp.x + d;
+            if (nx < dp(2) || nx > sw - w - dp(2)) { walkDir = -walkDir; driftAccX = 0f; }
+            else {
+                lp.x = nx;
+                try { wm.updateViewLayout(pv, lp); } catch (Throwable e) { }
+            }
+        }
         if (now > walkUntilAt) {
             walking = false;
             walkNextAt = now + 3500 + (long) (Math.random() * 3500);
             if (pv != null) pv.walking = false;
+            flyBaseY = Float.NaN;
+            try { sp.edit().putInt("x0", lp.x).putInt("y0", lp.y).apply(); } catch (Throwable e) { }
         }
+    }
+
+    /** 骑在云 / 飞剑 / 纸鹤上算腾空，要上下飘；木马小鹿是踩在地上的。 */
+    private boolean isAirMount() {
+        try { return pv != null && (pv.mount == 1 || pv.mount == 3 || pv.mount == 5); }
+        catch (Throwable e) { return false; }
     }
 
     private void peekDrift() {
@@ -613,6 +654,18 @@ public class DaoOverlay extends Service {
         PetView v = sLive;
         if (v != null) v.postInvalidate();
     }
+    /** 2026-11-26：App 里换形象，桌面上的悬浮窗立刻跟着换；没起悬浮窗就先记进偏好，下次起来直接是它。 */
+    public static void setArt(int k) {
+        DaoOverlay s = sSvc;
+        if (s == null) return;
+        try {
+            s.art = k;
+            s.sp.edit().putInt("art", k).apply();
+            if (s.pv != null) s.pv.setArt(k);
+            s.refreshNotif();
+        } catch (Throwable e) { }
+    }
+
     /** 2026-11-25 外部切换坐骑：0 无 / 1 祥云 / 2 木马。手机主界面「坐骑」按钮走这里。 */
     public static void setMount(int k) {
         if (sLive != null) sLive.setMountArt(k);

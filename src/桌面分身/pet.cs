@@ -7562,7 +7562,8 @@ public class DesktopPet : Form
         float dy = 8.5f * (float)Math.Sin(t * (1.12f + 0.05f * (float)Math.Sin(t * 0.07f))) * (0.9f + 0.1f * breatheAmp);
         float dxs = 2.4f * (float)Math.Sin(t * 0.53);
         if (speaking) dy += 2.4f * (float)Math.Sin(t * (2.0f * (float)Math.PI / (nodBeatMs / 1000.0f)));
-        if (moodTicks > 0) { dy -= 1.4f * (float)Math.Sin(t * 6.0); }
+        // 2026-11-26：说话点头时再叠心情浮动，两层正弦打架，整只像在发抖（老投诉）。说话时只留点头。
+        if (moodTicks > 0 && !speaking) { dy -= 1.0f * (float)Math.Sin(t * 5.2f); }
         // 躺下：慢慢倒过去，不是一下子翻
         lieAmt += ((lying ? 1f : 0f) - lieAmt) * 0.09f;
         if (lieAmt < 0.004f) lieAmt = 0f;
@@ -10826,7 +10827,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 136;
+    public const int APP_VER = 137;
 
     public static void Start()
     {

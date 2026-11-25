@@ -596,6 +596,11 @@ public class DaoOverlay extends Service {
 
     // ---------------- 画 ----------------
     private static PetView sLive;   // 当前挂着的悬浮窗，供「换动作」这类外部调用
+    /** 2026-11-25 外部切换坐骑：0 无 / 1 祥云 / 2 木马。手机主界面「坐骑」按钮走这里。 */
+    public static void setMount(int k) {
+        if (sLive != null) sLive.setMountArt(k);
+    }
+
     /** 外部（手机主界面「换动作」按钮）让桌面上的那只动一下。 */
     static boolean sendAction(int k) {
         PetView v = sLive;
@@ -614,6 +619,9 @@ public class DaoOverlay extends Service {
         private Bitmap[] frames;     // 八帧拆开存，供网格变形逐帧用
         private float walkAmp = 1f;  // 行走幅度倍率：v125 起由起停过渡算出（0→1→0）
     private long walkOnAt = 0, walkOffAt = 0;   // 起步/停步时刻，用来算 300ms 过渡
+    // 2026-11-25 坐骑：0 无坐骑 / 1 祥云 / 2 木马
+    private int mount = 0;
+    private Bitmap mountCloud, mountHorse;
         private long happyUntil = 0;
         // 2026-11-23：打招呼/被戳时抬手挥一挥（网格驱动，不是换图）。只对满身站姿生效，走路和贴边不抢戏。
         private long waveUntil = 0;
@@ -691,6 +699,12 @@ public class DaoOverlay extends Service {
             // 现在单独加载正面站姿，站着就面向你。
             standArt = loadOpt("stand_" + art + ".png");
             if (standArt != null && !standArt.isRecycled()) matteInPlace(standArt);
+            // 2026-11-25 坐骑素材：两张都是透明底，进来先过一遍 matte，免得边上带白
+            mountCloud = loadOpt("mount_cloud.png");
+            if (mountCloud != null && !mountCloud.isRecycled()) matteInPlace(mountCloud);
+            mountHorse = loadOpt("mount_horse.png");
+            if (mountHorse != null && !mountHorse.isRecycled()) matteInPlace(mountHorse);
+            try { mount = getContext().getSharedPreferences("dao", 0).getInt("mount", 0); } catch (Throwable e) { mount = 0; }
             // 2026-11-22 夜：形象不再「一张图定住」，改成按骨骼权重做网格变形。
             // 先把八帧拆成独立位图，变形时直接取当前帧，省掉每帧 createBitmap。
             try {
@@ -928,7 +942,18 @@ public class DaoOverlay extends Service {
             Paint sh = new Paint(Paint.ANTI_ALIAS_FLAG);
             sh.setColor(0x22000000);
             c.drawOval(new RectF(w * 0.24f, h + bob - h * 0.03f, w * 0.76f, h + bob + h * 0.005f), sh);
+            // 2026-11-25 坐骑：先把它画在脚下，人物再叠上去（不镜像、不跟着蹲，坐骑是地面上的东西）
+            float rise = 0f;
+            Bitmap mb = (mount == 1 ? mountCloud : (mount == 2 ? mountHorse : null));
+            if (mb != null && !mb.isRecycled()) {
+                float mw = w * 0.98f;
+                float mh = mw * mb.getHeight() / Math.max(1, mb.getWidth());
+                RectF mr = new RectF(w * 0.5f - mw * 0.5f, h + bob - mh, w * 0.5f + mw * 0.5f, h + bob);
+                c.drawBitmap(mb, null, mr, p);
+                rise = mh * 0.52f;   // 抬到鞍位：脚踩在坐骑背上，不是整个人沉进云里
+            }
             c.save();
+            if (rise > 0f) c.translate(0, -rise);
             // 挥手只给满身站姿：走路时腿在动、贴边时手搭在框上，这两种都不该再挥手
             float waveAmp = 0f;
             long nowMs = System.currentTimeMillis();
@@ -1250,6 +1275,13 @@ public class DaoOverlay extends Service {
             if (hh < 8 || hh > 21) return;
             waveUntil = now + WAVE_MS;
             postInvalidate();
+        }
+
+        /** 换坐骑：0 无 1 祥云 2 木马，记进 SharedPreferences，下次启动还在。 */
+        void setMountArt(int k) {
+            mount = Math.max(0, Math.min(2, k));
+            try { getContext().getSharedPreferences("dao", 0).edit().putInt("mount", mount).apply(); } catch (Throwable e) { }
+            invalidate();
         }
 
         /** 演一个动作。0 挥手 1 点头 2 小跳 3 蹲一下；外面（手机「换动作」）也走这里。 */

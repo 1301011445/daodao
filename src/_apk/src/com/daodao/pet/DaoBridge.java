@@ -581,6 +581,11 @@ public class DaoBridge {
     }
 
     @JavascriptInterface
+    public void setMount(int k) {
+        try { DaoOverlay.setMount(k); } catch (Throwable e) { }
+    }
+
+    @JavascriptInterface
     public void warmUp() {
         new Thread(new Runnable() { public void run() {
             try { httpGet("https://open.bigmodel.cn/api/paas/v4/models", 4000); } catch (Exception e) { }

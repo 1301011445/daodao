@@ -264,6 +264,7 @@
       <button id="btnSong"><span class="lb">唱歌</span></button>
       <button id="btnNote"><span class="lb">记事本</span></button>
       <button id="btnDesk"><span class="lb">上桌面</span></button>
+      <button id="btnMount"><span class="lb">坐骑</span></button>
     </div>
     <div id="sayBar"><input id="sayTxt" type="text" placeholder="想跟它说什么…" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="saySend">发送</button></div>
     <button id="btnTalk">跟它说话</button>
@@ -1557,7 +1558,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '125';
+  var HTML_VER = '126';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -2308,6 +2309,29 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
   if (sayBar) {
     try { document.getElementById('saySend').addEventListener('click', function (e) { e.preventDefault(); sendSay(); }); } catch (e) {}
     try { sayTxt.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); sendSay(); } }); } catch (e) {}
+  }
+
+  // 2026-11-25 坐骑：点一下轮换 无 → 祥云 → 木马 → 无，状态记在本机
+  var mountState = 0;
+  try { mountState = parseInt(localStorage.getItem('daoMount') || '0', 10) || 0; } catch (e) {}
+  var btnMount = document.getElementById('btnMount');
+  var MOUNT_NAMES = ['坐骑', '祥云', '木马'];
+  function mountLabel() {
+    try { var lb = btnMount.querySelector('.lb'); if (lb) lb.textContent = MOUNT_NAMES[mountState] || '坐骑'; } catch (e) {}
+  }
+  function mountApply() {
+    if (window.DaoNative && DaoNative.setMount) { try { DaoNative.setMount(mountState); } catch (e) {} }
+  }
+  if (btnMount) {
+    mountLabel();
+    mountApply();
+    btnMount.addEventListener('click', function () {
+      mountState = (mountState + 1) % 3;
+      try { localStorage.setItem('daoMount', String(mountState)); } catch (e) {}
+      mountLabel();
+      mountApply();
+      tip(mountState === 0 ? '坐骑收起来了' : (mountState === 1 ? '祥云垫脚，托着你走' : '小木马驮你一段'));
+    });
   }
 
   // ---------- 对话 ----------

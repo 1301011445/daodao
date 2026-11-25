@@ -346,6 +346,27 @@
           "证据": "release 7712063216179858364 / 7712063135939857397 finished；线上 data-ver=137、正文 137、短链 WOTOC311ae/vvpEr6hTIJ"
         }
       ]
+    },
+    "138": {
+      "立项": "2026-11-26",
+      "目标": 3,
+      "项": [
+        {
+          "项": "真机安装并读到悬浮窗窗口参数",
+          "验证": "2026-11-26",
+          "证据": "adb dumpsys window：ty=APPLICATION_OVERLAY (180x360)px；7 次采样 x857→831、y468~525"
+        },
+        {
+          "项": "真机包版本与页面版本",
+          "验证": "2026-11-26",
+          "证据": "dumpsys package versionCode=138/versionName=1.38；App 左上角 v1.38；两页 data-ver=138"
+        },
+        {
+          "项": "开机形象同步进包",
+          "验证": "2026-11-26",
+          "证据": "zipfile 读 assets/dao.html：HTML_VER=138、v138 同步注释在、DaoNative.setArt 4 处"
+        }
+      ]
     }
   },
   "items": [

@@ -1358,6 +1358,9 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
           var _wn = document.getElementById('whoName');
           if (_wn) { _wn.textContent = WHO[species] || WHO[0]; _whoLast = species; }
         } catch (e) {}
+        // v138：开机就把「我现在是谁」推给手机悬浮窗，别让两边各显示各的
+        try { if (window.DaoNative && DaoNative.setArt) DaoNative.setArt(species); } catch (e) {}
+
         resize(); if (!running) { running = true; requestAnimationFrame(tick); }
       }
     };
@@ -1560,7 +1563,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '137';
+  var HTML_VER = '138';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;

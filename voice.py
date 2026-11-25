@@ -68,6 +68,15 @@ MOOD_RULE = """
 从第二行开始才是要说的话。情绪号这一行不要带任何别的字。
 """
 
+ACT_RULE = """
+说完话以后，另起一行写动作标记，就这一行，别的什么都不要加：
+[[act:名字]]
+名字只能取：wave 挥手 / nod 点头 / hop 小跳 / squat 蹲一下 / dance 跳舞 /
+fly 飞过去 / sword 踏剑 / ride 骑坐骑 / tea 端杯咖啡 / tv 看会儿电视 / turn 转个身 / none 不动。
+想换坐骑就再另起一行：[[mount:1-5]]（1 祥云 2 木马 3 飞剑 4 小鹿 5 纸鹤，0 是不骑）。
+这两行是给程序看的，会被自动删掉，正文里不要提到它们，也不用解释。
+"""
+
 
 
 def log(s):
@@ -191,7 +200,7 @@ def _post(messages, temperature=0.7, max_tokens=160, timeout=24, want_model=Fals
 def build_messages(text):
     """把最近几轮对话接上，让它记得上下文。"""
     m = load_mem()
-    msgs = [{"role": "system", "content": SYSTEM_PROMPT + MOOD_RULE}]
+    msgs = [{"role": "system", "content": SYSTEM_PROMPT + MOOD_RULE + ACT_RULE}]
     for t in m.get("turns", [])[-HISTORY_TURNS:]:
         u = str(t.get("u", "")).strip()
         a = str(t.get("a", "")).strip()
@@ -203,9 +212,16 @@ def build_messages(text):
 
 
 def ask_glm(text, timeout=24, want_model=False):
-    txt, model = _post(build_messages(text), temperature=0.7, max_tokens=160,
+    txt, model = _post(build_messages(text), temperature=0.7, max_tokens=200,
                        timeout=timeout, want_model=True)
-    return (txt, model) if want_model else txt
+    act, mount, body = split_act(txt)
+    if not act and body:
+        act = classify_act(body)     # 标签没写出来就让模型再挑一次，别回落到关键词规则
+    _LAST_ACT["act"] = act
+    _LAST_ACT["mount"] = mount
+    if not body:
+        body = "" if act else txt
+    return (body, model) if want_model else body
 
 
 def ask_plain(text, sys_prompt, temperature=0.5, max_tokens=400, timeout=26):
@@ -270,6 +286,68 @@ def split_mood(raw):
     if not body:
         body = raw.strip()
     return mood, body
+
+
+# ---------------- v133：动作标签 ----------------
+_LAST_ACT = {"act": "", "mount": 0}
+
+
+def split_act(raw):
+    """把 [[act:xxx]] / [[mount:n]] 从回复里摘出来，剩下才是要念的话。
+    模型偶尔会写成【act：wave】或 [[ACT:Wave]]，都认。"""
+    if not raw:
+        return "", 0, ""
+    act = ""
+    mount = 0
+
+    def _a(m):
+        nonlocal act
+        act = (m.group(1) or "").strip().lower()
+        return ""
+
+    def _m(m):
+        nonlocal mount
+        try:
+            mount = int(m.group(1))
+        except Exception:
+            mount = 0
+        return ""
+
+    body = re.sub(r"[\[【]{1,2}\s*act\s*[:：]\s*([A-Za-z]+)\s*[\]】]{1,2}", _a, raw, flags=re.I)
+    body = re.sub(r"[\[【]{1,2}\s*mount\s*[:：]\s*([0-5])\s*[\]】]{1,2}", _m, body, flags=re.I)
+    body = re.sub(r"^\s*[\[【]{1,2}\s*(act|mount)\s*[:：].*?[\]】]{1,2}\s*$", "", body, flags=re.I | re.M)
+
+    # 模型有时图省事只写 [[dance]]，没带 act: 前缀，也认
+    def _bare(m):
+        nonlocal act
+        w = (m.group(1) or "").lower()
+        if w in ACT_WORDS and not act:
+            act = w
+        return ""
+
+    body = re.sub(r"[\[【]{1,2}\s*(%s)\s*[\]】]{1,2}" % "|".join(ACT_WORDS), _bare, body, flags=re.I)
+    return act, mount, body.strip()
+
+
+ACT_WORDS = ("wave", "nod", "hop", "squat", "dance", "fly", "sword", "ride", "tea", "tv", "turn", "none")
+
+ACT_PICK_SYS = ("你只输出一个英文单词，不许输出别的任何字符。可选：" + " ".join(ACT_WORDS) +
+                "。根据这句话挑一个最贴的动作；通常聊天就 none，提到跳/唱就 dance，"
+                "提到走/飞/骑就 fly 或 ride，提到再见或打招呼就 wave。")
+
+
+def classify_act(reply):
+    """模型没按要求写标签时的兜底：让模型自己从回复里挑一个动作（一问一答，约 0.6 秒）。"""
+    try:
+        raw, model = _post([{"role": "system", "content": ACT_PICK_SYS},
+                            {"role": "user", "content": (reply or "")[:200]}],
+                           temperature=0.2, max_tokens=8, timeout=10, want_model=True)
+        w = re.sub(r"[^a-z]", "", (raw or "").lower())
+        log("ACT_PICK %s %s" % (w, model))
+        return w if w in ACT_WORDS else ""
+    except Exception as e:
+        log("ACT_PICK_FAIL %r" % (e,))
+        return ""
 
 
 # ---------------- 说 ----------------
@@ -429,9 +507,10 @@ def speak(text, mood=0):
 
 
 # ---------------- 输出 ----------------
-def emit(state, heard="", reply="", mood=0):
+def emit(state, heard="", reply="", mood=0, act="", mount=0):
     """把一轮结果以一行 JSON 打到 stdout，给道的窗口读。"""
-    print(json.dumps({"state": state, "heard": heard, "reply": reply, "mood": mood},
+    print(json.dumps({"state": state, "heard": heard, "reply": reply, "mood": mood,
+                      "act": act, "mount": mount},
                      ensure_ascii=False), flush=True)
 
 
@@ -656,7 +735,8 @@ def do_talk(max_turns=8, quiet_stop=2):
         if not reply:
             reply = "嗯，我在听。"
         remember(text, reply)
-        emit("done", heard=text, reply=reply, mood=mood, turn=n + 1)
+        emit("done", heard=text, reply=reply, mood=mood, turn=n + 1,
+             act=_LAST_ACT.get("act", ""), mount=_LAST_ACT.get("mount", 0))
         write_state("done", heard=text, reply=reply, mood=mood)
     emit("bye")
     return 0
@@ -680,6 +760,12 @@ def selftest():
     m = load_mem()
     print("S6 记忆条数", len(m.get("turns", [])), "PASS" if len(m.get("turns", [])) <= HISTORY_KEEP else "FAIL")
     ok = ok and len(m.get("turns", [])) <= HISTORY_KEEP
+    a7, mo7, b7 = split_act("2\n今天风挺大，出门加件衣服。\n[[act:wave]]\n[[mount:3]]")
+    print("S7 动作标签", a7, mo7, b7[:8], "PASS" if a7 == "wave" and mo7 == 3 and "act" not in b7 else "FAIL")
+    ok = ok and a7 == "wave" and mo7 == 3 and "act" not in b7
+    a8, mo8, b8 = split_act("【act：Dance】随便跳一下。")
+    print("S8 宽松写法", a8, mo8, "PASS" if a8 == "dance" and "act" not in b8 else "FAIL")
+    ok = ok and a8 == "dance"
     print("SUMMARY", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 

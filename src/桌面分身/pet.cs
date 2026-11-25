@@ -4085,6 +4085,33 @@ public class DesktopPet : Form
         Say("嗯……我也有心里不好受的时候。");
     }
 
+    // v133：大模型说了算 —— 它给的标签直接驱动动作，不再靠关键词猜
+    void ApplyLlmAct(string act, int mount)
+    {
+        if (act == null) return;
+        string a = act.Trim().ToLower();
+        int kind = 0;
+        if (a == "dance") kind = 4;
+        else if (a == "ride") kind = 3;
+        else if (a == "fly") kind = 1;
+        else if (a == "sword") kind = 2;
+        else if (a == "tea") kind = 5;
+        else if (a == "tv") kind = 6;
+        else if (a == "turn") kind = 9;
+        if (kind > 0)
+        {
+            actKind = kind;
+            actHold = kind >= 4 ? 400 : 470;
+            if (kind >= 1 && kind <= 3) walkTargetX = -999999;
+            Invalidate();
+        }
+        // wave / nod / hop / squat 桌面端没有对应整套动作，只当一次点头应声
+        else if (a == "wave" || a == "nod" || a == "hop" || a == "squat")
+        {
+            moodKind = 1; moodTicks = 50; Invalidate();
+        }
+    }
+
     // 六个生活动作的菜单入口，都走同一个口子：定动作类型 + 给个持续时间
     void StartAct(int kind)
     {
@@ -4924,7 +4951,15 @@ public class DesktopPet : Form
                 string st = JsonStr(line, "state");
                 string rep = JsonStr(line, "reply");
                 int md = JsonInt(line, "mood");
+                string act = JsonStr(line, "act");     // v133：大模型给的动作标签
+                int mnt = JsonInt(line, "mount");      // v133：想骑哪只坐骑（0 不骑）
                 if (st == "bye") break;
+                if (act != null && act.Length > 0 && act != "none")
+                {
+                    string a9 = act;
+                    int m9 = mnt;
+                    BeginInvoke(new MethodInvoker(delegate() { ApplyLlmAct(a9, m9); }));
+                }
                 if (rep != null && rep.Length > 0)
                 {
                     string rr = rep;
@@ -10758,7 +10793,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 132;
+    public const int APP_VER = 133;
 
     public static void Start()
     {

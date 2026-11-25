@@ -7279,7 +7279,9 @@ public class DesktopPet : Form
             if (walkTargetX == -999999)
             {
                 walkCounter++;
-                if (walkCounter > 200 || (actHold > 0 && ((actKind >= 1 && actKind <= 3) || actKind == 7 || actKind == 8)))
+                // 2026-11-25：原来计数器 200 跳（≈3.2 秒）就重新挑目标，等于每隔三秒就自己走掉一次。
+                // 点它、跟它说话，它抬手就走 —— 这就是「一碰就往远处跑」。现在改成 1800 跳（≈29 秒）。
+                if (walkCounter > 1800 || (actHold > 0 && ((actKind >= 1 && actKind <= 3) || actKind == 7 || actKind == 8)))
                 {
                     walkCounter = 0;
                     try
@@ -7295,9 +7297,12 @@ public class DesktopPet : Form
                         }
                         else
                         {
-                            // 整块屏幕随便挑个地方去
-                            nx = wa.Left + 4 + rnd.Next(Math.Max(1, wa.Width - Width - 8));
-                            ny = wa.Top + 4 + rnd.Next(Math.Max(1, wa.Height - Height - 8));
+                            // 2026-11-25：不再「整块屏幕随便挑」。目标限制在当前位置 ±260px 内，
+                            // 走一小段就停，不横穿大半个屏幕跑掉（远目标要 30 秒才走到，人看着就是不管它也行、一管就跑）。
+                            int ox = rnd.Next(2) == 0 ? -1 : 1;
+                            int oy = rnd.Next(3) - 1;
+                            nx = Location.X + ox * (90 + rnd.Next(170));
+                            ny = Location.Y + oy * (40 + rnd.Next(80));
                         }
                         if (nx < wa.Left + 2) nx = wa.Left + 2;
                         if (nx > wa.Right - Width - 2) nx = wa.Right - Width - 2;
@@ -7577,7 +7582,9 @@ public class DesktopPet : Form
         if (runTicks > 0 || walkTicks > 0)
         {
             float sp = t * (runTicks > 0 ? 12.0f : 8.4f);
-            cx += (runTicks > 0 ? 9.0f : 6.5f) * (float)Math.Sin(sp);
+            // 2026-11-25：摆动按身高比例收。原来走 6.5px = 身高的 4.5%，整只像在冰面上横向滑；
+            // 真实步态重心横移约 1–2% 身高，这里走 2.6px（1.8%），跑 4.0px（2.8%）
+            cx += (runTicks > 0 ? 4.0f : 2.6f) * (float)Math.Sin(sp);
             cy -= (runTicks > 0 ? 5.0f : 3.5f) * (float)Math.Abs(Math.Sin(sp * 2.0));
             // 2026-11-25（形象补齐·走掉问题）：这里原来每画一帧就 tripX += 3.2。
             // 绘制次数一变（点一下、冒个气泡、窗口重绘）它就往前蹭一步，于是「点它就自己走掉」；
@@ -7709,7 +7716,12 @@ public class DesktopPet : Form
         if (walkFrames == null || walkFrames.Length < 8) return;
         // 步频按真实位移反推：11.6 帧/秒对应 90 像素/秒（3px×30 跳），挪得越快脚频越快，
         // 脚底才不打滑；每跳向目标靠近 18%，起步与停下都是渐变而不是硬切。
-        float targetFps = 11.6f * Math.Max(moveSpeedPxPerSec, 6f) / 90f;
+        // 2026-11-25：步频不再套「11.6 帧/秒 = 90 像素/秒」这个拍脑袋的比例。
+        // 从素材量出来：一套八帧的步幅 ≈ 0.145 倍身高（银发剑客 144px 高、两只脚最大分开 21px），
+        // 一个循环走两步，所以「每秒循环次数 = 速度 / (2×步幅)」，八帧 → 帧率 = 8×速度/(2×步幅)。
+        // 这样脚踩在哪儿、身子挪到哪儿是同一个数，地上不再打滑。
+        float stridePx = Math.Max(6f, 0.145f * 144f);
+        float targetFps = 8.0f * Math.Max(moveSpeedPxPerSec, 12f) / (2.0f * stridePx);
         if (runTicks > 0) targetFps = Math.Max(targetFps, 15.0f);
         if (targetFps < 8.5f) targetFps = 8.5f;
         if (targetFps > 20f) targetFps = 20f;

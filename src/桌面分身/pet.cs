@@ -103,7 +103,11 @@ public class DesktopPet : Form
     static extern uint timeEndPeriod(uint uPeriod);
 
     const int W = 380;
-    const int H = 205;
+    // 2026-11-26：高度从 205 加到 235。原来身高 188、脚底落在 y=195，头顶只剩 7px 余量，
+    // 起跳的那一下整只上抬 26px，头顶直接被窗口裁掉一截——用户说的"跳完头不见一块"就是它。
+    // 加高的这 30px 全做成头顶留白（画基线一起下移 30），跳动就落在窗口里了。
+    const int H = 235;
+    const int JUMP_PAD = 30;
 
     // 系统缩放比例（150% 缩放时窗口会被系统压成 2/3，这里补回来）
     static float uiScale = CalcUiScale();
@@ -2948,6 +2952,10 @@ public class DesktopPet : Form
             Rectangle wa3 = Screen.PrimaryScreen.WorkingArea;
             Location = new Point(wa3.Right * 34 / 100, wa3.Bottom * 40 / 100);
         }
+
+        // 窗口加高了 30（头顶留白），窗口整体跟着上移 30，脚下这条地线在屏幕上原地不动；
+        // 存位置的地方（SavePos）已经把这 30 减回去，反复重启不会一路往上漂。
+        try { Location = new Point(Location.X, Location.Y - (int)Math.Round(JUMP_PAD * uiScale)); } catch { }
 
         BuildMenu();
 
@@ -7204,7 +7212,8 @@ public class DesktopPet : Form
                 if (sx < wa.Left || sx > wa.Right - 120) sx = wa.Right / 2 - 190;
                 if (sy < wa.Top || sy > wa.Bottom - 120) sy = wa.Bottom / 2 - 100;
                 k.SetValue("X", sx);
-                k.SetValue("Y", sy);
+                // 窗口顶端比地线多留了 JUMP_PAD 的头顶空白，存之前减掉，下次开机原地站回去
+                k.SetValue("Y", sy + (int)Math.Round(JUMP_PAD * uiScale));
                 k.Close();
             }
         }
@@ -7768,7 +7777,7 @@ public class DesktopPet : Form
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
 
         float cx = W / 2f;
-        float cy = 127f;
+        float cy = 127f + JUMP_PAD;
         // 呼吸幅度会慢慢变：约 33 秒一轮强弱，偶尔来一次深吸，不是永远同一口气
         float breatheAmp = 0.78f + 0.22f * (float)Math.Sin(t * 0.19f);
         // 2026-11-22 从 GitHub 上的待机呼吸建模学来的一条：真人呼吸不是等周期正弦——
@@ -10850,6 +10859,16 @@ public class DesktopPet : Form
             DumpOne(p, Path.Combine(dir, "selfcheck_ride_" + ri + ".png"));
         }
         p.actKind = 0; p.actAmt = 0f; p.actHold = 0;
+
+        // 跳跃自检（2026-11-26）：起跳、最高点、落地三帧，看头顶有没有被窗口边裁掉
+        int[] hopFrames = new int[] { 30, 17, 6 };
+        for (int hi = 0; hi < hopFrames.Length; hi++)
+        {
+            p.hopPend = hopFrames[hi];
+            p.t = 1.0f + hi * 0.2f;
+            DumpOne(p, Path.Combine(dir, "selfcheck_hop_" + hi + ".png"));
+        }
+        p.hopPend = 0;
 
         // 转身：五段各截一张，看侧身/背面视角是不是真的换了图，而不是压窄的正面
         p.species = 1;          // 白兔少女（叠了侧身/背面视角的那个）

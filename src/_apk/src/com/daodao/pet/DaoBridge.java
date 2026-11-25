@@ -110,12 +110,32 @@ public class DaoBridge {
         } catch (Exception e) { }
     }
 
+    /** v132：说话期间让悬浮窗对口型（估算时长，到点自动收） */
+    private void markTalk(int ms) {
+        try { DaoOverlay.setTalking(true); } catch (Throwable e) { }
+        try {
+            ui.postDelayed(new Runnable() {
+                public void run() { try { DaoOverlay.setTalking(false); } catch (Throwable e) { } }
+            }, Math.max(1500, ms));
+        } catch (Throwable e) { }
+    }
+
+    private void markDance(int secs) {
+        try { DaoOverlay.setDancing(true); } catch (Throwable e) { }
+        try {
+            ui.postDelayed(new Runnable() {
+                public void run() { try { DaoOverlay.setDancing(false); } catch (Throwable e) { } }
+            }, (long) Math.max(1500, (secs + 1) * 1000));
+        } catch (Throwable e) { }
+    }
+
     @JavascriptInterface
     public void speak(final String text) {
         final String t = (text == null) ? "" : text.trim();
         if (t.length() == 0) return;
         initTts();
         stopAudio();
+        markTalk(t.length() * 210);
         ui.post(new Runnable() {
             public void run() {
                 try {
@@ -262,7 +282,7 @@ public class DaoBridge {
                         return;
                     }
                     long secs = ((long) frames * 2048L) / sr;
-                    songEvt("OK|" + secs + "|" + sr + "|" + nm);
+                    markDance((int) secs); songEvt("OK|" + secs + "|" + sr + "|" + nm);
                     short[] chunk = new short[2048];
                     double from = songStartSec;
                     songStartSec = 0;
@@ -360,7 +380,7 @@ public class DaoBridge {
             android.media.MediaPlayer m = new android.media.MediaPlayer();
             m.setDataSource(f.getAbsolutePath());
             m.setOnCompletionListener(new android.media.MediaPlayer.OnCompletionListener() {
-                public void onCompletion(android.media.MediaPlayer mp) { songEvt("DONE|" + name); }
+                public void onCompletion(android.media.MediaPlayer mp) { try { DaoOverlay.setDancing(false); } catch (Throwable e) { } songEvt("DONE|" + name); }
             });
             m.setOnErrorListener(new android.media.MediaPlayer.OnErrorListener() {
                 public boolean onError(android.media.MediaPlayer mp, int what, int extra) {
@@ -376,7 +396,7 @@ public class DaoBridge {
             if (from > 0.5 && from < dur - 2) m.seekTo((int) (from * 1000));
             m.start();
             songMp = m;
-            songEvt("OK|" + dur + "|0|" + name);
+            markDance((int) dur); songEvt("OK|" + dur + "|0|" + name);
             return "START|" + name;
         } catch (Throwable e) {
             songErr = "CATCH " + e.getClass().getSimpleName() + " " + (e.getMessage() == null ? "" : e.getMessage());
@@ -794,6 +814,7 @@ public class DaoBridge {
     // 云端合成：拿到 wav 存本地，用 MediaPlayer 放（系统 TTS 和它互不干扰）
     @JavascriptInterface
     public void speakCloud(final String text, final String voice) {
+        if (text != null) markTalk(text.length() * 260);
         stopAudio();
         final String t = (text == null) ? "" : text.trim();
         if (t.length() == 0) return;
@@ -902,6 +923,7 @@ public class DaoBridge {
 
     @JavascriptInterface
     public void speakTencent(final String text, final int voiceType) {
+        if (text != null) markTalk(text.length() * 260);
         stopAudio();
         final String t = (text == null) ? "" : text.trim();
         if (t.length() == 0) return;
@@ -987,6 +1009,7 @@ public class DaoBridge {
 
     @JavascriptInterface
     public void speakEdge(final String text, final int vIdx) {
+        if (text != null) markTalk(text.length() * 280);
         stopAudio();
         final String t = (text == null) ? "" : text.trim();
         if (t.length() == 0) return;

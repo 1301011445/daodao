@@ -597,6 +597,22 @@ public class DaoOverlay extends Service {
 
     // ---------------- 画 ----------------
     private static PetView sLive;   // 当前挂着的悬浮窗，供「换动作」这类外部调用
+
+    // v132：说话 / 放歌状态。Bridge 一出声就置位，PetView 拿它驱动口型和舞步
+    private static volatile long talkUntil = 0L;
+    private static volatile long danceUntil = 0L;
+
+    public static void setTalking(boolean on) {
+        talkUntil = on ? System.currentTimeMillis() + 90000L : System.currentTimeMillis();
+        PetView v = sLive;
+        if (v != null) v.postInvalidate();
+    }
+
+    public static void setDancing(boolean on) {
+        danceUntil = on ? System.currentTimeMillis() + 90000L : System.currentTimeMillis();
+        PetView v = sLive;
+        if (v != null) v.postInvalidate();
+    }
     /** 2026-11-25 外部切换坐骑：0 无 / 1 祥云 / 2 木马。手机主界面「坐骑」按钮走这里。 */
     public static void setMount(int k) {
         if (sLive != null) sLive.setMountArt(k);
@@ -931,11 +947,28 @@ public class DaoOverlay extends Service {
                 mw = w * 0.98f;
                 mh = mw * mb.getHeight() / Math.max(1, mb.getWidth());
             }
+            double mt = (System.currentTimeMillis() % 600000L) / 1000.0;
+            float mdx = 0f, mdy = 0f, mrot = 0f;
+            if (mi == 0) { mdx = (float) Math.sin(mt * 0.85) * 0.030f * w; mdy = (float) Math.sin(mt * 1.25) * 0.012f * h; }
+            else if (mi == 1) { mdy = (float) Math.sin(mt * 6.2) * 0.008f * h; mrot = (float) Math.sin(mt * 6.2) * 1.6f; }
+            else if (mi == 2) { mdy = (float) Math.sin(mt * 2.3) * 0.022f * h; mrot = (float) Math.sin(mt * 2.3) * 3.2f; }
+            else if (mi == 3) { mdy = (float) Math.sin(mt * 4.0) * 0.011f * h; mrot = (float) Math.sin(mt * 4.0) * 1.3f; }
+            else { mdy = (float) Math.sin(mt * 2.8) * 0.020f * h; }
+            long dn2 = System.currentTimeMillis();
+            boolean dancing2 = dn2 < danceUntil;
+            c.save();
+            if (dancing2) {
+                c.rotate((float) Math.sin(mt * 5.0) * 4.5f, w * 0.5f, h * 0.99f);
+                c.translate((float) Math.sin(mt * 5.0) * w * 0.018f, -(float) Math.abs(Math.sin(mt * 5.0)) * h * 0.035f);
+            }
             Paint sp = new Paint(Paint.ANTI_ALIAS_FLAG);
             sp.setColor(0x22000000);
             c.drawOval(new RectF(w * 0.24f, h - h * 0.03f, w * 0.76f, h + h * 0.005f), sp);
-            RectF mr = new RectF(w * 0.5f - mw * 0.5f, h - mh, w * 0.5f + mw * 0.5f, h);
+            c.save();
+            c.rotate(mrot, w * 0.5f + mdx, h - mh * MOUNT_FR[mi]);
+            RectF mr = new RectF(w * 0.5f + mdx - mw * 0.5f, h + mdy - mh, w * 0.5f + mdx + mw * 0.5f, h + mdy);
             c.drawBitmap(mb, null, mr, p);
+            c.restore();
 
             float saddleY = h - mh * MOUNT_FR[mi];
             float rh = h * RIDE_H;
@@ -946,9 +979,12 @@ public class DaoOverlay extends Service {
             }
             float si = Math.max(0, Math.min(RIDE_SEAT.length - 1, DaoOverlay.this.art));
             float sr = RIDE_SEAT[(int) si];
-            float top = saddleY - rh * sr;
-            RectF rr = new RectF(w * 0.5f - rw * 0.5f, top, w * 0.5f + rw * 0.5f, top + rh);
+            float top = saddleY - rh * sr + mdy;
+            // 说话时上身轻轻点头，像在应声说话（骑乘图是整张立绘，做不了逐字口型，用这点动感代）
+            if (System.currentTimeMillis() < talkUntil) top += (float) Math.sin(mt * 9.0) * 0.006f * h;
+            RectF rr = new RectF(w * 0.5f + mdx - rw * 0.5f, top, w * 0.5f + mdx + rw * 0.5f, top + rh);
             c.drawBitmap(rideImg, null, rr, p);
+            c.restore();
         }
 
         void setArt(int k) {
@@ -1021,6 +1057,15 @@ public class DaoOverlay extends Service {
             float lean = 0;
             Rect src = new Rect(fi * fw, 0, fi * fw + fw, fh);
             Rect dst = new Rect(0, bob, w, h + bob);
+            // v132：放歌就跳舞 —— 以脚跟为轴左右摆、上下弹；坐骑跟着一起颠
+            long dnNow = System.currentTimeMillis();
+            boolean dancing = dnNow < danceUntil;
+            if (dancing) {
+                double dt = (dnNow % 600000L) / 1000.0;
+                c.save();
+                c.rotate((float) Math.sin(dt * 5.0) * 4.5f, w * 0.5f, h * 0.99f);
+                c.translate((float) Math.sin(dt * 5.0) * w * 0.018f, -(float) Math.abs(Math.sin(dt * 5.0)) * h * 0.035f);
+            }
             // 脚下一点软阴影：不然人是"飘"在白底上的，落地感差
             Paint sh = new Paint(Paint.ANTI_ALIAS_FLAG);
             sh.setColor(0x22000000);
@@ -1028,13 +1073,27 @@ public class DaoOverlay extends Service {
             // 2026-11-25 坐骑：先把它画在脚下，人物再叠上去（不镜像、不跟着蹲，坐骑是地面上的东西）
             float rise = 0f;
             Bitmap mb = (mount >= 1 && mount <= mounts.length ? mounts[mount - 1] : null);  // v131 修：原来下标越界，纸鹤永远画不出来
+            float mdx = 0f, mdy = 0f;
             if (mb != null && !mb.isRecycled()) {
                 int mi = Math.max(1, Math.min(MOUNT_MHW.length, mount)) - 1;
                 float mh = h * MOUNT_MHW[mi];
                 float mw = mh * mb.getWidth() / Math.max(1, mb.getHeight());
                 if (mw > w * 0.98f) { mw = w * 0.98f; mh = mw * mb.getHeight() / Math.max(1, mb.getWidth()); }
-                RectF mr = new RectF(w * 0.5f - mw * 0.5f, h + bob - mh, w * 0.5f + mw * 0.5f, h + bob);
+                // v132：坐骑也会动 —— 云飘、马跑、剑腾、鹿颠、鹤扇翅
+                double mt = (System.currentTimeMillis() % 600000L) / 1000.0;
+                float mrot = 0f, msc = 1f;
+                if (mi == 0) { mdx = (float) Math.sin(mt * 0.85) * 0.030f * w; mdy = (float) Math.sin(mt * 1.25) * 0.012f * h; }
+                else if (mi == 1) { mdy = (float) Math.sin(mt * 6.2) * 0.008f * h; mrot = (float) Math.sin(mt * 6.2) * 1.6f; }
+                else if (mi == 2) { mdy = (float) Math.sin(mt * 2.3) * 0.022f * h; mrot = (float) Math.sin(mt * 2.3) * 3.2f; }
+                else if (mi == 3) { mdy = (float) Math.sin(mt * 4.0) * 0.011f * h; mrot = (float) Math.sin(mt * 4.0) * 1.3f; }
+                else { mdy = (float) Math.sin(mt * 2.8) * 0.020f * h; msc = 1f + 0.035f * (float) Math.sin(mt * 2.8); }
+                float bw2 = mw * msc, bh2 = mh * (2f - msc);   // 扇翅：横向张开、纵向略收
+                c.save();
+                c.rotate(mrot, w * 0.5f + mdx, h + bob - mh * MOUNT_FR[mi]);
+                RectF mr = new RectF(w * 0.5f + mdx - bw2 * 0.5f, h + bob + mdy - bh2,
+                                     w * 0.5f + mdx + bw2 * 0.5f, h + bob + mdy);
                 c.drawBitmap(mb, null, mr, p);
+                c.restore();
                 rise = mh * MOUNT_FR[mi];   // 踩到它背上：祥云高、木马鞍、飞剑刃面、小鹿背、纸鹤脊
             }
             c.save();
@@ -1045,6 +1104,7 @@ public class DaoOverlay extends Service {
                 c.scale(ms, ms);
             }
             if (rise > 0f) c.translate(0, -rise / ms);
+            if (mdx != 0f || mdy != 0f) c.translate(mdx, mdy);   // 云飘/马颠时人得跟着一起动，不然脱开
             // 挥手只给满身站姿：走路时腿在动、贴边时手搭在框上，这两种都不该再挥手
             float waveAmp = 0f;
             long nowMs = System.currentTimeMillis();
@@ -1103,6 +1163,7 @@ public class DaoOverlay extends Service {
                 c.drawBitmap(sheet, src, dst, p);
             }
             c.restore();
+            if (dancing) c.restore();
         }
 
         /**
@@ -1134,6 +1195,11 @@ public class DaoOverlay extends Service {
                     float dx = 0.005f * w * sway * (float) Math.pow(ny, 1.7f)
                              + 0.0045f * w * lag * (float) Math.pow(ny, 2.3f);
                     float dy = -0.007f * h * breath * (float) Math.exp(-Math.pow((ny - 0.44) / 0.20, 2));
+                    // v132 口型：嘴所在那条带（约 0.20~0.29 身高）随语音开合，约 6Hz，像真的在说
+                    if (System.currentTimeMillis() < talkUntil) {
+                        float jaw = (float) Math.exp(-Math.pow((ny - 0.245) / 0.048, 2));
+                        dy += 0.013f * h * jaw * (0.5f - 0.5f * (float) Math.cos(t * 38.0));
+                    }
                     if (ny < 0.30f) {
                         // 2026-11-23 修扭曲：侧倾系数 0.7*h 是按早期大立绘调的，缩到 180px 高以后
                         // 头顶会横移近 40px，头跟脖子像被撕开、脸也拉歪。改成按头宽（约 0.35w）给幅度，

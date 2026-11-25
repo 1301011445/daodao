@@ -4591,6 +4591,7 @@ public class DesktopPet : Form
     readonly System.Collections.Generic.Queue<string> wakeLines = new System.Collections.Generic.Queue<string>();
     readonly object wakeLock = new object();
     bool wakePaused = false;
+    double wakeFloor = 0;   // 2026-11-25：唤醒能量门的噪声底（rms），慢跟本机环境
 
     void WakeLoop()
     {
@@ -4628,7 +4629,19 @@ public class DesktopPet : Form
                 // 能量门限（学 microWakeWord 的 energy gate）：屋里安静时不认，
                 // 免得空调声、键盘声被认成一句话再往唤醒逻辑里送
                 double rms = JsonNum(line, "rms");
-                if (rms > 0 && rms < 120) continue;
+                // 2026-11-25 第5类（sherpa-onnx / silero-VAD）落地：门限不再写死 120。
+                // 底噪跟着本机走（一阶低通 τ≈10 次读数），门限 = 底噪*1.7，夹在 120~600。
+                // 安静屋底噪 50 → 门限 120（跟原来一样）；底噪升到 200（空调/风扇）→ 门限 340，
+                // 空调声、键盘声就不会被当成"在叫我"。
+                if (rms > 0)
+                {
+                    if (wakeFloor <= 0) wakeFloor = rms;
+                    else wakeFloor = wakeFloor * 0.90 + rms * 0.10;
+                    double gate = wakeFloor * 1.7;
+                    if (gate < 120) gate = 120;
+                    if (gate > 600) gate = 600;
+                    if (rms < gate) continue;
+                }
                 if (IsWakeCall(heard)) HitWake();
             }
             catch { System.Threading.Thread.Sleep(1000); }
@@ -10793,7 +10806,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 134;
+    public const int APP_VER = 135;
 
     public static void Start()
     {

@@ -355,6 +355,10 @@ public class DesktopPet : Form
 
     // ==== 图片形象（faces 目录）====
     Bitmap[] faces = null;
+    // 2026-11-25：模型渲出来的侧身、背面视角（face_<i>_side.png / face_<i>_back.png）
+    // 按键用形象原始编号索引，用来做真正的「转身」，而不是把正面图横向压窄假装侧身
+    Dictionary<int, Bitmap> sideFaces = new Dictionary<int, Bitmap>();
+    Dictionary<int, Bitmap> backFaces = new Dictionary<int, Bitmap>();
     string[] faceNames = null;
     string[] faceVoices = null;
     int faceCount = 0;
@@ -365,6 +369,8 @@ public class DesktopPet : Form
     // 不做骨架拼装：手抬起来、腿迈出去都是图里本来就有的，不是把身体切条推开
     Bitmap[] poses = null;
     int poseIdx = 0;
+    // 2026-11-25：走路时把「当前八帧相位」传进切条，让上身摆动跟换帧同频；-1 表示按时间算
+    float walkPhaseHint = -1f;
     int posePrev = 0;
     float poseFade = 2f;
     int poseOwner = -1;   // 这套姿势属于哪个形象序号；-1 表示该形象还没有姿势集
@@ -393,14 +399,67 @@ public class DesktopPet : Form
     // 摆的时候越靠上叠得越多、相位越晚 —— 脚稳住、胯先带、胸反向收、
     // 头晚半拍跟着、发尾再晚一点甩。以前整张图从头到尾一根正弦同步推，
     // 看着像一块软牌子在晃，不像有骨头在带。
-    static readonly float[] rigY = { 0.20f, 0.42f, 0.62f, 0.80f, 0.90f, 1.00f };
-    static readonly float[] rigW = { 0.34f, 0.42f, 0.52f, 0.62f, 0.86f, 1.00f };
-    static readonly float[] rigL = { 0.00f, 0.55f, 1.15f, 1.75f, 2.30f, 2.90f };
-    static readonly float rigSum = 3.76f;   // = ΣrigW（3.76）；原来是 3.36，会让摆幅超过 1.0 约 12%，顶端会过冲
+    // 2026-11-25：骨链参数外置到 骨架/bones.json（启动读一次，读不到就用下面这套默认值）
+    static float[] rigY = { 0.20f, 0.42f, 0.62f, 0.80f, 0.90f, 1.00f };
+    static float[] rigW = { 0.34f, 0.42f, 0.52f, 0.62f, 0.86f, 1.00f };
+    static float[] rigL = { 0.00f, 0.55f, 1.15f, 1.75f, 2.30f, 2.90f };
+    static float rigSum = 3.76f;   // = ΣrigW（3.76）；原来是 3.36，会让摆幅超过 1.0 约 12%，顶端会过冲
+
+
+    // 2026-11-25：骨链参数外置。找不到文件、字段缺失、解析失败，都静默回落默认常量，
+    // 不允许因为一个配置文件把桌宠启动搞挂。
+    static bool rigLoaded = false;
+    static void LoadRig()
+    {
+        if (rigLoaded) return;
+        rigLoaded = true;
+        try
+        {
+            string dir = Path.GetDirectoryName(Application.ExecutablePath);
+            string[] cands = { Path.Combine(dir, "骨架", "bones.json"),
+                               Path.Combine(dir, "bones.json") };
+            string path = null;
+            foreach (string c in cands) if (File.Exists(c)) { path = c; break; }
+            if (path == null) return;
+            string s = File.ReadAllText(path, Encoding.UTF8);
+            float[] y = ParseRigArr(s, "y"), w = ParseRigArr(s, "w"), l = ParseRigArr(s, "l");
+            if (y == null || w == null || l == null) return;
+            if (y.Length != 6 || w.Length != 6 || l.Length != 6) return;
+            rigY = y; rigW = w; rigL = l;
+            float sum = 0f;
+            for (int i = 0; i < w.Length; i++) sum += w[i];
+            if (sum > 0.01f) rigSum = sum;
+        }
+        catch { }
+    }
+
+    // 取 "key": [a, b, c, ...] 里的一串数字；没有就返回 null
+    static float[] ParseRigArr(string json, string key)
+    {
+        string pat = "\"" + key + "\"";
+        int k = json.IndexOf(pat, StringComparison.Ordinal);
+        if (k < 0) return null;
+        int lb = json.IndexOf('[', k);
+        int rb = lb < 0 ? -1 : json.IndexOf(']', lb);
+        if (lb < 0 || rb <= lb) return null;
+        string body = json.Substring(lb + 1, rb - lb - 1);
+        string[] parts = body.Split(',');
+        if (parts.Length < 6) return null;
+        float[] r = new float[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+        {
+            string t = parts[i].Trim();
+            if (t.Length == 0) return null;
+            try { r[i] = float.Parse(t, System.Globalization.CultureInfo.InvariantCulture); }
+            catch { return null; }
+        }
+        return r;
+    }
 
     // 某个高度（0 脚底 ~ 1 头顶）被骨链推开多少，返回的是"幅值倍数"
     static float BoneSway(float fy, float ph)
     {
+        LoadRig();
         float s2 = 0f;
         for (int b = 0; b < rigY.Length; b++)
         {
@@ -778,6 +837,28 @@ public class DesktopPet : Form
                 faceVoices = vl.ToArray();
                 faceFileIdx = il.ToArray();
                 faceCount = faces.Length;
+                // 顺带把每个形象的侧身/背面视角读进来（没有就跳过）
+                foreach (int fi in il)
+                {
+                    foreach (string suf in new string[] { "side", "back" })
+                    {
+                        string fn2 = "face_" + fi + "_" + suf + ".png";
+                        Bitmap b2 = null;
+                        try
+                        {
+                            Stream es2 = ResStream(fn2);
+                            if (es2 != null) { using (Stream s3 = es2) { b2 = MakeThumb(s3); } }
+                            else
+                            {
+                                string p2 = Path.Combine(dir, fn2);
+                                if (File.Exists(p2)) { using (Stream fs2 = new FileStream(p2, FileMode.Open, FileAccess.Read)) { b2 = MakeThumb(fs2); } }
+                            }
+                        }
+                        catch { b2 = null; }
+                        if (b2 == null) continue;
+                        if (suf == "side") sideFaces[fi] = b2; else backFaces[fi] = b2;
+                    }
+                }
             }
         }
         catch { }
@@ -1858,6 +1939,7 @@ public class DesktopPet : Form
             else if (cmd == "sword") { me.lieHold = 0; me.actKind = 2; me.actHold = 460; say = "踏剑而行，走。"; }
             else if (cmd == "ride") { me.lieHold = 0; me.actKind = 3; me.actHold = 460; say = "骑上它，慢慢走。"; }
             else if (cmd == "dance") { me.lieHold = 0; me.actKind = 4; me.actHold = 380; say = "跳一段，你听听节拍。"; }
+        else if (cmd == "turn") { me.lieHold = 0; me.actKind = 9; me.actHold = 400; say = "转个身给你看。"; }
             else if (cmd == "tea") { me.lieHold = 0; me.actKind = 5; me.actHold = 420; say = "来杯咖啡，握手里慢慢喝。"; }
             else if (cmd == "tv") { me.lieHold = 0; me.actKind = 6; me.actHold = 560; say = "看会儿电视，别嫌吵。"; }
             else if (cmd == "skate") { me.lieHold = 0; me.actKind = 7; me.actHold = 460; say = "踩上滑板，溜一段。"; }
@@ -3586,6 +3668,7 @@ public class DesktopPet : Form
         gLook.DropDownItems.Add("御剑飞行", null, new EventHandler(MenuActSword));
         gLook.DropDownItems.Add("骑坐骑出去", null, new EventHandler(MenuActRide));
         gLook.DropDownItems.Add("跳个舞", null, new EventHandler(MenuActDance));
+        gLook.DropDownItems.Add("转个身", null, new EventHandler(MenuActTurn));
         gLook.DropDownItems.Add("喝杯咖啡", null, new EventHandler(MenuActTea));
         gLook.DropDownItems.Add("看会儿电视", null, new EventHandler(MenuActTv));
         ToolStripMenuItem chatItem = new ToolStripMenuItem("闲聊（手动开）");
@@ -3981,12 +4064,14 @@ public class DesktopPet : Form
         else if (kind == 4) Say("跳一段，你听听节拍。");
         else if (kind == 5) Say("来杯咖啡，握手里慢慢喝。");
         else if (kind == 6) Say("看会儿电视，别嫌吵。");
+        else if (kind == 9) { actHold = 400; Say("转个身给你看。"); }
     }
 
     void MenuActFly(object s, EventArgs e) { StartAct(1); }
     void MenuActSword(object s, EventArgs e) { StartAct(2); }
     void MenuActRide(object s, EventArgs e) { StartAct(3); }
     void MenuActDance(object s, EventArgs e) { StartAct(4); }
+    void MenuActTurn(object s, EventArgs e) { StartAct(9); }
     void MenuActTea(object s, EventArgs e) { StartAct(5); }
     void MenuActTv(object s, EventArgs e) { StartAct(6); }
 
@@ -7505,7 +7590,9 @@ public class DesktopPet : Form
         int hw = (int)baseW / 2;
         int hh = (int)targetH;
         Rectangle r = new Rectangle(-hw, -hh, (int)baseW, hh);
+        walkPhaseHint = ph * (float)(Math.PI / 4.0);   // 一轮 8 帧 = 2π
         DrawBmpAlpha(g, pb, r, 1f);
+        walkPhaseHint = -1f;
         g.Restore(st);
     }
 
@@ -7769,6 +7856,24 @@ public class DesktopPet : Form
         Bitmap bmp = faces[species % faceCount];
         if (bmp == null) return;
 
+        // 2026-11-25：转身。前 → 侧 → 背 → 侧 → 前，5 段各 0.32 秒。
+        // 这套角度是图像模型渲出来的真视角，不是把正面压窄，所以背对时后脑、耳朵背面、裙摆都是对的
+        bool useTurn = false;
+        if (actAmt > 0.25f && actKind == 9 && faceFileIdx != null && species >= 0 && species < faceFileIdx.Length)
+        {
+            int fid = faceFileIdx[species];
+            if (sideFaces.ContainsKey(fid) && backFaces.ContainsKey(fid))
+            {
+                float p9 = 1f - actHold / 400f;
+                if (p9 < 0f) p9 = 0f; else if (p9 > 1f) p9 = 1f;
+                int ph9 = (int)(p9 * 5f);
+                if (ph9 > 4) ph9 = 4;
+                if (ph9 == 2) bmp = backFaces[fid];
+                else if (ph9 == 1 || ph9 == 3) bmp = sideFaces[fid];
+                useTurn = true;
+            }
+        }
+
         // 有真表情图就整张换：小脸上叠画的腮红、泪珠、怒气符在桌面尺寸下必然糊
         int exprKind = 0;   // 0 平常 1 开心 2 生气 3 难过 4 睡着
         if (cryHold > 0) exprKind = 3;
@@ -7788,7 +7893,7 @@ public class DesktopPet : Form
             else if (moodKind == 6) exprKind = 0;
         }
         bool useExpr = false;
-        if (UseExprArt && exprKind > 0 && exprMap != null && exprMap.ContainsKey(species))
+        if (!useTurn && UseExprArt && exprKind > 0 && exprMap != null && exprMap.ContainsKey(species))
         {
             Bitmap[] exs = exprMap[species];
             int exi = -1;
@@ -7994,7 +8099,7 @@ public class DesktopPet : Form
         // 看着就是"肢体不协调"。现在上身只摆 3.6px、手臂 3.2、抬腿 3.2，先保证轮廓连续。
         float amp = running ? 7.0f : (walking ? 4.6f : 0.8f);
         if (actAmt > 0.02f && actKind == 4) amp += 1.8f * actAmt;   // 跳舞只留一点摆动，大幅切条就是折叠
-        float ph = t * (running ? 12.0f : 8.4f);
+        float ph = walkPhaseHint >= 0f ? walkPhaseHint : t * (running ? 12.0f : 8.4f);
         if (actAmt > 0.02f && actKind == 4) ph = t * 8.0f;           // 节拍降下来，切条推太快就成抽搐
         float legLift = running ? 7.0f : (walking ? 4.2f : 0f);
         bool stepping = (running || walking || (actAmt > 0.3f && actKind == 4)) && hopPend <= 0;
@@ -10274,6 +10379,22 @@ public class DesktopPet : Form
         p.actKind = 0;
         p.actAmt = 0f;
         p.actHold = 0;
+
+        // 转身：五段各截一张，看侧身/背面视角是不是真的换了图，而不是压窄的正面
+        p.species = 1;          // 白兔少女（叠了侧身/背面视角的那个）
+        p.ApplyPose(1);
+        p.walkTicks = 0;
+        p.actKind = 9;
+        p.actAmt = 1.0f;
+        int[] turnHold = new int[] { 380, 300, 220, 140, 60 };
+        for (int ti = 0; ti < turnHold.Length; ti++)
+        {
+            p.actHold = turnHold[ti];
+            p.t = 0.5f + ti * 0.3f;
+            DumpOne(p, Path.Combine(dir, "selfcheck_turn_" + ti + ".png"));
+        }
+        p.actKind = 0; p.actAmt = 0f; p.actHold = 0;
+        p.ApplyPose(1);
 
         p.sitting = true;
         p.t = 2.0f;

@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="format-detection" content="telephone=no">
 <title>道 · 随身版</title>
@@ -17,7 +17,7 @@
     user-select: none;
   }
   #wrap { position: fixed; inset: 0; display: flex; flex-direction: column; }
-  #stage { flex: 1; position: relative; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 26px; }
+  #stage { flex: 1; position: relative; display: flex; align-items: flex-end; justify-content: center; padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
   /* 景铺满整屏，人画在上面的透明画布上，看着像"住进手机里"而不是贴在一条横幅上 */
   #bg {
     position: absolute; inset: 0;
@@ -42,7 +42,9 @@
     padding: 10px 14px calc(13px + env(safe-area-inset-bottom, 0px));
     display: flex; flex-direction: column; gap: 9px; width: 100%;
   }
-  #bar .minis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; width: 100%; }
+  /* 2026-11-25：原来 5 列等宽 grid 在 412 宽手机上被字撑爆，第 5 颗「上桌面」被裁掉一半。
+     改成 flex 等比分配，按钮永远不超出屏幕，字缩到 13.5px 也还看得清 */
+  #bar .minis { display: flex; gap: 7px; width: 100%; }
   button {
     display: inline-block; margin: 0; border-radius: 999px;
     background: rgba(118,158,255,.15); color: #cfdcff; font-size: 15px;
@@ -50,14 +52,14 @@
   }
   button:active { background: rgba(118,158,255,.32); }
   #bar .minis button {
-    width: 100%; min-width: 0; min-height: 48px; padding: 0 2px;
+    flex: 1 1 0; min-width: 0; width: auto; min-height: 48px; padding: 0 2px;
     display: flex; align-items: center; justify-content: center;
     border-radius: 16px;
     background: linear-gradient(180deg, rgba(126,166,255,.16), rgba(96,132,220,.10));
     border: 1px solid rgba(140,178,255,.28); box-shadow: 0 3px 10px rgba(0,0,0,.22);
   }
   #bar .minis button:active { transform: translateY(1px); background: linear-gradient(180deg, rgba(126,166,255,.34), rgba(96,132,220,.24)); }
-  #bar .minis button .lb { font-size: 14.5px; letter-spacing: 1px; color: #dbe6ff; }
+  #bar .minis button .lb { font-size: 13.5px; letter-spacing: .5px; color: #dbe6ff; white-space: nowrap; }
   #btnTalk {
     flex: none; width: 100%; min-height: 50px;
     display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -121,8 +123,8 @@
   #verTag {
     position: absolute; left: 10px; top: 10px; z-index: 25;
     padding: 4px 8px; border-radius: 6px; font-size: 11.5px; letter-spacing: .3px;
-    color: #ffd9d2; background: rgba(190,58,44,.30);
-    border: 1px solid rgba(230,110,95,.45); user-select: none;
+    color: rgba(190,205,235,.62); background: rgba(20,30,55,.55);
+    border: 1px solid rgba(130,170,255,.20); user-select: none;
   }
   #whoTag {
     position: absolute; left: 10px; top: 40px; z-index: 25;
@@ -565,7 +567,7 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
     dpr = Math.min(window.devicePixelRatio || 1, (Math.min(window.innerWidth, window.innerHeight) < 700 ? 1.25 : 1.5));
     var sw = document.getElementById('stage').clientWidth;
     var sh = document.getElementById('stage').clientHeight;
-    scale = Math.min((sw * 0.94) / CW, (sh * 0.94) / CH);
+    scale = Math.min((sw * 1.72) / CW, (sh * 1.04) / CH);   // 2026-11-25 立绘再放大：原来人只占屏幕三分之一，上面空一大片
     var cssW = CW * scale, cssH = CH * scale;
     cv.style.width = cssW + 'px';
     cv.style.height = cssH + 'px';

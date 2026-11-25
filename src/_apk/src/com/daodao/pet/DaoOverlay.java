@@ -349,6 +349,8 @@ public class DaoOverlay extends Service {
             try {
                 wm.addView(pv, lp);
                 added = true;
+                // 2026-11-25：浮窗刚挂到桌面上的那一下，先抬手打个招呼再站定
+                try { pv.greet(true); } catch (Exception e) { }
             } catch (Exception e) {
                 added = false;
                 toast("浮窗没挂上去：" + (e == null ? "" : e.getMessage()));
@@ -593,6 +595,7 @@ public class DaoOverlay extends Service {
         private Bitmap ballArt;      // 球头像专用图（assets/ball.png），有就用它，比从八帧里裁更清楚
         private Bitmap ballHappy, ballSleep, ballSur;   // 三种表情：开心 / 困 / 惊讶
         private Bitmap peekArt;      // 贴边探头的半身姿态（assets/peek.png）
+        private Bitmap standArt;     // 正面站姿（assets/stand_<序号>.png）：站着时面向你，不是侧脸
         private Bitmap[] frames;     // 八帧拆开存，供网格变形逐帧用
         private float walkAmp = 1f;  // 迈步额外倍率（烘焙帧本身已有步幅，这里保持 1）
         private long happyUntil = 0;
@@ -659,6 +662,9 @@ public class DaoOverlay extends Service {
             ballSleep = loadOpt("ball_sleep.png");
             ballSur = loadOpt("ball_sur.png");
             peekArt = loadOpt("peek.png");
+            // 2026-11-25：原来站着时停在八帧的第 0 帧，那是个侧身迈步的姿势，看着像永远在走路。
+            // 现在单独加载正面站姿，站着就面向你。
+            standArt = loadOpt("stand_" + art + ".png");
             // 2026-11-22 夜：形象不再「一张图定住」，改成按骨骼权重做网格变形。
             // 先把八帧拆成独立位图，变形时直接取当前帧，省掉每帧 createBitmap。
             try {
@@ -803,7 +809,7 @@ public class DaoOverlay extends Service {
             // 挥手只给满身站姿：走路时腿在动、贴边时手搭在框上，这两种都不该再挥手
             float waveAmp = 0f;
             long nowMs = System.currentTimeMillis();
-            if (vm == MODE_FULL && !walking && nowMs < waveUntil && waveUntil - nowMs <= WAVE_MS) {
+            if ((vm == MODE_FULL || vm == MODE_PEEK) && !walking && nowMs < waveUntil && waveUntil - nowMs <= WAVE_MS) {
                 float prog = 1f - (waveUntil - nowMs) / (float) WAVE_MS;
                 waveAmp = waveEnv(prog);                      // 快起、停一会、慢落（不是对称正弦）
             }
@@ -818,9 +824,12 @@ public class DaoOverlay extends Service {
             if (vm == MODE_PEEK) { c.rotate((float) Math.sin(tick / 38.0) * 1.2f, w / 2f, h * 0.98f); }  // 探头时轻轻晃，不是一张死图
             c.translate(lean, 0);
             if (vm == MODE_PEEK && art == ART_WALK && peekArt != null && !peekArt.isRecycled()) {
-                drawWarp(c, peekArt, 0, bob, w, h + bob, tick / 30.0, false, true, 0f, 0f);   // 贴边：半身探头 + 慢晃 + 呼吸 + 左右看
+                drawWarp(c, peekArt, 0, bob, w, h + bob, tick / 30.0, 0f, false, true, waveAmp, 0f);   // 贴边：半身探头 + 慢晃 + 呼吸 + 左右看
+            } else if (vm != MODE_PEEK && !walking && standArt != null && !standArt.isRecycled()) {
+                drawWarp(c, standArt, 0, bob, w, h + bob, tick / 30.0, 0f, false, false, waveAmp, nodAmp);
             } else if (frames != null && fi >= 0 && fi < frames.length) {
-                drawWarp(c, frames[fi], 0, bob, w, h + bob, tick / 30.0, walking, false, waveAmp, nodAmp);
+                float ph = (float) ((fi / (float) Math.max(1, fN)) * Math.PI * 2.0);
+                drawWarp(c, frames[fi], 0, bob, w, h + bob, tick / 30.0, ph, walking, false, waveAmp, nodAmp);
             } else {
                 c.drawBitmap(sheet, src, dst, p);
             }
@@ -832,7 +841,8 @@ public class DaoOverlay extends Service {
          *   腰部以下摆、发梢延迟跟随、胸腔随呼吸起伏、头部轻侧倾、走路时下身前后剪切。
          * 顶点按高度给权重，所以不会出现切图拼接的接缝。
          */
-        void drawWarp(Canvas c, Bitmap bm, float left, float top, float w, float h, double t, boolean walk, boolean peek, float wave, float nod) {
+        void drawWarp(Canvas c, Bitmap bm, float left, float top, float w, float h, double t, float phase,
+                      boolean walk, boolean peek, float wave, float nod) {
             if (bm == null || bm.isRecycled()) return;
             final int COLS = 8, ROWS = 12;
             float[] v = new float[(COLS + 1) * (ROWS + 1) * 2];
@@ -840,7 +850,7 @@ public class DaoOverlay extends Service {
             float sway = (float) Math.sin(t * 0.52);
             float lag = (float) Math.sin(t * 0.52 - 0.8);
             float tilt = (float) Math.sin(t * 0.47 + 0.5);
-            float step = walk ? (float) Math.sin(t * 5.2) : 0f;
+            float step = walk ? (float) Math.sin(phase) : 0f;   // 与换帧同频：一轮 8 帧 = 一个步态周期
             float look = (float) Math.sin(t * 0.34);          // 靠墙站时左右看，约 18 秒一个来回
             float hand = (float) Math.max(0f, Math.sin(t * 1.1));  // 手轻轻抬一下，半拍抬起半拍放下
             int i = 0;
@@ -850,15 +860,17 @@ public class DaoOverlay extends Service {
                 for (int cc = 0; cc <= COLS; cc++) {
                     float nx = cc / (float) COLS;
                     float baseX = left + w * nx;
-                    float dx = 0.013f * w * sway * (float) Math.pow(ny, 1.7f)
-                             + 0.011f * w * lag * (float) Math.pow(ny, 2.3f);
+                    // 2026-11-25：原来 1.3% / 1.1% 身宽的下身摆动叠头发的延迟跟随，连起来就是「东倒西歪」。
+                    // 站着不动时几乎不该晃，压到 0.5% / 0.45%，只留一点呼吸感。
+                    float dx = 0.005f * w * sway * (float) Math.pow(ny, 1.7f)
+                             + 0.0045f * w * lag * (float) Math.pow(ny, 2.3f);
                     float dy = -0.007f * h * breath * (float) Math.exp(-Math.pow((ny - 0.44) / 0.20, 2));
                     if (ny < 0.30f) {
                         // 2026-11-23 修扭曲：侧倾系数 0.7*h 是按早期大立绘调的，缩到 180px 高以后
                         // 头顶会横移近 40px，头跟脖子像被撕开、脸也拉歪。改成按头宽（约 0.35w）给幅度，
                         // 上限 0.05w，小尺寸下只有轻微侧倾，头身不会再错位。
-                        float headShift = tilt * (0.30f - ny) * (0.35f * w) * 0.45f;
-                        float capX = 0.05f * w;
+                        float headShift = tilt * (0.30f - ny) * (0.35f * w) * 0.18f;
+                        float capX = 0.018f * w;
                         if (headShift > capX) headShift = capX;
                         if (headShift < -capX) headShift = -capX;
                         dx += headShift;
@@ -866,15 +878,15 @@ public class DaoOverlay extends Service {
                     if (peek) {
                         // 靠墙站：别像钉在墙上。呼吸加重、上身随重心慢慢挪、头左右看、空着的手抬一抬
                         dy += -0.003f * h * breath;
-                        dx += 0.016f * w * (float) Math.sin(t * 0.6) * ny * ny;
-                        if (ny < 0.32f) dx += 0.022f * w * look * (0.32f - ny) / 0.32f;
+                        dx += 0.006f * w * (float) Math.sin(t * 0.6) * ny * ny;
+                        if (ny < 0.32f) dx += 0.009f * w * look * (0.32f - ny) / 0.32f;
                         if (nx < 0.26f && ny > 0.10f && ny < 0.42f) {
-                            dx += 0.028f * w * hand * (1f - ny / 0.42f);
-                            dy -= 0.020f * h * hand * (1f - nx / 0.26f);
+                            dx += 0.014f * w * hand * (1f - ny / 0.42f);
+                            dy -= 0.010f * h * hand * (1f - nx / 0.26f);
                         }
                     }
                     if (walk && ny > 0.55f) {                                       // 走路：下半身前后摆，脚下跟着起伏
-                        dx += 0.020f * w * walkAmp * step * (ny - 0.55f) / 0.45f;
+                        dx += 0.010f * w * walkAmp * step * (ny - 0.55f) / 0.45f;
                         dy += -Math.abs(step) * 0.010f * walkAmp * h * ny * ny;
                     }
                     if (wave > 0.01f) {

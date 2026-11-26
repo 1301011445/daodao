@@ -3,7 +3,7 @@
 $ErrorImportance = $null
 $APP = 'F:\Daodao'
 $OUT = Join-Path $APP '宣传'
-$SHOT = 'C:\Users\Administrator\Doubao\chats\2026-11-06'
+$SHOT = 'F:\Daodao\宣传\素材'
 $LOG = Join-Path $OUT 'log.txt'
 
 $POINTS = @"

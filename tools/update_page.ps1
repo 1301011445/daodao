@@ -50,7 +50,7 @@ if ($raw -eq $before) {
 
 # 发布（cwd 与 lark-cli 必须同一条命令，路径用相对）
 Push-Location $src
-$out = & lark-cli apps +deploy --file-path ./index.html --app-id $appId 2>&1 | Out-String
+$out = (& lark-cli apps +deploy --file-path ./index.html --app-id $appId 2>$null | Out-String)
 Pop-Location
 $json = $null
 $st = $out.IndexOf('{')

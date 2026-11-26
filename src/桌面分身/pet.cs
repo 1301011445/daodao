@@ -2006,9 +2006,15 @@ public class DesktopPet : Form
             else if (cmd == "cry") { me.cryHold = 700; me.moodKind = 3; me.moodTicks = 120; say = "嗯……我也有心里不好受的时候。"; }
             else if (cmd == "walk") { me.BeginInvoke(new MethodInvoker(delegate() { me.MenuWalkDemo(null, null); })); }
             else if (cmd == "wake") { me.lieHold = 0; me.cryHold = 0; me.idleTicks = 0; me.lying = false; me.actHold = 0; me.actKind = 0; say = "我起来了。"; }
-            // 2026-11-25：生活动作只留「骑坐骑」。飞、御剑、跳舞、转身、喝茶、看电视、
-            // 滑板、轮滑全部下线（用户决定：坐骑系统已经够用，其他场景删掉）。
+            // 2026-11-26：生活动作全部接回
+            else if (cmd == "fly") { me.lieHold = 0; me.actKind = 1; me.actHold = 470; say = "披上披风，让风带着走。"; }
+            else if (cmd == "sword") { me.lieHold = 0; me.actKind = 2; me.actHold = 470; say = "踩剑走一段。"; }
             else if (cmd == "ride") { me.lieHold = 0; me.actKind = 3; me.actHold = 460; say = "骑上它，慢慢走。"; }
+            else if (cmd == "dance") { me.lieHold = 0; me.actKind = 4; me.actHold = 400; say = "跟着节拍动一动。"; }
+            else if (cmd == "tea" || cmd == "coffee") { me.lieHold = 0; me.actKind = 5; me.actHold = 400; say = "喝一口，歇一会儿。"; }
+            else if (cmd == "tv") { me.lieHold = 0; me.actKind = 6; me.actHold = 400; say = "坐这儿看会儿。"; }
+            else if (cmd == "skate") { me.lieHold = 0; me.actKind = 7; me.actHold = 470; say = "踩着板子滑一圈。"; }
+            else if (cmd == "roller") { me.lieHold = 0; me.actKind = 8; me.actHold = 470; say = "换上轮滑走两步。"; }
             // 自检口：马上蹦一下，用来验证"跳跃会不会把头顶裁掉"
             else if (cmd == "hop") { me.hopPend = 34; me.hopWait = 260; say = "蹦一个。"; }
             // 说话类的：背诗、唱歌交给菜单里那套，走 Invoke
@@ -3872,8 +3878,15 @@ public class DesktopPet : Form
         gLook.DropDownItems.Add(dayMenu);
         gLook.DropDownItems.Add("走两步给你看", null, new EventHandler(MenuWalkDemo));
         gLook.DropDownItems.Add("哭一个", null, new EventHandler(MenuCry));
-        // 2026-11-25：只留坐骑，飞/御剑/跳舞/转身/喝咖啡/看电视/滑板/轮滑已下线
+        // 2026-11-26：生活动作全部接回
         gLook.DropDownItems.Add("骑坐骑出去", null, new EventHandler(MenuActRide));
+        gLook.DropDownItems.Add("披披风飞一段", null, new EventHandler(MenuActFly));
+        gLook.DropDownItems.Add("踩剑走一段", null, new EventHandler(MenuActSword));
+        gLook.DropDownItems.Add("跟着节拍跳", null, new EventHandler(MenuActDance));
+        gLook.DropDownItems.Add("喝一口歇歇", null, new EventHandler(MenuActTea));
+        gLook.DropDownItems.Add("坐这儿看电视", null, new EventHandler(MenuActTv));
+        gLook.DropDownItems.Add("踩板子滑一圈", null, new EventHandler(MenuActSkate));
+        gLook.DropDownItems.Add("换上轮滑", null, new EventHandler(MenuActRoller));
         // 2026-11-26：大小自己定，脚不动只长个子；Ctrl+滚轮也是同一套
         ToolStripMenuItem sizeMenu = new ToolStripMenuItem("大小");
         int[] zoomPct = new int[] { 60, 80, 100, 130, 160, 200 };
@@ -4270,8 +4283,15 @@ public class DesktopPet : Form
         if (act == null) return;
         string a = act.Trim().ToLower();
         int kind = 0;
-        // 2026-11-25：只认 ride，其余动作已下线（模型还会说 dance/fly，就当没听见）
+        // 2026-11-26：全部接回
         if (a == "ride") kind = 3;
+        else if (a == "fly") kind = 1;
+        else if (a == "sword") kind = 2;
+        else if (a == "dance") kind = 4;
+        else if (a == "tea" || a == "coffee" || a == "drink") kind = 5;
+        else if (a == "tv" || a == "watch") kind = 6;
+        else if (a == "skate") kind = 7;
+        else if (a == "roller") kind = 8;
         if (kind > 0)
         {
             actKind = kind;
@@ -4286,19 +4306,36 @@ public class DesktopPet : Form
         }
     }
 
-    // 生活动作只剩一个：骑坐骑出去
+    // 生活动作：1 飞 2 御剑 3 骑坐骑 4 跳舞 5 喝一口 6 看电视 7 滑板 8 轮滑
+    // 2026-11-26 按用户要求全部接回（此前只留坐骑）
     void StartAct(int kind)
     {
-        if (kind != 3) return;                    // 2026-11-25：其他动作已下线，进来的直接忽略
+        if (kind < 1 || kind > 8) return;
         if (lying) { lieHold = 0; lying = false; }
         actKind = kind;
-        actHold = 470;
-        // 要赶路的先把目的地清掉，让行走逻辑马上重新挑一个
-        walkTargetX = -999999;
-        Say("骑上它，慢慢走。");
+        actHold = kind >= 4 ? 400 : 470;
+        if (kind >= 1 && kind <= 3) walkTargetX = -999999;
+        string say = "动一动。";
+        if (kind == 1) say = "披上披风，让风带着走。";
+        else if (kind == 2) say = "踩剑走一段。";
+        else if (kind == 3) say = "骑上它，慢慢走。";
+        else if (kind == 4) say = "跟着节拍动一动。";
+        else if (kind == 5) say = "喝一口，歇一会儿。";
+        else if (kind == 6) say = "坐这儿看会儿。";
+        else if (kind == 7) say = "踩着板子滑一圈。";
+        else if (kind == 8) say = "换上轮滑走两步。";
+        Say(say);
+        Invalidate();
     }
 
     void MenuActRide(object s, EventArgs e) { StartAct(3); }
+    void MenuActFly(object s, EventArgs e) { StartAct(1); }
+    void MenuActSword(object s, EventArgs e) { StartAct(2); }
+    void MenuActDance(object s, EventArgs e) { StartAct(4); }
+    void MenuActTea(object s, EventArgs e) { StartAct(5); }
+    void MenuActTv(object s, EventArgs e) { StartAct(6); }
+    void MenuActSkate(object s, EventArgs e) { StartAct(7); }
+    void MenuActRoller(object s, EventArgs e) { StartAct(8); }
 
     void MenuSwapVoice(object s, EventArgs e)
     {
@@ -9853,7 +9890,7 @@ public class DesktopPet : Form
         if (a < 0.02f || actKind <= 0) return;
         // 2026-11-25：道具只服务坐骑。披风飞、御剑、跳舞、茶杯、电视、滑板、轮滑的绘制
         // 全部下线，这里直接挡住，免得哪天有人把 actKind 又设成别的值、那些旧道具又冒出来。
-        if (actKind != 3) return;
+        if (actKind < 1 || actKind > 8) return;
         // 2026-11-25：坐骑只画在身前：贴真马（骨架\mount.png 或 exe 目录 mount.png），
         // 让马身盖住人物脚踝以下，看上去才是"骑在马上"；没有贴图就什么都不画，
         // 兜底那只椭圆小兽（像蜗牛）已经彻底删掉。

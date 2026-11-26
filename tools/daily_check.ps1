@@ -4,7 +4,7 @@ $py = 'F:\Daodao\tools\inspect_dao.py'
 $log = 'F:\Daodao\tools\_inspect_out.txt'
 $dst = 'F:\Daodao\tools\_last_run.txt'
 
-python $py *> $log
+$env:PYTHONUTF8='1'; $env:PYTHONIOENCODING='utf-8'; & 'E:\Python313\python.exe' -X utf8 $py *> $log
 $code = $LASTEXITCODE
 
 try {

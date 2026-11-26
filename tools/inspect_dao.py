@@ -6,6 +6,14 @@
 """
 import os, re, sys, struct, subprocess, datetime, socket, urllib.request, json
 
+# 2026-11-26：控制台是 GBK 时 print 到报告里的 U+FFFD 会抛 UnicodeEncodeError，
+# 整轮巡检在最后一行崩掉（exit=1，巡检报告写了但能力检查没落）。改成 UTF-8 + 可替换。
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
+
 ROOT = r'F:\Daodao'
 SRC = os.path.join(ROOT, 'src')
 BUNDLE = os.path.join(SRC, '桌面分身', '_bundle')

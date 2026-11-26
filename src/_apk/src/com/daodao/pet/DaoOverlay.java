@@ -92,6 +92,10 @@ public class DaoOverlay extends Service {
     private int sw = 0, sh = 0;
     private boolean added = false;
     private boolean screenOn = true;
+    // 2026-11-26 用户：「可以自由调节大小尺寸」。sizeK 是用户自己的缩放系数，
+    // 双指捏合实时改，松手写进 prefs；0.55~2.0 之间，别再回到「写死一个百分数」的老路。
+    private float sizeK = 1.0f;
+    static final float SIZE_MIN = 0.55f, SIZE_MAX = 2.0f;
 
     private long tick = 0;
     private int beatN = 0;   // 2026-11-25 提帧：33ms 重绘计数，3 拍做一次 90ms 的逻辑
@@ -182,6 +186,8 @@ public class DaoOverlay extends Service {
         mode = sp.getInt("mode", MODE_PEEK);
         side = sp.getInt("side", SIDE_RIGHT);
         art = sp.getInt("art", ART_WALK);
+        sizeK = sp.getFloat("sizeK", 1.0f);
+        if (!(sizeK >= SIZE_MIN) || !(sizeK <= SIZE_MAX)) sizeK = 1.0f;
         sSvc = this;
         measure();
 
@@ -290,10 +296,12 @@ public class DaoOverlay extends Service {
         // 1080×2400 上约 480px 高、240px 宽：脸、肩线、裙摆转折都看得清了。
         // 2026-11-26 用户第三次说小：窗口本身放到 27% 屏高（上限 300dp、下限 190dp），
         // 外面还留了一圈安全边（见 onDraw 的 PAD_* 常量），所以人物实际可见高度也比 20% 那一版大。
-        int h = (int) (sh * 0.27f);
-        int cap = dp(300);
+        int h = (int) (sh * 0.27f * sizeK);   // sizeK 由用户双指捏合或 App 里调节，默认 1.0
+        int cap = dp(760);                    // 上限放得很宽：想放多大就多大，只防超屏
         if (h > cap) h = cap;
-        if (h < dp(190)) h = dp(190);
+        int capSh = (int) (sh * 0.92f);
+        if (h > capSh) h = capSh;
+        if (h < dp(110)) h = dp(110);
         return h;
     }
 
@@ -356,6 +364,44 @@ public class DaoOverlay extends Service {
         if (added) {
             try { wm.updateViewLayout(pv, lp); } catch (Exception e) { }
         }
+    }
+
+    /** 缩放：先记住窗口中心，改完尺寸再按中心摆回去，手感像「从中心缩放」而不是从左上角长 */
+    private void applySizeLive(float k) {
+        if (k < SIZE_MIN) k = SIZE_MIN;
+        if (k > SIZE_MAX) k = SIZE_MAX;
+        sizeK = k;
+        if (pv == null || lp == null || !added) return;
+        int cx = lp.x + lp.width / 2, cy = lp.y + lp.height / 2;
+        layout(mode, false);
+        int nx = cx - lp.width / 2, ny = cy - lp.height / 2;
+        if (mode == MODE_PEEK) {
+            nx = side == SIDE_LEFT ? -lp.width / 2 : sw - lp.width / 2;
+        } else {
+            if (nx < -lp.width / 4) nx = -lp.width / 4;
+            if (nx > sw - lp.width * 0.75f) nx = (int) (sw - lp.width * 0.75f);
+        }
+        if (ny < 0) ny = 0;
+        if (ny > sh - lp.height) ny = sh - lp.height;
+        lp.x = nx; lp.y = ny;
+        try { wm.updateViewLayout(pv, lp); } catch (Exception e) { }
+    }
+
+    /** App / 面板想直接调大小时走这里；k 会被夹在 0.55~2.0 */
+    public static void setSizeK(final float k) {
+        final DaoOverlay s = sSvc;
+        if (s == null) return;
+        s.ui.post(new Runnable() {
+            public void run() {
+                s.applySizeLive(k);
+                try { s.sp.edit().putFloat("sizeK", s.sizeK).apply(); } catch (Throwable e) { }
+            }
+        });
+    }
+
+    public static float getSizeK() {
+        DaoOverlay s = sSvc;
+        return s == null ? 1.0f : s.sizeK;
     }
 
     private void showView(boolean resetPos) {
@@ -1466,11 +1512,44 @@ public class DaoOverlay extends Service {
         private int wx0, wy0;
         private long t0;
         private boolean moved;
+        // 双指捏合缩放：记两指起始间距与起始系数，过程中按比例连续改
+        private boolean pinching;
+        private float pinchD0, pinchK0;
+
+        private float pinchDist(MotionEvent e) {
+            float dx = e.getX(0) - e.getX(1), dy = e.getY(0) - e.getY(1);
+            return (float) Math.sqrt(dx * dx + dy * dy);
+        }
 
         @Override
         public boolean onTouchEvent(MotionEvent e) {
+            if (e.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN && e.getPointerCount() >= 2) {
+                // 两指一落，立刻转入缩放：这次触摸不再算拖动，也不再算点击
+                pinching = true;
+                moved = false;
+                pinchD0 = Math.max(1f, pinchDist(e));
+                pinchK0 = DaoOverlay.this.sizeK;
+                walking = false;
+                if (pv != null) pv.walking = false;
+                touchAt = System.currentTimeMillis();
+                return true;
+            }
+            if (pinching && e.getPointerCount() >= 2
+                    && (e.getActionMasked() == MotionEvent.ACTION_MOVE
+                        || e.getActionMasked() == MotionEvent.ACTION_POINTER_UP)) {
+                float d = pinchDist(e);
+                if (e.getActionMasked() == MotionEvent.ACTION_POINTER_UP) {
+                    // 松开一根手指：脚还没离开屏幕，只收尾不办事，等 ACTION_UP 再落盘
+                    DaoOverlay.this.applySizeLive(pinchK0 * (d / pinchD0));
+                    return true;
+                }
+                DaoOverlay.this.applySizeLive(pinchK0 * (d / pinchD0));
+                touchAt = System.currentTimeMillis();
+                return true;
+            }
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
+                    pinching = false;
                     dRx = e.getRawX(); dRy = e.getRawY();
                     wx0 = lp.x; wy0 = lp.y;
                     t0 = System.currentTimeMillis();
@@ -1481,6 +1560,7 @@ public class DaoOverlay extends Service {
                     if (pv != null) pv.walking = false;
                     return true;
                 case MotionEvent.ACTION_MOVE: {
+                    if (pinching) return true;
                     float dx = e.getRawX() - dRx, dy = e.getRawY() - dRy;
                     // v128：阈值 6dp → 16dp。手指按在桌面上天然会抖 2~8dp，
                     // 原来那点抖动就被当成拖动，窗口跟着手指乱窜。
@@ -1490,6 +1570,13 @@ public class DaoOverlay extends Service {
                     return true;
                 }
                 case MotionEvent.ACTION_UP: {
+                    if (pinching) {             // 捏合收手：只把尺寸写进 prefs，不演动作不弹 App
+                        pinching = false;
+                        touchAt = System.currentTimeMillis();
+                        sp.edit().putFloat("sizeK", DaoOverlay.this.sizeK).apply();
+                        onDrop();
+                        return true;
+                    }
                     long dt = System.currentTimeMillis() - t0;
                     long now = System.currentTimeMillis();
                     touchAt = now;
@@ -1511,6 +1598,7 @@ public class DaoOverlay extends Service {
                     return true;
                 }
                 case MotionEvent.ACTION_CANCEL:
+                    pinching = false;
                     onDrop();
                     return true;
             }

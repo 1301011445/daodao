@@ -251,11 +251,16 @@
       <button data-m="2">缩成小圆球</button>
       <button data-m="3">收起（留通知）</button>
     </div>
+    <div id="ovSize" style="display:flex;align-items:center;gap:10px;margin:10px 12px 4px">
+      <span style="font-size:13px;opacity:.75;flex:0 0 auto">大小</span>
+      <input id="ovSizeR" type="range" min="0.55" max="2" step="0.05" value="1" style="flex:1 1 auto;min-width:0;accent-color:#7aa2ff">
+      <b id="ovSizeV" style="font-size:13px;min-width:42px;text-align:right">1.00×</b>
+    </div>
     <div id="ovRow">
       <button id="ovSide">换一边</button>
       <button id="ovOff">从桌面拿下来</button>
     </div>
-    <div id="ovFt">满身站着时约 15% 屏高（v137 放大过，能看清眉眼）。骑云/鹤/剑会上下飘着飞。第一次用要在系统里放行「显示在其他应用上层」。<button id="ovPerm">去开权限</button></div>
+    <div id="ovFt">拖动上面的滑杆调大小（也能在浮窗上双指捏合），从 0.55× 到 2.00× 随便调。骑乘时人物和坐骑一起缩放，不会被窗口边裁掉。第一次用要在系统里放行「显示在其他应用上层」。<button id="ovPerm">去开权限</button></div>
   </div>
   <div id="bar">
     <div class="minis">
@@ -1375,7 +1380,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '147';
+  var HTML_VER = '148';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -2661,6 +2666,7 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
   function ovOpen() {
     if (!ovHas()) { tip('这台设备没有浮窗通道，装到手机上才有'); return; }
     ovPaint();
+    ovSizePaint();
     ovPanel.classList.add('show');
     if (ovPoll) clearInterval(ovPoll);
     ovPoll = setInterval(ovPaint, 900);
@@ -2679,6 +2685,34 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
   function ovCall(fn, arg) {
     try { if (window.DaoNative && DaoNative[fn]) return DaoNative[fn](arg); } catch (e) { tip('叫不动浮窗'); }
     return '';
+  }
+  // ---------- 浮窗大小：面板滑杆 + 浮窗上双指捏合，两边共用同一个 sizeK ----------
+  var ovSizeR = document.getElementById('ovSizeR');
+  var ovSizeV = document.getElementById('ovSizeV');
+  function ovSizePaint() {
+    if (!ovSizeR) return;
+    var k = 1.0;
+    try { if (window.DaoNative && DaoNative.getSizeK) k = parseFloat(DaoNative.getSizeK()); } catch (e) {}
+    if (!(k >= 0.55 && k <= 2)) k = 1.0;
+    ovSizeR.value = String(k);
+    if (ovSizeV) ovSizeV.textContent = k.toFixed(2) + '×';
+  }
+  if (ovSizeR) {
+    var ovSizeT = null;
+    ovSizeR.addEventListener('input', function () {
+      var k = parseFloat(this.value);
+      if (!(k >= 0.55 && k <= 2)) k = 1.0;
+      if (ovSizeV) ovSizeV.textContent = k.toFixed(2) + '×';
+      if (ovSizeT) clearTimeout(ovSizeT);
+      ovSizeT = setTimeout(function () {
+        try { if (window.DaoNative && DaoNative.setSizeK) DaoNative.setSizeK(k); } catch (e) {}
+      }, 90);
+    });
+    ovSizeR.addEventListener('change', function () {
+      var k = parseFloat(this.value);
+      try { if (window.DaoNative && DaoNative.setSizeK) DaoNative.setSizeK(k); } catch (e) {}
+      tip('大小改成 ' + k.toFixed(2) + '×');
+    });
   }
   if (ovPanel) {
     document.getElementById('ovClose').addEventListener('click', ovClose);

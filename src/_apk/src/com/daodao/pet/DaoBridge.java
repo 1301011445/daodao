@@ -615,6 +615,17 @@ public class DaoBridge {
         try { DaoOverlay.setMount(k); } catch (Throwable e) { }
     }
 
+    /** 2026-11-26：悬浮窗大小自由调节。1.0 是默认，0.55 最小、2.0 最大。 */
+    @JavascriptInterface
+    public void setSizeK(float k) {
+        try { DaoOverlay.setSizeK(k); } catch (Throwable e) { }
+    }
+
+    @JavascriptInterface
+    public float getSizeK() {
+        try { return DaoOverlay.getSizeK(); } catch (Throwable e) { return 1.0f; }
+    }
+
     @JavascriptInterface
     public void warmUp() {
         new Thread(new Runnable() { public void run() {

@@ -111,6 +111,10 @@ public class DesktopPet : Form
 
     // 系统缩放比例（150% 缩放时窗口会被系统压成 2/3，这里补回来）
     static float uiScale = CalcUiScale();
+    // 2026-11-26 用户：「可以自由调节大小尺寸」。在系统缩放之上再叠一层用户自己的缩放，
+    // 右键「我的样子 → 大小」或鼠标滚轮都能改，记在注册表 UserZoom 里，下次开机还是这个大小。
+    static float userZoom = 1f;
+    const float ZOOM_MIN = 0.6f, ZOOM_MAX = 2f;
 
     static float CalcUiScale()
     {
@@ -3492,8 +3496,8 @@ public class DesktopPet : Form
     // ===== 桌面待法：满身 / 贴边偷看 / 悬浮球 / 收起 =====
     // 2026-11-22 晚（用户要求）：干活时它可以在屏幕侧边只露半边（像乔巴那样探头），
     // 也可以缩成悬浮球，点一下再出来。四种模式随时可换，选过就记住。
-    int FullW { get { return (int)(W * uiScale); } }
-    int FullH { get { return (int)(H * uiScale); } }
+    int FullW { get { return (int)(W * uiScale * userZoom); } }
+    int FullH { get { return (int)(H * uiScale * userZoom); } }
 
     void LoadModeSettings()
     {
@@ -3505,12 +3509,14 @@ public class DesktopPet : Form
                 object m = k.GetValue("PetMode"); if (m != null) petMode = Convert.ToInt32(m);
                 object sd = k.GetValue("PeekSide"); if (sd != null) peekSide = Convert.ToInt32(sd);
                 object ap = k.GetValue("AutoPeek"); if (ap != null) autoPeek = Convert.ToInt32(ap) != 0;
+                object uz = k.GetValue("UserZoom"); if (uz != null) userZoom = Convert.ToSingle(uz);
                 k.Close();
             }
         }
         catch { }
         if (petMode < 0 || petMode > 3) petMode = 0;
         if (peekSide != 1 && peekSide != 2) peekSide = 2;
+        if (userZoom < ZOOM_MIN || userZoom > ZOOM_MAX) userZoom = 1f;
     }
 
     void SaveModeSettings()
@@ -3523,10 +3529,44 @@ public class DesktopPet : Form
                 k.SetValue("PetMode", petMode);
                 k.SetValue("PeekSide", peekSide);
                 k.SetValue("AutoPeek", autoPeek ? 1 : 0);
+                k.SetValue("UserZoom", userZoom);
                 k.Close();
             }
         }
         catch { }
+    }
+
+    /// <summary>改整体大小：脚底那条线不动，从头顶往上长，改完存进注册表。</summary>
+    void ApplyZoom(float z)
+    {
+        if (z < ZOOM_MIN) z = ZOOM_MIN;
+        if (z > ZOOM_MAX) z = ZOOM_MAX;
+        z = (float)Math.Round(z * 20) / 20f;      // 按 5% 一档，免得滑块手感太碎
+        if (Math.Abs(z - userZoom) < 0.01f) return;
+        int oldBottom = Top + Height;
+        int cx = Left + Width / 2;
+        userZoom = z;
+        Size = new Size((int)(W * uiScale * userZoom), (int)(H * uiScale * userZoom));
+        Left = cx - Width / 2;
+        Top = oldBottom - Height;               // 站的地方不动，只长个子
+        SaveModeSettings();
+        Invalidate();
+        try { Say("大小 " + (int)Math.Round(userZoom * 100) + "%"); } catch { }
+    }
+
+    /// <summary>Ctrl + 滚轮改大小，5% 一档；不按 Ctrl 的滚轮不管，免得误碰就变形。</summary>
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        try
+        {
+            if ((ModifierKeys & Keys.Control) == Keys.Control)
+            {
+                ApplyZoom(userZoom + (e.Delta > 0 ? 0.05f : -0.05f));
+                return;
+            }
+        }
+        catch { }
+        base.OnMouseWheel(e);
     }
 
     void SetMode(int m)
@@ -3834,6 +3874,15 @@ public class DesktopPet : Form
         gLook.DropDownItems.Add("哭一个", null, new EventHandler(MenuCry));
         // 2026-11-25：只留坐骑，飞/御剑/跳舞/转身/喝咖啡/看电视/滑板/轮滑已下线
         gLook.DropDownItems.Add("骑坐骑出去", null, new EventHandler(MenuActRide));
+        // 2026-11-26：大小自己定，脚不动只长个子；Ctrl+滚轮也是同一套
+        ToolStripMenuItem sizeMenu = new ToolStripMenuItem("大小");
+        int[] zoomPct = new int[] { 60, 80, 100, 130, 160, 200 };
+        foreach (int zp in zoomPct)
+        {
+            int pct = zp;
+            sizeMenu.DropDownItems.Add(pct + "%", null, new EventHandler(delegate { ApplyZoom(pct / 100f); }));
+        }
+        gLook.DropDownItems.Add(sizeMenu);
         // 2026-11-25：飞/御剑/跳舞/转身/喝咖啡/看电视这些生活场景都下线了，只留坐骑
         gLook.DropDownItems.Add(new ToolStripSeparator());
         ToolStripMenuItem chatItem = new ToolStripMenuItem("闲聊（手动开）");
@@ -11273,7 +11322,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 147;
+    public const int APP_VER = 148;
 
     public static void Start()
     {

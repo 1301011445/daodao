@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 程序版本：v0.1 | 2026-11-22 | 基线建档（此前无版本头）
+# 程序版本：v0.2 | 2026-11-27 | stdout/stderr 改 UTF-8，修复 GBK 控制台下 print 崩
 """「道」两端自动巡检：版本、名单、图片、包内、进程、发布一致性。
 用法：python inspect_dao.py
 输出：F:\\Daodao\\巡检报告\\巡检_YYYYMMDD_HHMM.txt，末行 PASS / FAIL

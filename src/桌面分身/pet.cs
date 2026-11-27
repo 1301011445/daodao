@@ -4550,24 +4550,98 @@ public class DesktopPet : Form
         return "";
     }
 
-    // 首字延迟的真相：edge_tts 联网合成，冷启一句 3.3 秒，命中缓存只要 7ms。
-    // 所以启动时后台把高频短句先合成好，日常应答直接走缓存，开口不用等
+    // 2026-11-27 修的是个真 bug：原来预热走 TtsFile，缓存键是 hash(文本|音色|tts9)；
+    // 播放走的是 hash(文本|音色|fx|rate|pitch)，两套键完全不重叠 —— 预热写进去的缓存，
+    // 播的时候一个都用不上，等于从来没预热过，首字一直卡在 3 秒上下。
+    // 现在改成用播放那套键去预热，并且把「我说的话.txt」里的常用句也一并烤上。
+    void WarmCache(string text, string voice, string fx)
+    {
+        try
+        {
+            if (text == null) return;
+            string t2 = text.Replace("\r", " ").Replace("\n", " ").Trim();
+            if (t2.Length == 0) return;
+            if (t2.Length > 90) t2 = t2.Substring(0, 90);
+            if (voice == null || voice.Trim().Length == 0) voice = CurVoice();
+            bool hasFx = fx != null && fx.Length > 0 && fx != "none";
+            int zc = CountSpeakChars(t2);
+            string rate = CurRate();
+            if (zc <= 10) rate = NudgeRate(rate, -1);
+            else if (zc >= 26) rate = NudgeRate(rate, 4);
+            string pitch = CurPitch(t2);
+            string dir = VoiceDir();
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            string seed = t2 + "|" + voice + "|" + (hasFx ? fx : "") + "|" + rate + "|" + pitch;
+            string key = Math.Abs(seed.GetHashCode()).ToString();
+            string mp3 = Path.Combine(dir, key + (hasFx ? ".wav" : ".mp3"));
+            if (File.Exists(mp3) && new FileInfo(mp3).Length > 2048) return;
+            string py = Path.Combine(dir, "say.py");
+            if (!File.Exists(py))
+            {
+                File.WriteAllText(py,
+                    "import asyncio,sys\n" +
+                    "from edge_tts import Communicate\n" +
+                    "t=open(sys.argv[1],'r',encoding='utf-8').read()\n" +
+                    "v=sys.argv[3] if len(sys.argv)>3 else 'zh-CN-XiaoxiaoNeural'\n" +
+                    "r=sys.argv[4] if len(sys.argv)>4 else '+0%'\n" +
+                    "p=sys.argv[5] if len(sys.argv)>5 else '+0Hz'\n" +
+                    "asyncio.run(Communicate(t,v,rate=r,pitch=p).save(sys.argv[2]))\n",
+                    new System.Text.UTF8Encoding(false));
+            }
+            string txt = Path.Combine(dir, key + ".txt");
+            File.WriteAllText(txt, t2, new System.Text.UTF8Encoding(false));
+            ProcessStartInfo pi = new ProcessStartInfo();
+            pi.FileName = PyExe();
+            pi.Arguments = "\"" + py + "\" \"" + txt + "\" \"" + mp3 + "\" \"" + voice
+                + "\" \"" + rate + "\" \"" + pitch + "\"";
+            pi.UseShellExecute = false;
+            pi.CreateNoWindow = true;
+            pi.WindowStyle = ProcessWindowStyle.Hidden;
+            Process p = Process.Start(pi);
+            p.WaitForExit(40000);
+        }
+        catch { }
+    }
+
+    // 首字延迟：命中缓存 ~毫秒，冷启一句 ~2.9 秒。启动后等窗体建好（Self 就位），
+    // 后台把常用短句和话术文件里的前 30 句按播放同一套键烤进缓存。
     public static void PrewarmTts()
     {
-        System.Threading.Thread t = new System.Threading.Thread(delegate()
+        System.Threading.Thread th = new System.Threading.Thread(delegate()
         {
-            string[] lines = new string[] {
+            DesktopPet me = null;
+            for (int i = 0; i < 40 && me == null; i++)
+            {
+                me = Self;
+                if (me == null) System.Threading.Thread.Sleep(500);
+            }
+            if (me == null) return;
+            string[] baseLines = new string[] {
                 "道在呢，你说吧", "我在呢", "来啦", "好嘞", "嗯嗯，我听着呢",
                 "这事儿我记下了", "今天感觉怎么样", "别急，慢慢来",
                 "我先看看", "一会儿就来", "还没好呢", "那我先忙着"
             };
-            foreach (string s in lines)
+            foreach (string s in baseLines) { try { me.WarmCache(s, null, null); } catch { } }
+            try
             {
-                try { TtsFile(s, "zh-CN-XiaoxiaoNeural"); } catch { }
+                string f = Path.Combine(me.AppDir(), "我说的话.txt");
+                if (File.Exists(f))
+                {
+                    string[] ls = File.ReadAllLines(f, Encoding.UTF8);
+                    int n = 0;
+                    for (int i = ls.Length - 1; i >= 0 && n < 30; i--)
+                    {
+                        string s0 = ls[i].Trim();
+                        if (s0.Length < 2 || s0.Length > 40) continue;
+                        me.WarmCache(s0, null, null);
+                        n++;
+                    }
+                }
             }
+            catch { }
         });
-        t.IsBackground = true;
-        t.Start();
+        th.IsBackground = true;
+        th.Start();
     }
 
     // 排着队一句一句往外播，绝不叠着说
@@ -11359,7 +11433,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 150;
+    public const int APP_VER = 151;
 
     public static void Start()
     {

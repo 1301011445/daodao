@@ -4550,6 +4550,92 @@ public class DesktopPet : Form
         return "";
     }
 
+    // 2026-11-27 下一轮：常驻合成进程。edge_tts 的 import 本身要 1.46 秒，
+    // 每句话都重开一个 python 等于白等这一秒半。这里养一个长住进程，
+    // 一个 json 一行地喂给它，合成完回一行 DLG|<id>。
+    static Process ttsDaemon;
+    static System.IO.StreamWriter ttsdIn;
+    static System.IO.StreamReader ttsdOut;
+    static object ttsdLock = new object();
+    static int ttsdSeq;
+
+    static bool TtsdStart()
+    {
+        try
+        {
+            if (ttsDaemon != null && !ttsDaemon.HasExited) return true;
+            string dir = Path.Combine(Path.GetTempPath(), "daovoice");
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            string pyf = Path.Combine(dir, "sayd.py");
+            if (!File.Exists(pyf))
+            {
+                File.WriteAllText(pyf,
+                    "# -*- coding: utf-8 -*-\n" +
+                    "import sys,asyncio,json\n" +
+                    "from edge_tts import Communicate\n" +
+                    "def run(l):\n" +
+                    "    t=open(l['txt'],'r',encoding='utf-8').read()\n" +
+                    "    asyncio.run(Communicate(t,l['voice'],rate=l.get('rate','+0%'),pitch=l.get('pitch','+0Hz')).save(l['out']))\n" +
+                    "    return 'DLG|'+str(l['id'])\n" +
+                    "for line in sys.stdin:\n" +
+                    "    line=line.strip()\n" +
+                    "    if not line: continue\n" +
+                    "    try:\n" +
+                    "        l=json.loads(line)\n" +
+                    "        print(run(l),flush=True)\n" +
+                    "    except Exception as e:\n" +
+                    "        print('DLG|ERR|'+str(e).replace(chr(10),' '),flush=True)\n",
+                    new System.Text.UTF8Encoding(false));
+            }
+            ProcessStartInfo pi = new ProcessStartInfo();
+            pi.FileName = PyExe();
+            pi.Arguments = "-X utf8 -u \"" + pyf + "\"";
+            pi.UseShellExecute = false;
+            pi.CreateNoWindow = true;
+            pi.RedirectStandardInput = true;
+            pi.RedirectStandardOutput = true;
+            pi.RedirectStandardError = true;
+            pi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+            pi.StandardErrorEncoding = System.Text.Encoding.UTF8;
+            pi.WindowStyle = ProcessWindowStyle.Hidden;
+            ttsDaemon = Process.Start(pi);
+            if (ttsDaemon == null) return false;
+            ttsdIn = ttsDaemon.StandardInput;
+            ttsdOut = ttsDaemon.StandardOutput;
+            return true;
+        }
+        catch { ttsDaemon = null; return false; }
+    }
+
+    static bool TtsdSynth(string text, string mp3, string voice, string rate, string pitch)
+    {
+        lock (ttsdLock)
+        {
+            try
+            {
+                if (!TtsdStart()) return false;
+                string txt = Path.ChangeExtension(mp3, ".txt");
+                File.WriteAllText(txt, text, new System.Text.UTF8Encoding(false));
+                ttsdSeq++;
+                int id = ttsdSeq % 100000;
+                string js = "{\"id\":" + id + ",\"txt\":\"" + txt.Replace("\\", "\\\\")
+                    + "\",\"out\":\"" + mp3.Replace("\\", "\\\\")
+                    + "\",\"voice\":\"" + voice + "\",\"rate\":\"" + rate
+                    + "\",\"pitch\":\"" + pitch + "\"}";
+                ttsdIn.WriteLine(js);
+                ttsdIn.Flush();
+                string ln = ttsdOut.ReadLine();
+                if (ln == null) { try { ttsDaemon.Kill(); } catch { } ttsDaemon = null; return false; }
+                if (ln.StartsWith("DLG|ERR")) { LogCrash("ttsd", new Exception(ln)); return false; }
+                if (ln.StartsWith("DLG|" + id))
+                    return File.Exists(mp3) && new FileInfo(mp3).Length > 2048;
+                return false;
+            }
+            catch { try { if (ttsDaemon != null) ttsDaemon.Kill(); } catch { } ttsDaemon = null; }
+            return false;
+        }
+    }
+
     // 2026-11-27 修的是个真 bug：原来预热走 TtsFile，缓存键是 hash(文本|音色|tts9)；
     // 播放走的是 hash(文本|音色|fx|rate|pitch)，两套键完全不重叠 —— 预热写进去的缓存，
     // 播的时候一个都用不上，等于从来没预热过，首字一直卡在 3 秒上下。
@@ -4590,6 +4676,7 @@ public class DesktopPet : Form
             }
             string txt = Path.Combine(dir, key + ".txt");
             File.WriteAllText(txt, t2, new System.Text.UTF8Encoding(false));
+            if (TtsdSynth(t2, mp3, voice, rate, pitch)) return;
             ProcessStartInfo pi = new ProcessStartInfo();
             pi.FileName = PyExe();
             pi.Arguments = "\"" + py + "\" \"" + txt + "\" \"" + mp3 + "\" \"" + voice
@@ -4732,6 +4819,10 @@ public class DesktopPet : Form
                 if (!(File.Exists(mp3) && new FileInfo(mp3).Length > 2048))
                 {
                     File.WriteAllText(txt, t2, new System.Text.UTF8Encoding(false));
+                    bool ttsdOk = false;
+                    if (!hasFx) ttsdOk = TtsdSynth(t2, mp3, voice, rate, pitch);
+                    if (!ttsdOk)
+                    {
                     ProcessStartInfo pi = new ProcessStartInfo();
                     pi.FileName = PyExe();
                     if (hasFx)
@@ -4750,6 +4841,7 @@ public class DesktopPet : Form
                     pi.WindowStyle = ProcessWindowStyle.Hidden;
                     Process p = Process.Start(pi);
                     p.WaitForExit(40000);
+                    }
                 }
 
                 if (File.Exists(mp3) && new FileInfo(mp3).Length > 2048)
@@ -11433,7 +11525,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 151;
+    public const int APP_VER = 152;
 
     public static void Start()
     {

@@ -7,6 +7,7 @@ using System.Diagnostics;
 using Microsoft.Win32;
 using System.Runtime.InteropServices;
 using System.IO;
+using System.Speech.Synthesis;
 using System.Text;
 using System.Collections.Generic;
 using System.Net;
@@ -4550,6 +4551,65 @@ public class DesktopPet : Form
         return "";
     }
 
+    // 2026-11-27 第三轮：本地兜底引擎。edge_tts 无论如何都要一次网络往返（首包实测 1508ms），
+    // 想进 150ms 只有本机合成。Windows 自带的 SAPI 预热后一句 65ms（冷启 349ms），
+    // 所以规则定成：缓存命中照旧；没命中且是很短的句子（≤12 字）先用本机出声；
+    // 长句仍走 edge，音色自然。想关掉就在 exe 同目录放 语音_本地短句.txt 写 off。
+    static System.Speech.Synthesis.SpeechSynthesizer sapiSp;
+    static object sapiLock = new object();
+
+    static bool SapiOn()
+    {
+        try
+        {
+            string f = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "语音_本地短句.txt");
+            if (!File.Exists(f)) return true;
+            return File.ReadAllText(f, Encoding.UTF8).Trim().ToLower().IndexOf("off") < 0;
+        }
+        catch { return true; }
+    }
+
+    void SapiWarm()
+    {
+        try
+        {
+            lock (sapiLock)
+            {
+                if (sapiSp != null) return;
+                sapiSp = new System.Speech.Synthesis.SpeechSynthesizer();
+                sapiSp.SelectVoice("Microsoft Yaoyao");
+                sapiSp.Rate = 0;
+                sapiSp.Volume = 100;
+                sapiSp.SetOutputToNull();
+                sapiSp.Speak("嗯");            // 把 COM 和引擎热起来，省掉首句那 349ms
+                sapiSp.SetOutputToDefaultAudioDevice();
+            }
+        }
+        catch { sapiSp = null; }
+    }
+
+    bool SapiSay(string text, string voice)
+    {
+        try
+        {
+            lock (sapiLock)
+            {
+                if (sapiSp == null) return false;
+                string want = (voice != null && voice.ToLower().IndexOf("yun") >= 0) ? "Microsoft Kangkang" : "Microsoft Yaoyao";
+                try { sapiSp.SelectVoice(want); } catch { }
+                int zc = CountSpeakChars(text);
+                int estMs = (int)(zc * 200) + 120;
+                speakMouthStart = Environment.TickCount + 20;
+                speakMouthUntil = speakMouthStart + estMs;
+                sapiSp.SetOutputToDefaultAudioDevice();
+                sapiSp.Speak(text);
+                speakMouthUntil = Environment.TickCount;
+                return true;
+            }
+        }
+        catch { return false; }
+    }
+
     // 2026-11-27 下一轮：常驻合成进程。edge_tts 的 import 本身要 1.46 秒，
     // 每句话都重开一个 python 等于白等这一秒半。这里养一个长住进程，
     // 一个 json 一行地喂给它，合成完回一行 DLG|<id>。
@@ -4708,6 +4768,7 @@ public class DesktopPet : Form
                 "这事儿我记下了", "今天感觉怎么样", "别急，慢慢来",
                 "我先看看", "一会儿就来", "还没好呢", "那我先忙着"
             };
+            try { me.SapiWarm(); } catch { }
             foreach (string s in baseLines) { try { me.WarmCache(s, null, null); } catch { } }
             try
             {
@@ -4818,6 +4879,7 @@ public class DesktopPet : Form
 
                 if (!(File.Exists(mp3) && new FileInfo(mp3).Length > 2048))
                 {
+                    if (!hasFx && zc <= 12 && SapiOn() && SapiSay(t2, voice)) return;
                     File.WriteAllText(txt, t2, new System.Text.UTF8Encoding(false));
                     bool ttsdOk = false;
                     if (!hasFx) ttsdOk = TtsdSynth(t2, mp3, voice, rate, pitch);
@@ -11525,7 +11587,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 152;
+    public const int APP_VER = 153;
 
     public static void Start()
     {

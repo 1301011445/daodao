@@ -44,6 +44,7 @@ foreach ($f in (Get-ChildItem -LiteralPath $bundle -File)) {
 $args += '/r:System.dll'
 $args += '/r:System.Windows.Forms.dll'
 $args += '/r:System.Drawing.dll'
+$args += '/r:' + (Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\WPF\System.Speech.dll')
 $args += $src
 
 if (Test-Path -LiteralPath $outNew) { Remove-Item -LiteralPath $outNew -Force -ErrorAction SilentlyContinue }

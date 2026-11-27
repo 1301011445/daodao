@@ -366,7 +366,7 @@ public class DesktopPet : Form
     // dv/dt = ω²(target−x) − 2ζωv。以前步频用的是指数逼近，只会"越来越慢地靠近"，
     // 没有真正的速度残留，停步像被掐住。这里换成积分弹簧，ζ=0.85（欠阻尼但不抖）。
     float walkFpsVel = 0f;      // 步频速度（帧/秒²），弹簧积分用
-    float swayAmpCur = 0.8f;    // 走路摆动幅值：原来跟 walking 布尔硬切，现在弹簧渐变
+    float swayAmpCur = 0.86f;    // 走路摆动幅值：原来跟 walking 布尔硬切，现在弹簧渐变
     float swayAmpVel = 0f;
     float ampLastT = -1f;
     // ==== 二次动作（第3类 Live2D 摆锤 / Spine PhysicsConstraint 的落地）====
@@ -2817,7 +2817,7 @@ public class DesktopPet : Form
         if (moodKind == 4) return "+16%";
         if (moodKind == 2) return "+9%";
         if (moodKind == 3) return "-14%";
-        if (moodKind == 6) return "-9%";
+        if (moodKind == 6) return "-11%";
         if (moodKind == 5) return "+5%";
         // 2026-11-22 语音：默认档 +2% → +3%。60fps 后口型抖得更细，语速略提一点才跟得上日常对话节奏
         return "+3%";
@@ -11359,7 +11359,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 149;
+    public const int APP_VER = 150;
 
     public static void Start()
     {

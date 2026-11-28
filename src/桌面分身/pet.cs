@@ -457,6 +457,11 @@ public class DesktopPet : Form
     // 坐骑的连续小跑相位：自己累加，不受帧率变化影响（原来直接 t*6.4 换算，帧率一变相位就跳）
     float ridePhase = 0f;
     float rideLastT = -1f;
+    // 2026-11-28：骑乘相位改成"按走过的距离"推，必须记住累计里程和上一帧位置，
+    // 否则位移和蹄子对不上，看着就是一张图在滑。
+    float rideDist = 0f;
+    float ridePrevX = float.NaN;
+    float ridePrevY = float.NaN;
     int poseOwner = -1;   // 这套姿势属于哪个形象序号；-1 表示该形象还没有姿势集
     // 哪个形象有完整一套动作。有动作的形象才能上桌，所以每天就在这几个里轮，
     // 一个形象都没有动作的时候退回原来的随机形象 + 单张静态图
@@ -7858,7 +7863,15 @@ public class DesktopPet : Form
                     int spd = farAway ? 2 : 1;
                     int sypMax = farAway ? 4 : 2;
                     // 2026-11-25：只认骑坐骑(3)；飞/御剑/滑板/轮滑等速度分支随动作删了
-                    if (actHold > 0 && actKind == 3) { spd = farAway ? 9 : 4; sypMax = farAway ? 6 : 3; }
+                    if (actHold > 0 && actKind == 3)
+                    {
+                        // 2026-11-28：骑乘不再匀速平移。速度跟着步态相位走：落蹄那一拍快、腾空那一拍慢，
+                        // 屏幕上看到的是一段一段往前冲，而不是整张图匀速滑过去（这是"像在滑"的另一半原因）
+                        int baseSpd = farAway ? 9 : 4;
+                        spd = baseSpd + (int)Math.Round(baseSpd * 0.35f * (float)Math.Sin(ridePhase));
+                        if (spd < 2) spd = 2;
+                        sypMax = farAway ? 6 : 3;
+                    }
                     int sxp = Math.Sign(dxw) * Math.Min(spd, Math.Abs(dxw));
                     int syp = Math.Sign(dyw) * Math.Min(sypMax, Math.Abs(dyw));
                     Location = new Point(curX + sxp, curY + syp);
@@ -8888,27 +8901,58 @@ public class DesktopPet : Form
                 float tHf = faces[species % faceCount].Height;
                 float fh = tHf * 0.98f;
                 float fw = fh * rf.Width / Math.Max(1f, rf.Height);
-                // 骑坐骑时它其实一直在往前挪（walkTicks 反复置 40），这里用走路的相位给个蹄子落地的颠，
-                // 幅度按身高比例收，别像整只在跳
-                // 连续小跑：相位自己累加（帧率抖动不会让蹄子节奏跳），速度越快蹄频越高；
-                // 起骑/收骑时幅度按 actAmt 渐入渐出，不会"啪"一下从静止到颠动
+                // 2026-11-28：骑乘不能只是"整图平移"。原来相位按时间自己走，位移和蹄子节奏对不上，
+                // 眼睛看到的就是一张图在滑。改成按实际走过的距离推相位（一步一落蹄），
+                // 再叠俯仰、压弹、前后错位三种形变：蹄子钉地、身子在动，停下就收住。
                 float dtR = rideLastT < 0f ? 1f / 60f : t - rideLastT;
                 if (dtR <= 0f || dtR > 0.2f) dtR = 1f / 60f;
                 rideLastT = t;
-                float trotFreq = walkTicks > 0 ? 2.30f : 1.20f;          // 每秒落蹄次数
-                ridePhase += dtR * trotFreq * (float)Math.PI;            // 半步一个落蹄
-                if (ridePhase > (float)(Math.PI * 2000)) ridePhase -= (float)(Math.PI * 2000);
+                float mdxR = float.IsNaN(ridePrevX) ? 0f : cx - ridePrevX;
+                float mdyR = float.IsNaN(ridePrevY) ? 0f : cy - ridePrevY;
+                ridePrevX = cx; ridePrevY = cy;
+                // 注：桌面端真正挪的是窗口 Location，画布里的 cx 是常量，
+                // 所以步幅必须取 moveSpeedPxPerSec（tick 里按真实帧间隔算出来的），
+                // 画布内位移只在 --dump 这类自检里用得上，取两者大的那个。
+                float stepR = Math.Max((float)Math.Sqrt(mdxR * mdxR + mdyR * mdyR), moveSpeedPxPerSec * dtR);
+                if (stepR > tHf * 0.60f) stepR = 0f;                 // 换位、瞬移不当成步幅
+                rideDist += stepR;
+                float strideR = Math.Max(8f, tHf * 0.32f);           // 半个步幅一个落蹄，按身高折算
+                ridePhase = rideDist / strideR * (float)Math.PI;
+                if (ridePhase > (float)(Math.PI * 2000))
+                {
+                    rideDist -= strideR * 2000f;
+                    ridePhase -= (float)(Math.PI * 2000);
+                }
+                float speedR = stepR / dtR;                          // 像素/秒
+                float liveR = Math.Min(1f, speedR / (tHf * 0.90f));   // 0 停住 → 1 正常速度
                 float trotW = Math.Min(1f, actAmt * 1.25f);
-                float rise = (float)Math.Abs(Math.Sin(ridePhase));        // 0 落地 → 1 腾空
-                // 落地压、腾空抬，用 easeOutCubic 让落地脆、回升柔；偏移 -1 是把中位对齐在地线上
-                float bobF = (2.6f * EaseOutCubic(rise) - 1.0f) * tHf * 0.012f * trotW;
-                // 落蹄那一下身子微微前俯、腾空回正：整只不是上下平推，而是有俯仰的连续起伏
-                float pitchF = -(float)Math.Cos(ridePhase) * 1.25f * trotW;
+                float rise = (float)Math.Abs(Math.Sin(ridePhase));    // 0 落地 → 1 腾空
+                // 幅度按身高：站着也有 1% 的呼吸起伏，跑起来放大到 5.5%，原来的 1.2% 根本看不见
+                float ampR = tHf * (0.008f + 0.030f * liveR) * trotW;
+                float bobF = (EaseOutCubic(rise) - 0.62f) * 1.7f * ampR;
+                // 俯仰故意跟起伏错开 1.15 弧度：落蹄抬头、腾空回正，两条曲线不同步才像活的
+                float pitchF = (float)Math.Sin(ridePhase - 1.15f) * 4.6f * liveR * trotW;
+                // 前后错位：蹄子钉在线上、身子却往前冲，给 ±1.1% 身高的反向位移
+                float xoffF = -(float)Math.Cos(ridePhase) * tHf * 0.011f * liveR * trotW;
+                // 剪切：整张图绕蹄线做前后倾，越往上摆得越多。单张立绘的腿不会自己迈，
+                // 靠这一下"上下身不同步的倾摆"做出跨步的轮廓变化，比单纯上下颠像马在走
+                float shearDeg = (float)Math.Cos(ridePhase - 0.35f) * 4.2f * liveR * trotW;
+                // 压弹：腾空拉长、落地压扁，绕蹄线缩放，不做整图裁切
+                float sxF = 1f - (EaseOutCubic(rise) - 0.5f) * 0.045f * liveR * trotW;
+                float syF = 1f + (EaseOutCubic(rise) - 0.5f) * 0.030f * liveR * trotW;
                 int dwF = Math.Max(8, (int)Math.Round(fw)), dhF = Math.Max(8, (int)Math.Round(fh));
                 GraphicsState stF = g.Save();
                 // 蹄子落在脚下这条线上：底边对齐 y=0，和站姿立绘同一个落地基准
-                g.TranslateTransform(SnapX(cx), SnapX(cy + 66f - bobF));
+                g.TranslateTransform(SnapX(cx + xoffF), SnapX(cy + 66f - bobF));
                 if (Math.Abs(pitchF) > 0.01f) g.RotateTransform(pitchF);
+                if (Math.Abs(shearDeg) > 0.05f)
+                {
+                    // 负号：正角度时上身往后倒，跟俯仰的抬头错开
+                    System.Drawing.Drawing2D.Matrix sh = new System.Drawing.Drawing2D.Matrix(1f, 0f, -(float)Math.Tan(shearDeg * (float)Math.PI / 180f), 1f, 0f, 0f);
+                    g.MultiplyTransform(sh);
+                    sh.Dispose();
+                }
+                if (Math.Abs(sxF - 1f) > 0.0004f || Math.Abs(syF - 1f) > 0.0004f) g.ScaleTransform(sxF, syF);
                 g.SmoothingMode = SmoothingMode.None;
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
@@ -11611,7 +11655,7 @@ public class DesktopPet : Form
             bool isFirst = true;
             // 2026-11-25：--dump / --dumpexpr 是自检出图模式，不能受单实例锁影响。
             // 以前道在桌面上跑着时开 --dump，进程拿到 isFirst=false 就静默退出，一张图都不出（A9 评审一直没图可看）。
-            bool cliDump = args.Length > 0 && (args[0] == "--dump" || args[0] == "--dumpexpr" || args[0] == "--shakecheck" || args[0] == "--dumpblend");
+            bool cliDump = args.Length > 0 && (args[0] == "--dump" || args[0] == "--dumpexpr" || args[0] == "--shakecheck" || args[0] == "--dumpblend" || args[0] == "--dumpride");
             try { singleLock = new System.Threading.Mutex(true, "DaoPetSingleInstance", out isFirst); }
             catch { isFirst = true; }
             if (!isFirst && !cliDump) return;
@@ -11653,6 +11697,37 @@ public class DesktopPet : Form
                 {
                     bp.t += 1f / 30f;
                     DumpOne(bp, Path.Combine(bd, "_blend_ride" + bi.ToString("00") + ".png"));
+                }
+                return;
+            }
+            // 2026-11-28 骑乘步态自检：按真实骑乘速度连出 8 帧，再停机出 4 帧，
+            // 用来看"蹄子有没有钉住、身子有没有动"，不再是整张图平移
+            if (args.Length > 0 && args[0] == "--dumpride")
+            {
+                string rd2 = Path.GetDirectoryName(Application.ExecutablePath);
+                DesktopPet rp = new DesktopPet();
+                rp.species = 8;
+                try { rp.ApplyPose(rp.species); } catch { }
+                rp.sitting = false; rp.lying = false; rp.lieAmt = 0f;
+                rp.actKind = 3; rp.actHold = 460; rp.actAmt = 1f; rp.walkTicks = 40;
+                rp.moveSpeedPxPerSec = 270f;              // 骑乘远走 9px/跳 × 30 跳/秒
+                for (int ri = 0; ri < 8; ri++)
+                {
+                    rp.t += 1f / 30f;
+                    DumpOne(rp, Path.Combine(rd2, "_ride_mv" + ri.ToString("00") + ".png"));
+                    try
+                    {
+                        File.AppendAllText(Path.Combine(rd2, "ride_dbg.txt"),
+                            "mv" + ri + " t=" + rp.t.ToString("F3") + " phase=" + rp.ridePhase.ToString("F3")
+                            + " dist=" + rp.rideDist.ToString("F2") + " spd=" + rp.moveSpeedPxPerSec.ToString("F1") + "\r\n");
+                    }
+                    catch { }
+                }
+                rp.moveSpeedPxPerSec = 0f;                // 停住：蹄子应当完全钉在原地
+                for (int ri = 0; ri < 4; ri++)
+                {
+                    rp.t += 1f / 30f;
+                    DumpOne(rp, Path.Combine(rd2, "_ride_idle" + ri.ToString("00") + ".png"));
                 }
                 return;
             }
@@ -11742,7 +11817,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 162;
+    public const int APP_VER = 163;
 
     public static void Start()
     {

@@ -99,13 +99,17 @@ def main():
             print("    缺文件", script_path(r[2]))
 
     # R4
+    # 2026-11-28 修口径：原来写的是「间隔必须正好落在 1/3/7/21」，于是补做（晚 1 天）
+    # 被判成越界（17 条里有 8 条假 FAIL）。真实规矩是「不许提前、最多晚 3 天补做」。
     early = []
     for r in recs:
         d0 = first.get(r[1])
         if not d0:
             continue
-        if (r[0] - d0).days not in OFFSETS:
-            early.append(r)
+        days = (r[0] - d0).days
+        ok = days >= 1 and any(off <= days <= off + 3 for off in OFFSETS)
+        if not ok:
+            early.append((r, days))
     print(("PASS" if not early else "FAIL") + " | R4 复现落在 1/3/7/21 天 | 越界 %d" % len(early))
     if early:
         fails += 1

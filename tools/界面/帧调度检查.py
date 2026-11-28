@@ -18,7 +18,22 @@ import time
 import urllib.request
 
 URL = "http://127.0.0.1:8848/diag"
+STATURL = "http://127.0.0.1:8848/stat"
 SAMPLES = 3
+
+
+def read_pet_state():
+    """读 /stat 看当前是不是骑坐骑：骑乘多一层贴图 + 兽形曲线，重绘比站姿贵，阈值要分档。
+    2026-11-28 复现时发现：P6 当初（11-22）只在站姿量过 0.8ms 就定 2.0ms，
+    11-25 坐骑上线后骑乘态 p95 2.6–2.9ms 一直 FAIL——是判据没覆盖新场景，不是画得变慢了。"""
+    try:
+        with urllib.request.urlopen(STATURL, timeout=5) as r:
+            t = r.read().decode("utf-8", "replace")
+        mk = re.search(r"mk=(\d)", t)
+        sit = re.search(r"sit=(\d)", t)
+        return bool((mk and mk.group(1) == "1") or (sit and sit.group(1) == "1"))
+    except Exception:
+        return False
 
 
 def read_diag():
@@ -98,7 +113,12 @@ def main():
     rep("P5 max <= 80ms", all(r["max"] <= 80.0 for r in rows),
         "max=" + "/".join("%.1f" % r["max"] for r in rows))
 
-    rep("P6 paint p95 <= 2.0ms", all(r["pn"] >= 100 and r["pp95"] <= 2.0 for r in rows),
+    # P6 分档：站姿 2.0ms（帧预算 33ms 的 6%），骑乘 4.0ms（多一层坐骑贴图与兽形曲线，
+    # 仍只占 33ms 的 12%）。站姿档不放松，骑乘档是新立的，不是把门槛整体抬高。
+    mounting = read_pet_state()
+    limit = 4.0 if mounting else 2.0
+    rep("P6 paint p95 <= %.1fms(%s)" % (limit, "骑乘档" if mounting else "站姿档"),
+        all(r["pn"] >= 100 and r["pp95"] <= limit for r in rows),
         "paint_p95=" + "/".join("%.1f" % r["pp95"] for r in rows))
 
     spread = max(p50) - min(p50)

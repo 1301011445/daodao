@@ -52,7 +52,9 @@
   }
   /* 2026-11-25：原来 5 列等宽 grid 在 412 宽手机上被字撑爆，第 5 颗「上桌面」被裁掉一半。
      改成 flex 等比分配，按钮永远不超出屏幕，字缩到 13.5px 也还看得清 */
-  #bar .minis { display: flex; gap: 7px; width: 100%; }
+  /* 2026-11-28（v160）：间距 7px 让 Material 的 8dp 相邻间距判据不过（Q-179），
+     改成 10px 既留出手指缝，6 颗按钮在 476 宽下每颗仍有 71px，不影响可点尺寸 */
+  #bar .minis { display: flex; gap: 10px; width: 100%; }
   button {
     display: inline-block; margin: 0; border-radius: 999px;
     background: rgba(118,158,255,.15); color: #cfdcff; font-size: 15px;
@@ -1400,7 +1402,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '159';
+  var HTML_VER = '160';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;

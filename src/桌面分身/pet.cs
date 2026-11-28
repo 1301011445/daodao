@@ -4026,10 +4026,10 @@ public class DesktopPet : Form
             gMode.DropDownItems.Add(mmi);
         }
         gMode.DropDownItems.Add(new ToolStripSeparator());
-        ToolStripMenuItem apm = new ToolStripMenuItem("干活时自己去边上偷看");
+        ToolStripMenuItem apm = new ToolStripMenuItem("干活时自动让位（站窗口旁边 / 两侧没地方就躲边）");
         apm.Name = "autopeek";
         apm.Checked = autoPeek;
-        apm.ToolTipText = "你在别的窗口里做事时，它自己贴到屏幕边，只露半边；点它一下就出来";
+        apm.ToolTipText = "你在别的窗口里做事时，它站到那个窗口旁边、脚踩窗口底边；窗口铺满整屏就退回屏幕边只露半边；回到桌面自己走回原位";
         apm.Click += new EventHandler(MenuToggleAutoPeek);
         gMode.DropDownItems.Add(apm);
         gMode.DropDownItems.Add("换一边（左 / 右）", null, new EventHandler(MenuFlipSide));

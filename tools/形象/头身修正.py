@@ -68,10 +68,11 @@ def fix(name):
         print("%s 找不到颈部，跳过" % name)
         return None
     r0 = H / neck
-    if r0 <= 8.0:
+    if 6.5 <= r0 <= 8.0:
         print("%s 比值 %.2f 已达标，跳过" % (name, r0))
         return None
-    # 放大后评审再测的「颈部」会往下移（接缝改变了宽度剖面），
+    # 两头都要能修：比值 >8 是头偏小（放大头），<6.5 是头偏大（缩头）。
+    # 放大/缩小后评审再测的「颈部」位置会变（接缝改变了宽度剖面），
     # 所以不能算一次就交：按实测值反推 k 迭代，直到真测出来落在 6.5–8.0。
     k = (H - neck) / ((TARGET - 1) * neck)
     out, r1 = None, None
@@ -79,13 +80,13 @@ def fix(name):
         out = build(c, W, H, neck, k)
         _, W2, H2, neck2, _ = profile(out)
         if not neck2:
-            r1 = H2 / neck2 if neck2 else None
+            r1 = None
             break
         r1 = H2 / neck2
         if abs(r1 - TARGET) <= 0.2:
             break
         k *= (r1 / TARGET) ** 0.85              # 阻尼迭代，避免来回抖
-        k = max(1.05, min(2.4, k))
+        k = max(0.45, min(2.4, k))
     os.makedirs(OUT, exist_ok=True)
     out.save(os.path.join(OUT, name + ".png"))
     print("%s 头身比 %.2f → %.2f（k=%.2f，原头高 %d，尺寸 %dx%d → %dx%d）" %
@@ -95,9 +96,10 @@ def fix(name):
 
 if __name__ == "__main__":
     apply = "--apply" in sys.argv
-    for n in NAMES:
+    names = [a for a in sys.argv[1:] if not a.startswith("--")] or NAMES
+    for n in names:
         r = fix(n)
-        if r and apply:
+        if apply and os.path.exists(os.path.join(OUT, n + ".png")):
             src = os.path.join(OUT, n + ".png")
             bak = os.path.join(BUN, n + ".png.bak_20261128_a1")
             if not os.path.exists(bak):

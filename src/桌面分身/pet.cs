@@ -8618,6 +8618,71 @@ public class DesktopPet : Form
         }
     }
 
+    // 2026-11-28 用户「白边严重，轮廓没贴合」：
+    // 半透明边缘像素存的是「人物色×α + 白底×(1-α)」这个观测值，直接按原色画就是白的；
+    // 缩图采样又会把白再往外抹一圈。素材侧已用 去白边.py 反解过，这里对运行时再采样出来的
+    // 软边做同一套反解，兜住缩放/合成产生的二次白混色。α 保留（逐像素 alpha 模式要软边）。
+    Dictionary<Bitmap, Bitmap> defringeCache = new Dictionary<Bitmap, Bitmap>();
+
+    Bitmap Defringe(Bitmap src)
+    {
+        if (src == null) return null;
+        Bitmap cached;
+        if (defringeCache.TryGetValue(src, out cached)) return cached;
+        Bitmap dst = null;
+        try
+        {
+            int w = src.Width, h = src.Height;
+            dst = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+            BitmapData ds = dst.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+            BitmapData ss = src.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                int st = ss.Stride, dt = ds.Stride;
+                byte[] buf = new byte[st * h];
+                Marshal.Copy(ss.Scan0, buf, 0, buf.Length);
+                byte[] outb = new byte[dt * h];
+                for (int y = 0; y < h; y++)
+                {
+                    int so = y * st, dob = y * dt;
+                    for (int x = 0; x < w; x++)
+                    {
+                        byte a = buf[so + x * 4 + 3];
+                        byte b2 = buf[so + x * 4], gg = buf[so + x * 4 + 1], r = buf[so + x * 4 + 2];
+                        if (a < 26) { a = 0; r = 0; gg = 0; b2 = 0; }
+                        else if (a < 255)
+                        {
+                            // rgb' = (rgb - 255×(1-α)) / α
+                            float f = a / 255f;
+                            float back = 255f * (1f - f);
+                            int nr = (int)((r - back) / f), ng = (int)((gg - back) / f), nb = (int)((b2 - back) / f);
+                            r = (byte)(nr < 0 ? 0 : (nr > 255 ? 255 : nr));
+                            gg = (byte)(ng < 0 ? 0 : (ng > 255 ? 255 : ng));
+                            b2 = (byte)(nb < 0 ? 0 : (nb > 255 ? 255 : nb));
+                        }
+                        outb[dob + x * 4 + 3] = a;
+                        outb[dob + x * 4 + 2] = r;
+                        outb[dob + x * 4 + 1] = gg;
+                        outb[dob + x * 4] = b2;
+                    }
+                }
+                Marshal.Copy(outb, 0, ds.Scan0, outb.Length);
+            }
+            finally
+            {
+                src.UnlockBits(ss);
+                dst.UnlockBits(ds);
+            }
+            defringeCache[src] = dst;
+            return dst;
+        }
+        catch
+        {
+            if (dst != null) dst.Dispose();
+            return src;
+        }
+    }
+
     // 2026-11-25 用户反馈「像不在同一图层」：窗口是洋红透明键，只认全透明/全不透明。
     // 只要图上有半透明像素（缩放采样出来的软边也算），贴上去就会和洋红混出一道粉边，
     // 看着就是一整只被抠下来贴在桌面上。这里统一把 alpha 夹成 0/255，并把洋红残留剔掉。
@@ -8626,7 +8691,7 @@ public class DesktopPet : Form
     Bitmap Hard(Bitmap src)
     {
         if (src == null) return null;
-        if (alphaLayer) return src;   // 逐像素 alpha 保留软边，抗锯齿还回来
+        if (alphaLayer) return Defringe(src);   // 逐像素 alpha 保留软边，但白底混色要先反解掉（2026-11-28 白边）
         Bitmap cached;
         if (hardCache.TryGetValue(src, out cached)) return cached;
         Bitmap dst = null;
@@ -11677,7 +11742,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 161;
+    public const int APP_VER = 162;
 
     public static void Start()
     {

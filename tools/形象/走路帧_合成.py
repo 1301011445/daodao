@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 程序版本：v0.4 | 2026-11-28 | 从单张立绘合成真八帧走路（露腿拆脚交替外摆/长裙摆裙），自带 A8 双档自调
+# 程序版本：v0.5 | 2026-11-28 | 从单张立绘合成真八帧走路（露腿拆脚交替外摆/长裙摆裙），加腰胯反向带+上身起伏的次生动作，自带 A8 双档自调
 r"""形象走路不协调的根因：除 6/7 号外，其余形象只有「整只上下颠」的替代帧，两只脚始终粘在一起
 （形象评审 A8 报 脚簇=1、步幅 0.5-6px），看着像滑行不像走。
 
@@ -113,12 +113,22 @@ def warp_frame(im, theta, mode, mul=1.0):
     d = (np.where(left, -dL, dR) + dconst) * fe
     lf = np.where(left, lfL, lfR) * fe
 
+    # 2026-11-28 动作僵硬：原来只有腿在动，胯以上一动不动，整块像木板。加一层「腰在上身反向带一点」：
+    # 腿往左摆时肩胯往右压（承重腿那一侧），并随身高收幅度；头以上权重归零，脑袋不跟着甩。
+    upAmp = float(np.clip(H * 0.004, 1.2, 3.0)) * mul
+    up = -upAmp * s
+    neck = y0 + int(H * 0.30)   # 肩颈线以上完全不动，脑袋不跟着甩（A8 头漂要守 2.5px）
+    wUp = np.clip((Y - neck) / max(1.0, float(hip - neck)), 0.0, 1.0) ** 1.2   # 肩颈=0 胯=1
+    d = d * ty + up * wUp * fe
+    # 上身随相位轻微上下（落地时沉、通过位起），幅度 0.5% 身高
+    bup = float(np.clip(H * 0.005, 1.0, 3.0)) * (abs(np.cos(theta)) - 0.5)
+    sy = Y + lf * ty + bup * wUp
+
     al = a[:, :, 3:4] / 255.0
     pm = np.concatenate([a[:, :, :3] * al, a[:, :, 3:4]], axis=2)
-    sx = X - d * ty
-    sy = Y + lf * ty
+    sx = X - d
     outp = bilinear(pm, sy, sx)
-    outp[Y < hip] = pm[Y < hip]
+    outp[Y < y0] = pm[Y < y0]
     oa = np.clip(outp[:, :, 3:4], 0, 255)
     orgb = np.where(oa > 0.5, np.clip(outp[:, :, :3] / np.maximum(oa / 255.0, 1e-3), 0, 255), 0)
     out = np.clip(np.concatenate([orgb, oa], axis=2), 0, 255).astype(np.uint8)

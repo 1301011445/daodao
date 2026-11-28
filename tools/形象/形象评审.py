@@ -133,12 +133,19 @@ io.open(OUT,"w",encoding="utf-8").write(json.dumps(res,ensure_ascii=False,indent
 # ---------- 判定 ----------
 print("== A1 头身比（6.5–8.0）==")
 bad=[]
+skip=0
 for k,v in art.items():
+    # 2026-11-28：背面/侧身视角不测头身比——头高靠"颈部最窄处"定位，
+    # 背影的头被头发整块连成一片，测出来的是发梢宽度，face_1_back 报 9.85 就是假阳性。
+    if "_back" in k or "_side" in k:
+        skip += 1
+        print(f"  {k:16s} 背面/侧身视角，A1 不适用（颈部最窄法在背面测不准）")
+        continue
     r=v["头身比"]
     st = "PASS" if (r and 6.5<=r<=8.0) else ("NA" if not r else "FAIL")
     if st=="FAIL": bad.append(k)
     print(f"  {k:16s} H={v['H']:3d} 头高={str(v['头高']):>3s} 头身比={str(r):>5s} {st}")
-print(f"  A1: {len(art)-len(bad)}/{len(art)} PASS（头身比>8 的：{len(bad)} 张）")
+print(f"  A1: {len(art)-skip-len(bad)}/{len(art)-skip} PASS（越界 {len(bad)} 张：{bad}；跳过背/侧 {skip} 张）")
 
 print("== A6 全身完整（素材四边留白 ≥1px，渲染时脚不触底）==")
 e_bad=[k for k,v in art.items() if v["触边"]<1]

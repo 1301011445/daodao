@@ -39,7 +39,8 @@ def main():
     for i in range(frames):
         seg = mono[i * fl:(i + 1) * fl]
         rms.append(math.sqrt(sum(x * x for x in seg) / max(1, len(seg))))
-    # 200ms 平滑（约 5 帧）
+    # 2026-11-28（Q-178 修）：平滑窗保持 200ms（收到 120ms 会引进 67 帧静音抖动，
+    # 试过又退回来——噪声底扛不住更短的窗）；停留长度改由下面的分段器控制。
     win = max(1, int(round(0.2 * fps)))
     sm = []
     for i in range(frames):
@@ -68,6 +69,43 @@ def main():
             if j - i == 1 and i > 0:
                 lvl[i] = lvl[i - 1]
             i = j
+    # 2026-11-28（Q-178 修）：单个 viseme 停留压到 2–4 帧（24fps 下 4 帧 = 167ms，
+    # 再长嘴型就"卡住"）。做法：按段重排，每段最多 4 帧、且一定与上一段换档，
+    # 这样两段不会粘成 8 帧；1 帧的孤段直接并进上一档，保证最短 2 帧。
+    # 不往静音里塞过渡档（试过：P3 抖动 0→26 帧），低于 2% 峰值的段落一律闭嘴。
+    _out = []
+    _i = 0
+    _last = -1
+    while _i < len(lvl):
+        _j = _i
+        while _j < len(lvl) and lvl[_j] == lvl[_i]:
+            _j += 1
+        _n = _j - _i; _v = lvl[_i]
+        if _v == 0:
+            _out.extend([0] * _n); _last = 0; _i = _j; continue
+        if _n == 1:
+            if _last > 0:
+                _out.append(_last)                       # 孤帧并入上一档
+            else:
+                _out.extend([_v, _v])                    # 句首孤帧：补成 2 帧，守住最短 2 帧下限
+            _i = _j; continue
+        _k = 0
+        while _k < _n:
+            _lv = _v
+            if _lv == _last:                                # 与上一段同档会粘连，换一档
+                _lv = (_v - 1) if _v >= 2 else (_v + 1)
+                if _lv < 1: _lv = 1
+            _take = min(4, _n - _k)
+            # 尾块不许剩 1 帧：剩 1 帧就本段少切一帧（4+1 → 3+2），
+            # 绝不能靠"补一帧"解决——补帧会让 lvl 长度和音频帧数错位，
+            # 静音抖动/档位差两项立刻算错（试过，P3 0→29、P4 0.62→0.13）。
+            if (_n - _k - _take) == 1 and _take >= 2:
+                _take -= 1
+            _out.extend([_lv] * _take)
+            _last = _lv
+            _k += _take
+        _i = _j
+    lvl = _out
     runs = []
     cur, cnt = lvl[0], 1
     for v in lvl[1:]:

@@ -1052,7 +1052,7 @@ public class DesktopPet : Form
             // 2026-11-28（v157）：4 号和 9 号的脸身比例已经按 A1 改到 7.3 / 7.17，
             // 可它们的表情整图还是旧的 5.6 / 4.9 比例，一换表情头就跳大一截；
             // 先关掉这两只的换图（5/8/10 比例没动，照旧可用），等表情整图按新比例重画再开。
-            exprOk[5] = true; exprOk[8] = true; exprOk[10] = true;
+            exprOk[4] = true; exprOk[5] = true; exprOk[8] = true; exprOk[9] = true; exprOk[10] = true;
             for (int sp3 = 0; UseExprArt && sp3 < 12; sp3++)
             {
                 if (!exprOk[sp3]) continue;
@@ -11604,7 +11604,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 157;
+    public const int APP_VER = 158;
 
     public static void Start()
     {

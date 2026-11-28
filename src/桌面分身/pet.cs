@@ -78,6 +78,14 @@ public class DesktopPet : Form
     [DllImport("user32.dll")]
     static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
 
+    // 2026-11-28：避让要「站在前台窗口旁边」，就得知道窗口的矩形，不能只知道它在不在前台
+    [StructLayout(LayoutKind.Sequential)]
+    struct WINRECT { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")]
+    static extern bool GetWindowRect(IntPtr hWnd, out WINRECT r);
+    [DllImport("user32.dll")]
+    static extern bool IsIconic(IntPtr hWnd);
+
     [StructLayout(LayoutKind.Sequential)]
     public class MEMORYSTATUSEX
     {
@@ -281,8 +289,11 @@ public class DesktopPet : Form
     int petMode = 0;
     int peekVisPct = 34;          // 偷看时露出的宽度，占窗口宽的三分之一左右
     int peekSide = 2;             // 1 贴左边 2 贴右边
-    bool autoPeek = true;         // 你在别的窗口干活时，它自己贴边
+    bool autoPeek = true;         // 你在别的窗口干活时，它自己站到窗口旁边
     bool autoPeekActive = false;
+    // 2026-11-28：站窗口旁边的状态；avoidSaved* 是避让前站的位置，回桌面时走回去
+    bool avoidActive = false;
+    int avoidSavedX = 0, avoidSavedY = 0;
     // 2026-11-26：探头防抖用的时间戳（探头/缩回要先稳定一小会儿才动，见 tick 里的 PEEK 段）
     int peekStableTick = 0;
     System.Windows.Forms.Timer modeWatch;
@@ -3654,7 +3665,10 @@ public class DesktopPet : Form
         catch { }
     }
 
-    void SlideTo(int targetX)
+    void SlideTo(int targetX) { SlideTo(targetX, Location.Y); }
+
+    // 2026-11-28：避让要贴到前台窗口一侧、还得对上窗口底边，所以滑动改成两轴一起走
+    void SlideTo(int targetX, int targetY)
     {
         // 2026-11-22：原来"每帧走剩下的三分之一"，四五十毫秒就窜过去了，看着像瞬移。
         // 改成按时长算：整段 520ms，先快后慢（ease-out），像人挪过去而不是闪过去。
@@ -3670,31 +3684,39 @@ public class DesktopPet : Form
                 if (u > 1f) u = 1f;
                 float e2 = 1f - (1f - u) * (1f - u) * (1f - u);   // easeOutCubic
                 int x = slideStartX + (int)((slideTargetX - slideStartX) * e2);
-                if (Math.Abs(slideTargetX - x) <= 2 || u >= 1f)
+                int ty = slideTargetY == int.MinValue ? Location.Y : slideTargetY;
+                int y = slideStartY + (int)((ty - slideStartY) * e2);
+                if ((Math.Abs(slideTargetX - x) <= 2 && Math.Abs(ty - y) <= 2) || u >= 1f)
                 {
-                    Location = new Point(slideTargetX, Location.Y);
+                    Location = new Point(slideTargetX, ty);
                     slideTimer.Stop();
                     slideTargetX = int.MinValue;
+                    slideTargetY = int.MinValue;
                     return;
                 }
-                Location = new Point(x, Location.Y);
+                Location = new Point(x, y);
             };
         }
         if (slideTargetX == int.MinValue)
         {
             slideStartX = Location.X;
+            slideStartY = Location.Y;
             slideStartTick = Environment.TickCount;
         }
         else
         {
             // 半路改目标：从当前位置重新起算，别跳
             slideStartX = Location.X;
+            slideStartY = Location.Y;
             slideStartTick = Environment.TickCount;
         }
         slideTargetX = targetX;
+        slideTargetY = targetY;
         if (!slideTimer.Enabled) slideTimer.Start();
     }
     int slideStartX = 0;
+    int slideStartY = 0;
+    int slideTargetY = int.MinValue;
     int slideStartTick = 0;
 
     int PeekRestX()
@@ -3732,16 +3754,58 @@ public class DesktopPet : Form
         catch { return false; }
     }
 
-    // 在别的窗口里干活 → 自己贴边只露半边；回到桌面/回到它身上 → 回满身
+    // 在别的窗口里干活 → 先站到那个窗口旁边（贴它一侧、脚底与窗口底边齐平）；
+    // 两侧都放不下（最大化/全屏）才退回「贴边偷看」。回桌面时自己走回原位。
+    // 2026-11-28：原策略只会把道贴到屏幕左右边缘、只露半边，用户打开别的页面时
+    // 整只从画面里消失，跟「在旁边站着或躲着」完全不是一回事，改成站窗口旁边。
     void AutoPeekCheck()
     {
         if (mouseDown) return;
         if (!autoPeek)
         {
+            if (avoidActive) RestoreFromAvoid();
             if (autoPeekActive && petMode == 1) { autoPeekActive = false; SetMode(0); }
             return;
         }
-        bool other = ForegroundIsOther();
+        IntPtr fg = GetForegroundWindow();
+        bool other = false;
+        if (fg != IntPtr.Zero)
+        {
+            uint pid = 0;
+            GetWindowThreadProcessId(fg, out pid);
+            other = pid != 0 && pid != (uint)Process.GetCurrentProcess().Id;
+        }
+        WINRECT wr = new WINRECT();
+        bool stand = false;
+        if (other && !IsIconic(fg) && GetWindowRect(fg, out wr))
+        {
+            Rectangle wa0 = Screen.PrimaryScreen.WorkingArea;
+            int vis0 = Math.Min(wr.Right, wa0.Right) - Math.Max(wr.Left, wa0.Left);
+            stand = vis0 > 0 && vis0 < wa0.Width * 0.82f;   // 铺满整屏的窗口旁边没地方站
+        }
+        if (stand && petMode == 0)
+        {
+            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+            int pad = 6;
+            int rightX = wr.Right + pad, leftX = wr.Left - FullW - pad;
+            bool rightOk = rightX + FullW <= wa.Right && wr.Right > wa.Left;
+            bool leftOk = leftX >= wa.Left;
+            int mid = (wr.Left + wr.Right) / 2;
+            int tx = int.MinValue;
+            if (rightOk && leftOk) tx = (Location.X + FullW / 2) < mid ? leftX : rightX;
+            else if (rightOk) tx = rightX;
+            else if (leftOk) tx = leftX;
+            if (tx != int.MinValue)
+            {
+                int ty = wr.Bottom - FullH;              // 脚踩在窗口底边那一线上
+                ty = Math.Max(wa.Top + 8, Math.Min(ty, wa.Bottom - FullH - 8));
+                if (!avoidActive) { avoidSavedX = Location.X; avoidSavedY = Location.Y; avoidActive = true; }
+                if (autoPeekActive) { autoPeekActive = false; if (petMode == 1) SetMode(0); }
+                if (Math.Abs(Location.X - tx) > 3 || Math.Abs(Location.Y - ty) > 3) SlideTo(tx, ty);
+                return;
+            }
+        }
+        if (avoidActive) RestoreFromAvoid();
         if (other && petMode == 0)
         {
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
@@ -3754,6 +3818,15 @@ public class DesktopPet : Form
             autoPeekActive = false;
             SetMode(0);
         }
+    }
+
+    // 前台回到桌面/回到它自己：别把人留在窗口边上，滑回原来站的位置
+    void RestoreFromAvoid()
+    {
+        if (!avoidActive) return;
+        avoidActive = false;
+        if (petMode != 0) SetMode(0);
+        SlideTo(avoidSavedX, avoidSavedY);
     }
 
     void EnsureTray()
@@ -11604,7 +11677,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 160;
+    public const int APP_VER = 161;
 
     public static void Start()
     {

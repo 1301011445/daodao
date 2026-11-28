@@ -18,8 +18,11 @@ NAME = {0:"橘猫",1:"白兔",2:"狐狸",3:"熊猫",4:"恐龙少女",5:"企鹅",
 WALK_OK = [0,1,2,3,4,5,6,7,8,9,10,11,12,13]
 
 def alpha_mask(p):
+    """与渲染侧 Hard() 同口径：alpha>=200 才算角色实体（更低的本来就被丢掉）。
+    2026-11-28：原来用 >20，会把抠图残留的半透明晕圈和背景白斑算进轮廓，
+    A1 测不出头高、A8 底带一大片连成一簇，都跟这个口径有关。"""
     a = np.asarray(Image.open(p).convert("RGBA"))
-    return a[:,:,3] > 20, a
+    return a[:,:,3] >= 200, a
 
 def bbox(m):
     ys, xs = np.where(m)
@@ -72,7 +75,23 @@ for sp in WALK_OK:
         gaps = np.where(np.diff(cols)>2)[0] if cols.size else np.array([])
         segs = np.split(cols, gaps+1) if cols.size else []
         feet = [float(s.mean()) for s in segs]
-        frames.append(dict(H=H, bottom=int(y1), cx=(x0+x1)/2.0, feet=feet, m=m))
+        # 鞋档：底带里近黑（maxRGB<70）的实心块，宽腿裤把鞋挡住时靠它量摆幅
+        dm = m & (a[:,:,:3].max(axis=2) < 70)
+        db = dm[max(0,y1-int(H*0.12)):y1+1,:]
+        dc = np.where(db.any(axis=0))[0]
+        dg = np.where(np.diff(dc)>2)[0] if dc.size else np.array([])
+        dsegs = np.split(dc, dg+1) if dc.size else []
+        shoes = [float(s.mean()) for s in dsegs]
+        # 摆档：下摆（底部 25%）横向质心
+        lo = m[max(0,y1-int(H*0.25)):y1+1,:]
+        lc = np.where(lo.any(axis=0))[0]
+        hem = float(lc.mean()) if lc.size else 0.0
+        # 头档（防整只横漂）：头顶往下 25% 的横向质心，比整只包围盒中点稳得多
+        tm = m[y0:y0+max(1,int(H*0.25)),:]
+        tc = np.where(tm.any(axis=0))[0]
+        headc = float(tc.mean()) if tc.size else 0.0
+        frames.append(dict(H=H, bottom=int(y1), cx=(x0+x1)/2.0, feet=feet, m=m,
+                           shoes=shoes, hem=hem, head=headc))
     if not frames: continue
     foot_n = min(len(f["feet"]) for f in frames)
     # 步幅：两簇时的左右脚间距变化；单簇时用底带质心摆幅
@@ -84,6 +103,20 @@ for sp in WALK_OK:
         stride = round(max(cxs)-min(cxs),1)
     cx_drift = round(max(f["cx"] for f in frames)-min(f["cx"] for f in frames),1)
     bot_jit = max(f["bottom"] for f in frames)-min(f["bottom"] for f in frames)
+    # 鞋档摆幅：左右各取离两端最近的一簇，量它的质心摆动
+    shoe_n = min(len(f["shoes"]) for f in frames)
+    shoe_swing = 0.0
+    if shoe_n >= 2:
+        lx = [f["shoes"][0] for f in frames]
+        rx = [f["shoes"][-1] for f in frames]
+        shoe_swing = round(max(max(lx)-min(lx), max(rx)-min(rx)), 1)
+    hem_swing = round(max(f["hem"] for f in frames)-min(f["hem"] for f in frames), 1)
+    top_swing = round(max(f["head"] for f in frames)-min(f["head"] for f in frames), 1)
+    # 三条道都算「看得见的迈步」，宽腿裤/长裙各自走能看见的那条
+    track = ""
+    if foot_n >= 2 and stride >= 6: track = "腿"
+    elif shoe_n >= 2 and shoe_swing >= 6: track = "鞋"
+    elif hem_swing >= 6 and top_swing <= 2.5: track = "摆"
     # 腿部区帧间差
     legd=[]
     for i in range(1,8):
@@ -92,6 +125,7 @@ for sp in WALK_OK:
         leg0=a0[int(Hh*0.62):,:]; leg1=a1[int(Hh*0.62):,:]
         legd.append(float((leg0^leg1).sum()))
     walk[sp]=dict(脚簇数=foot_n, 步幅px=stride, 中心漂移px=cx_drift, 底边抖动px=int(bot_jit),
+                  鞋簇数=shoe_n, 鞋摆px=shoe_swing, 下摆摆px=hem_swing, 档=track, 头漂px=top_swing,
                   腿区帧差均值=round(float(np.mean(legd)),0), 高px=int(np.median([f["H"] for f in frames])))
 
 # ---------- 渲染级：--dump 现渲染 ----------
@@ -155,13 +189,16 @@ if dump:
         if isinstance(v,dict):
             print(f"  渲染 sp{sp}: 高{v['高px']}px 底边y={v['底边']} 距画布底 {205-v['底边']}px")
 
-print("== A8 步态（脚要分开、要迈、不能横向漂）==")
+print("== A8 步态（腿/鞋/下摆三条道任一条能看出真在迈步即可，且不许整只横漂）==")
+n_pass = 0
 for sp,v in walk.items():
-    foot_ok = v["脚簇数"]>=2
-    stride_ok = v["步幅px"]>=6
+    ok = v["档"] != "" and v["头漂px"] <= 2.5
+    if ok: n_pass += 1
     print(f"  sp{sp:2d} {NAME.get(sp,''):5s} 脚簇={v['脚簇数']} 步幅={v['步幅px']:>5.1f}px "
-          f"中心漂={v['中心漂移px']:>4.1f}px 底抖={v['底边抖动px']}px 腿区帧差={v['腿区帧差均值']:.0f} "
-          f"{'PASS' if foot_ok and stride_ok else 'FAIL'}")
+          f"鞋簇={v['鞋簇数']} 鞋摆={v['鞋摆px']:>4.1f}px 下摆摆={v['下摆摆px']:>4.1f}px "
+          f"中心漂={v['中心漂移px']:>4.1f}px 头漂={v['头漂px']:>3.1f}px 底抖={v['底边抖动px']}px 腿区帧差={v['腿区帧差均值']:.0f} "
+          f"{('PASS('+v['档']+'档)') if ok else 'FAIL'}")
+print(f"  SUMMARY A8 {n_pass}/{len(walk)}")
 
 print("== 现渲染侧向摆幅（应 ≈2×摆幅且反复，不是单向漂）==")
 for sp,v in dump.items():

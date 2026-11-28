@@ -217,6 +217,17 @@
     background: rgba(118,158,255,.26); border: 1px solid rgba(130,170,255,.30);
     color: #dfe8ff;
   }
+
+  /* 2026-11-28 多功能的按键改成点开选：不再按一下轮一个，看得见才选得准 */
+  #pickPanel { position: absolute; left: 10px; right: 10px; bottom: 104px; display: none; z-index: 30;
+    background: rgba(18, 21, 26, .94); border: 1px solid rgba(255, 255, 255, .10);
+    border-radius: 16px; padding: 10px 12px 12px; box-shadow: 0 10px 28px rgba(0, 0, 0, .45); }
+  #pickPanel.show { display: block; }
+  #pickTitle { font-size: 12px; color: #9fb3c8; margin: 0 2px 9px; letter-spacing: .5px; }
+  #pickChips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pchip { padding: 7px 13px; border-radius: 999px; background: rgba(255, 255, 255, .07);
+    border: 1px solid rgba(255, 255, 255, .12); color: #e6eef5; font-size: 13px; line-height: 1.1; }
+  .pchip.on { background: rgba(96, 200, 255, .26); border-color: rgba(96, 200, 255, .62); color: #fff; }
 </style>
 </head>
 <body>
@@ -264,6 +275,7 @@
   </div>
   <div id="bar">
     <div class="minis">
+    <div id="pickPanel"><div id="pickTitle"></div><div id="pickChips"></div></div>
       <button id="btnSwap"><span class="lb">换形象</span></button>
       <button id="btnAct"><span class="lb">换动作</span></button>
       <button id="btnSong"><span class="lb">唱歌</span></button>
@@ -1128,27 +1140,35 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
   var ACT_WORDS = { ride: '上来，带你跑一程。' };
   var actRot = 0;
   document.getElementById('btnAct').addEventListener('pointerdown', function () {
-    // v0.92：从随机改成按顺序轮，点一次一定换一个，不会连着抽到同一个像没反应
-    actRot = (actRot + 1) % ACT_NAMES.length;
-    var m = ACT_NAMES[actRot];
-    mode = m; modeLeft = 5 + Math.random() * 4;
-    actKind = actOfMode(m); actAmt = 1;
-    sceneIdx = sceneForAct(actKind);
-    try { if (window.DaoNative && DaoNative.petAct) DaoNative.petAct(m); } catch (e) {}
-    say(ACT_WORDS[m]);
+    // 2026-11-28：动作只有一个时不必弹面板，直接做；将来多起来了就点开选，不再按一下轮一个
+    function _doAct(m) {
+      actRot = ACT_NAMES.indexOf(m);
+      mode = m; modeLeft = 5 + Math.random() * 4;
+      actKind = actOfMode(m); actAmt = 1;
+      sceneIdx = sceneForAct(actKind);
+      try { if (window.DaoNative && DaoNative.petAct) DaoNative.petAct(m); } catch (e) {}
+      say(ACT_WORDS[m]);
+    }
+    if (ACT_NAMES.length <= 1) { _doAct(ACT_NAMES[0]); return; }
+    window.pickShow('换动作（点哪个做哪个）',
+      ACT_NAMES.map(function (m) { return { v: m, label: m }; }),
+      ACT_NAMES[actRot], _doAct);
   });
 
   document.getElementById('btnSwap').addEventListener('pointerdown', function (e) {
     if (e) e.preventDefault();
+    // 2026-11-28 用户：一个键带多个功能时要能选，不要"按一个换一下"。
+    // 点一下弹出全部形象，点哪个就是哪个；当前那个高亮，不用瞎试。
     var _ks = [12, 13, 6, 7, 8, 11, 0, 1, 2, 3, 4, 5, 9, 10];
-    var _ci = _ks.indexOf(species);
-    species = _ks[(_ci + 1 + Math.floor(Math.random() * (_ks.length - 1))) % _ks.length];
-    mood = 1; moodLeft = 2.0;
-    dx = 0;
-    // 2026-11-26 用户：App 里选的形象，手机桌面上的悬浮窗要跟着换，不能各显示各的
-    try { if (window.DaoNative && DaoNative.setArt) DaoNative.setArt(species); } catch (err) {}
-    // 换完报个名，不然你不知道换成了谁
-    try { say('换了个模样：' + (WHO[species] || '它自己') + '。'); } catch (err) {}
+    window.pickShow('换形象（点哪个换哪个）',
+      _ks.map(function (k) { return { v: k, label: WHO[k] || ('形象' + k) }; }),
+      species,
+      function (v) {
+        species = v; mood = 1; moodLeft = 2.0; dx = 0;
+        // 2026-11-26 用户：App 里选的形象，手机桌面上的悬浮窗要跟着换，不能各显示各的
+        try { if (window.DaoNative && DaoNative.setArt) DaoNative.setArt(species); } catch (err) {}
+        try { say('换了个模样：' + (WHO[species] || '它自己') + '。'); } catch (err) {}
+      });
   });
 
   window.addEventListener('resize', resize);
@@ -1380,7 +1400,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '158';
+  var HTML_VER = '159';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
@@ -2166,13 +2186,67 @@ setTimeout(function () { try { if (window.DaoNative && DaoNative.warmUp) DaoNati
     btnMount.addEventListener('click', function () {
       clearTimeout(mountHold);
       if (mountAuto) { mountAuto = false; try { localStorage.setItem('daoMountAuto', '0'); } catch (e) {} }
-      mountState = (mountState + 1) % MOUNT_NAMES.length;
-      try { localStorage.setItem('daoMount', String(mountState)); } catch (e) {}
-      mountLabel();
-      mountApply();
-      tip(mountState === 0 ? '坐骑收起来了' : ('坐骑：' + MOUNT_NAMES[mountState] + '，托着你走'));
+      // 2026-11-28 用户：坐骑别按一下换一个，点开列出来自己挑
+      var _items = [{ v: -1, label: '自动（道自己挑）' }];
+      for (var _mi = 0; _mi < MOUNT_NAMES.length; _mi++) {
+        _items.push({ v: _mi, label: _mi === 0 ? '不骑' : MOUNT_NAMES[_mi] });
+      }
+      window.pickShow('坐骑（点哪个骑哪个）', _items, mountAuto ? -1 : mountState, function (v) {
+        if (v === -1) {
+          mountAuto = true;
+          try { localStorage.setItem('daoMountAuto', '1'); } catch (e) {}
+          if (window.DaoNative && DaoNative.setMountAuto) { try { DaoNative.setMountAuto(true); } catch (e) {} }
+          tip('坐骑交回给道自己决定：骑不骑、骑哪只它说了算');
+          mountLabel();
+          return;
+        }
+        mountAuto = false;
+        try { localStorage.setItem('daoMountAuto', '0'); } catch (e) {}
+        mountState = v;
+        try { localStorage.setItem('daoMount', String(mountState)); } catch (e) {}
+        mountLabel();
+        mountApply();
+        tip(mountState === 0 ? '坐骑收起来了' : ('坐骑：' + MOUNT_NAMES[mountState] + '，托着你走'));
+      });
     });
   }
+
+  // ---------- 多功能按键的选择面板（2026-11-28）----------
+  // 一个键带好几个功能时，点一下先把选项摊开，选哪个就执行哪个；
+  // 不再"按一个换一下"凭记忆数第几下，也不会因为随机换而抽回同一个。
+  var pickPanel = document.getElementById('pickPanel');
+  var pickTitle = document.getElementById('pickTitle');
+  var pickChips = document.getElementById('pickChips');
+  var pickCb = null;
+  function pickHide() {
+    pickCb = null;
+    if (pickPanel) pickPanel.classList.remove('show');
+  }
+  function pickShow(title, items, cur, cb) {
+    if (!pickPanel) { if (cb) cb(cur); return; }
+    pickCb = cb;
+    if (pickTitle) pickTitle.textContent = title;
+    pickChips.innerHTML = '';
+    (items || []).forEach(function (it) {
+      var b = document.createElement('div');
+      b.className = 'pchip' + (it.v === cur ? ' on' : '');
+      b.textContent = it.label;
+      b.addEventListener('pointerdown', function (e) {
+        if (e) { e.preventDefault(); e.stopPropagation(); }
+        var f = pickCb; pickHide(); if (f) { try { f(it.v); } catch (err) {} }
+      }, { passive: false });
+      pickChips.appendChild(b);
+    });
+    pickPanel.classList.add('show');
+    try { if (navigator.vibrate) navigator.vibrate(8); } catch (e) {}
+  }
+  // 按键在别的脚本块里（两个 IIFE 隔开），所以挂到 window 才能共用
+  window.pickShow = pickShow;
+  window.pickHide = pickHide;
+  // 点到面板外面就收起，不会挡着看道
+  document.addEventListener('pointerdown', function (e) {
+    if (pickPanel && pickPanel.classList.contains('show') && !pickPanel.contains(e.target)) pickHide();
+  }, true);
 
   // ---------- 对话 ----------
   function chatAsk(q) {

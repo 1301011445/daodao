@@ -1049,7 +1049,10 @@ public class DesktopPet : Form
             // 0 橘猫 / 1 白兔 / 2 狐狸 / 3 熊猫的表情原来是动物卡通，6 蓝发和 11 机械是另一种画风，
             // 7 黑发只有头肩特写——这些一换表情就会"少女一秒变熊猫"，宁可不换。
             bool[] exprOk = new bool[14];
-            exprOk[4] = true; exprOk[5] = true; exprOk[8] = true; exprOk[9] = true; exprOk[10] = true;
+            // 2026-11-28（v157）：4 号和 9 号的脸身比例已经按 A1 改到 7.3 / 7.17，
+            // 可它们的表情整图还是旧的 5.6 / 4.9 比例，一换表情头就跳大一截；
+            // 先关掉这两只的换图（5/8/10 比例没动，照旧可用），等表情整图按新比例重画再开。
+            exprOk[5] = true; exprOk[8] = true; exprOk[10] = true;
             for (int sp3 = 0; UseExprArt && sp3 < 12; sp3++)
             {
                 if (!exprOk[sp3]) continue;
@@ -2843,7 +2846,9 @@ public class DesktopPet : Form
         if (t.Length > 0)
         {
             char last = t[t.Length - 1];
-            if (last == '？' || last == '?' || last == '吗' || last == '呢' || last == '吧') hz += 5;
+            // 2026-11-28 语音：问句抬升 +5→+7Hz。新形象脸更小、五官占比变细，
+            // +5Hz 在耳里几乎听不出疑问味儿，+7 才像真在问（陈述句仍保持 -2Hz 收尾下倾）。
+            if (last == '？' || last == '?' || last == '吗' || last == '呢' || last == '吧') hz += 7;
             else if (last == '！' || last == '!') hz += 2;
         }
         // 2026-11-23 语音（副攻第6类 piper/Coqui TTS）：陈述句句末自然下倾 1–3 半音。
@@ -9053,12 +9058,14 @@ public class DesktopPet : Form
         SpringStep(ref swayAmpCur, ref swayAmpVel, ampTarget, dAmp, 16f, 0.8f);
         float amp = swayAmpCur;
         float ph = walkPhaseHint >= 0f ? walkPhaseHint : t * (running ? 12.0f : 8.4f);
-        float legLift = running ? 7.0f : (walking ? 4.2f : 0f);
+        // 2026-11-28 走路：抬腿 4.2→4.6px、手臂摆 3.8→4.4px，配合 A1 改小头之后的重心，
+        // 免得小头大身迈步看着脚没离地。
+        float legLift = running ? 7.0f : (walking ? 4.6f : 0f);
         bool stepping = (running || walking) && hopPend <= 0;
         // 手臂的张合幅度：走路跑跳最大，站着也有一点，骑坐骑手要扶着就不摆
         float armAmp = 0f;
         bool handsBusy = (actAmt > 0.25f && actKind == 3);
-        if (!handsBusy) armAmp = running ? 5.0f : (walking ? 3.8f : 1.8f);
+        if (!handsBusy) armAmp = running ? 5.0f : (walking ? 4.4f : 1.8f);
         if (waving) armAmp = 8.0f;
         // 走路时手臂必须和腿同频反相（左腿抬起时右手往前），不同频整只就像牌子在晃
         float armPh = running ? (ph + (float)Math.PI)
@@ -11597,7 +11604,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 156;
+    public const int APP_VER = 157;
 
     public static void Start()
     {

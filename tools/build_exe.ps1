@@ -1,4 +1,4 @@
-﻿# 程序版本：v0.2 | 2026-11-22 | 修换包失败：Move-Item -Force 不覆盖已存在 exe，改 Copy-Item 覆盖并清自愈冷却
+﻿# 程序版本：v0.3 | 2026-11-28 | 加 System.Speech.dll WPF 目录引用，支持本机 SAPI 短句合成
 # Build the desktop pet exe from source, then swap and restart it.
 # Output: one line "BUILD_OK size=... proc=..." on success, "BUILD_FAIL ..." otherwise.
 $ErrorActionPreference = 'Stop'

@@ -9080,11 +9080,21 @@ public class DesktopPet : Form
             swayTailPh += dTail * 8.4f;
         }
 
+        // 2026-11-28（第8类 Fable 二轮 · 动作分层）：头部单开一层加法动作。
+        // 依据：加法层（additive）必须在独立相位上走，且幅值不超过底层动作的 30%，
+        // 否则头会跟躯干同频同相，整只看上去还是"一块牌子在晃"；超过 30% 就是另一套动画在打架。
+        // 这里 fy<0.24 的头部条带加一条 5.3Hz、相位 +0.9rad 的独立正弦，幅值封顶 min(0.30×amp, 1.6px)，
+        // 窗口 (0.24-fy)/0.24 在边界处归零，保证头和颈之间不留台阶（不留缝、不裂）。
+        float headAddAmp = amp * 0.30f;
+        if (headAddAmp > 1.6f) headAddAmp = 1.6f;
         for (int i = 0; i < strips; i++)
         {
             float fy = (i + 0.5f) / strips;
             // 摆动交给骨链：越靠上叠得越多、相位越晚，头和发尾晚半拍跟上
             float off = amp * BoneSway(fy, ph);
+            // 头部加法层：只在 fy<0.24 生效，边界归零，不参与底层骨链的相位
+            if (headAddAmp > 0.01f && fy < 0.24f)
+                off += headAddAmp * ((0.24f - fy) / 0.24f) * (float)Math.Sin(t * 5.3f + 0.9f);
             // 挂件余摆：只作用于发梢/衣摆这一段（fy>0.78），比主干晚 2.9 rad，停步后自己衰减
             if (swayTailA > 0.01f && fy > 0.78f)
             {
@@ -11587,7 +11597,7 @@ static class SyncServer
 {
     const int HTTP_PORT = 8848;
     const int UDP_PORT = 8849;
-    public const int APP_VER = 153;
+    public const int APP_VER = 154;
 
     public static void Start()
     {

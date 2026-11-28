@@ -449,10 +449,11 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
   walkSheet.onerror = function () { walkSheetOk = false; };
   walkSheet.src = 'walk8.png';
 
-  // 2026-11-25：坐骑改真贴图（mount_horse.png）。以前那个椭圆小兽看着像只蜗牛，已删
+  // 2026-11-28：坐骑换成独角兽白龙马（mount_unicorn.png），和桌面端同一只
+  // 2026-11-25：坐骑改真贴图。以前那个椭圆小兽看着像只蜗牛，已删
   var mountHorse = new Image(), mountHorseOk = false;
   mountHorse.onload = function () { mountHorseOk = true; };
-  mountHorse.src = 'mount_horse.png';
+  mountHorse.src = 'mount_unicorn.png';
 
   var scenes = [], sceneIdx = 0;
   SCENE_FILES.forEach(function (n, k) {
@@ -1064,15 +1065,17 @@ var POSES = ["data:image/webp;base64,UklGRsotAABXRUJQVlA4WAoAAAAQAAAAlAAAKwEAQUx
     if (actAmt > 0.12 && wantScene >= 0) sceneIdx = wantScene;
     else if (actKind === 0) sceneIdx = todayScene();
 
-    // 2026-11-25：只有骑坐骑是离地的，飞/御剑已下线
+    // 2026-11-28：骑乘步态。原来只有一个小幅正弦（不到 2px），看着像贴在马背上晃。
+    // 改成跟桌面端同一套：一步一落蹄、落地压腾空抬，再叠俯仰，幅度按身高折算才看得见
     if (mode === 'ride') {
-      // 跳舞/动作：随拍点往下沉一点，左右只留很小的重心移，别再整条带子甩
-      var beatA = t * 3.6;
-      var bB = Math.abs(Math.sin(beatA));
-      animBob = actAmt * (0.9 - 1.7 * bB);
-      animSqY = 1 - 0.035 * actAmt * bB;
+      var ridePh = t * 7.2;                       // 约 1.15 个步幅/秒
+      var rRise = Math.abs(Math.sin(ridePh));      // 0 落地 → 1 腾空
+      var rAmp = TARGET_H * 0.020 * actAmt;
+      animBob = (rRise - 0.55) * 1.9 * rAmp;       // 正负都留，落地压得比腾空抬更狠
+      animSqY = 1 + (rRise - 0.5) * 0.05 * actAmt;
+      animSqX = 1 - (rRise - 0.5) * 0.04 * actAmt;
       hopY -= 6 * actAmt;
-      tilt = Math.sin(beatA) * 1.8 * actAmt;
+      tilt = Math.sin(ridePh - 1.15) * 3.2 * actAmt;   // 俯仰跟起伏错开相位，才不是整体上下推
     }
 
     if (modeLeft <= 0) {
@@ -1402,7 +1405,7 @@ var exprImgs = [];
   });
 
   // 页面左上角那个版本牌：优先问原生要安装包的真实版本号，拿不到就用这里写死的
-  var HTML_VER = '163';
+  var HTML_VER = '165';
   (function () {
     var tag = document.getElementById('verTag');
     if (!tag) return;
